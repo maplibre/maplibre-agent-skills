@@ -42,7 +42,7 @@ Use when:
 - Debugging blank maps or CORS issues
 - Migrating from Mapbox and need equivalent tile sources
 
-Covers: OpenFreeMap (no API key), MapTiler, Stadia Maps, PMTiles, and self-hosted OpenMapTiles. Includes glyphs, sprites, and CORS.
+Covers: OpenFreeMap (no API key), MapTiler, Stadia Maps, PMTiles, Protomaps (pre-built downloads and CLI extracts), and self-hosted OpenMapTiles. Includes glyphs, sprites, and CORS.
 
 [View skill →](skills/maplibre-tile-sources/SKILL.md)
 
@@ -54,9 +54,25 @@ Covers: OpenFreeMap (no API key), MapTiler, Stadia Maps, PMTiles, and self-hoste
 
 **Migrating from Mapbox GL JS to MapLibre GL JS.** Use when moving an existing Mapbox map to MapLibre or choosing tile sources and services after leaving Mapbox. Covers package/import swap, removing token, replacing style URLs, plugins, and Mapbox API alternatives. Lists sources used so contributors can be looped in. [View skill →](skills/maplibre-mapbox-migration/SKILL.md)
 
----
+### Project plan — skills status
 
-More skills (web integration, performance, style patterns, geospatial operations, etc.) are planned. See [CONTRIBUTING.md](CONTRIBUTING.md) to add or request skills.
+**In this repo (link to these only):**
+
+| Skill | Description |
+|-------|-------------|
+| [maplibre-tile-sources](skills/maplibre-tile-sources/SKILL.md) | Tile sources, glyphs, sprites, OpenFreeMap, MapTiler, PMTiles, Protomaps, self-hosted |
+| [maplibre-pmtiles-patterns](skills/maplibre-pmtiles-patterns/SKILL.md) | Serverless PMTiles: hosting, generating, MapLibre protocol |
+| [maplibre-mapbox-migration](skills/maplibre-mapbox-migration/SKILL.md) | Mapbox GL JS → MapLibre migration |
+
+**Planned (not yet in repo — do not link; refer by name only):**
+
+- maplibre-open-search-patterns — Geocoding and search (Nominatim, Photon, Pelias)
+- maplibre-geospatial-operations — Routing and geometry (OSRM, OpenRouteService, Turf.js)
+- maplibre-style-patterns — Layer and source configuration for styles
+- maplibre-web-integration-patterns — Framework integration (React, Vue, Svelte, etc.)
+- maplibre-web-performance-patterns, maplibre-cartography, maplibre-style-quality, and others as needed
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to add or request skills.
 
 ## How to Use
 
