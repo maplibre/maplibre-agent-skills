@@ -34,7 +34,7 @@ So when you “choose a tile source,” you’re choosing the URL (and type) tha
 | Zero config, no API key | Hosted free | OpenFreeMap |
 | Serverless, static hosting | Single-file tiles | PMTiles (see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md)) |
 | Free tier, good quality | Hosted commercial | MapTiler, Stadia Maps |
-| Full control, no vendor | Self-hosted | OpenMapTiles (tileserver-gl, martin) |
+| Full control, no vendor | Self-hosted | OpenMapTiles (martin) |
 
 ## OpenFreeMap (Free, No API Key)
 
@@ -85,8 +85,7 @@ https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_KEY
 
 - **Schema:** [OpenMapTiles](https://openmaptiles.org/) defines a vector tile schema (layers like `transportation`, `water`, `landuse`, `poi`).
 - **Servers:** Run a tile server that serves OpenMapTiles-compatible vector tiles:
-  - **tileserver-gl:** Serves MBTiles/PMTiles and generates a style; good for static extracts.
-  - **martin:** PostGIS-backed vector tile server for dynamic data.
+  - **martin:** Serves MBTiles/PMTiles or PostGIS-backed dynamic vector tiles. See https://maplibre.org/martin/recipe-basemap-postgis.html for a comprehensive guide
 - **Data:** Use OpenMapTiles data build or other OSM-derived data in the same schema.
 
 **Example source in a style JSON (self-hosted server at `https://tiles.example.com`):**
