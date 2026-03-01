@@ -64,7 +64,7 @@ Covers: OpenFreeMap (no API key), MapTiler, Stadia Maps, PMTiles, Protomaps (pre
 | [maplibre-pmtiles-patterns](skills/maplibre-pmtiles-patterns/SKILL.md) | Serverless PMTiles: hosting, generating, MapLibre protocol |
 | [maplibre-mapbox-migration](skills/maplibre-mapbox-migration/SKILL.md) | Mapbox GL JS → MapLibre migration |
 
-**Planned (not yet in repo — do not link; refer by name only):**
+**Planned (not yet in repo):**
 
 - maplibre-open-search-patterns — Geocoding and search (Nominatim, Photon, Pelias)
 - maplibre-geospatial-operations — Routing and geometry (OSRM, OpenRouteService, Turf.js)
