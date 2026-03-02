@@ -58,11 +58,11 @@ Covers: OpenFreeMap (no API key), MapTiler, Stadia Maps, PMTiles, Protomaps (pre
 
 **In this repo (link to these only):**
 
-| Skill | Description |
-|-------|-------------|
-| [maplibre-tile-sources](skills/maplibre-tile-sources/SKILL.md) | Tile sources, glyphs, sprites, OpenFreeMap, MapTiler, PMTiles, Protomaps, self-hosted |
-| [maplibre-pmtiles-patterns](skills/maplibre-pmtiles-patterns/SKILL.md) | Serverless PMTiles: hosting, generating, MapLibre protocol |
-| [maplibre-mapbox-migration](skills/maplibre-mapbox-migration/SKILL.md) | Mapbox GL JS → MapLibre migration |
+| Skill                                                                  | Description                                                                           |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [maplibre-tile-sources](skills/maplibre-tile-sources/SKILL.md)         | Tile sources, glyphs, sprites, OpenFreeMap, MapTiler, PMTiles, Protomaps, self-hosted |
+| [maplibre-pmtiles-patterns](skills/maplibre-pmtiles-patterns/SKILL.md) | Serverless PMTiles: hosting, generating, MapLibre protocol                            |
+| [maplibre-mapbox-migration](skills/maplibre-mapbox-migration/SKILL.md) | Mapbox GL JS → MapLibre migration                                                     |
 
 **Planned (not yet in repo):**
 

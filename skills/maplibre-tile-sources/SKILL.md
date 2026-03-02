@@ -19,7 +19,7 @@ MapLibre GL JS does not ship with tiles. You must provide a **style** that refer
 
 ## Tiles and styles: how they relate
 
-A **style** (a `style.json` or style object) is the configuration you pass to MapLibre. It tells the map *what* to draw and *where to get the data*. It does **not** contain the tile data itself.
+A **style** (a `style.json` or style object) is the configuration you pass to MapLibre. It tells the map _what_ to draw and _where to get the data_. It does **not** contain the tile data itself.
 
 - **Sources** (in the style) — Point to the actual tile data. Each source has a `type` (`vector`, `raster`, or `raster-dem`) and a **URL** (e.g. a tile endpoint, or a PMTiles URL). The tiles are served from that URL; MapLibre requests them when the viewport needs them. So: **tiles live at the source URL; the style only references that URL.**
 - **Layers** (in the style) — Define what to draw and how. Each layer references a source (and for vector tiles, a `source-layer` name) and specifies paint/layout (colors, line width, labels, etc.). The same tile source can back many layers (e.g. roads, water, labels from one vector URL).
@@ -29,12 +29,12 @@ So when you “choose a tile source,” you’re choosing the URL (and type) tha
 
 ## Decision Framework
 
-| Need | Prefer | Options |
-|------|--------|--------|
-| Zero config, no API key | Hosted free | OpenFreeMap |
+| Need                       | Prefer            | Options                                                                          |
+| -------------------------- | ----------------- | -------------------------------------------------------------------------------- |
+| Zero config, no API key    | Hosted free       | OpenFreeMap                                                                      |
 | Serverless, static hosting | Single-file tiles | PMTiles (see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md)) |
-| Free tier, good quality | Hosted commercial | MapTiler, Stadia Maps |
-| Full control, no vendor | Self-hosted | OpenMapTiles (martin) |
+| Free tier, good quality    | Hosted commercial | MapTiler, Stadia Maps                                                            |
+| Full control, no vendor    | Self-hosted       | OpenMapTiles (martin)                                                            |
 
 ## OpenFreeMap (Free, No API Key)
 
@@ -61,7 +61,7 @@ const map = new maplibregl.Map({
 
 **Best for:** Production apps that want a free tier with good global coverage and optional paid scaling.
 
-- Sign up at [maptiler.com](https://www.maptiler.com/), get an API key.
+- Sign up at [MapTiler](https://www.maptiler.com/), get an API key.
 - Use MapTiler Cloud styles (vector) or build your own with MapTiler Data.
 
 **Example style URL (replace YOUR_KEY):**
@@ -76,7 +76,7 @@ https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_KEY
 
 **Best for:** Stamen-style aesthetics (e.g. Stamen Toner, Terrain) with a free tier.
 
-- Sign up at [stadiamaps.com](https://stadiamaps.com/), get an API key.
+- Sign up at [Stadia Maps](https://stadiamaps.com/), get an API key.
 - Styles and tile endpoints require the key; use their style JSON or build a custom style with their source URLs.
 
 ## Self-Hosted OpenMapTiles
@@ -85,7 +85,7 @@ https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_KEY
 
 - **Schema:** [OpenMapTiles](https://openmaptiles.org/) defines a vector tile schema (layers like `transportation`, `water`, `landuse`, `poi`).
 - **Servers:** Run a tile server that serves OpenMapTiles-compatible vector tiles:
-  - **martin:** Serves MBTiles/PMTiles or PostGIS-backed dynamic vector tiles. See https://maplibre.org/martin/recipe-basemap-postgis.html for a comprehensive guide
+  - **martin:** Serves MBTiles/PMTiles or PostGIS-backed dynamic vector tiles. See [Martin basemap from PostGIS](https://maplibre.org/martin/recipe-basemap-postgis.html) for a comprehensive guide
 - **Data:** Use OpenMapTiles data build or other OSM-derived data in the same schema.
 
 **Example source in a style JSON (self-hosted server at `https://tiles.example.com`):**
@@ -116,7 +116,7 @@ The style’s **sources** point to tile data; the style’s **glyphs** and **spr
 
 **MapTiler / Stadia** style JSONs include their own glyph and sprite URLs.
 
-**Self-hosted:** Use MapLibre’s default glyphs or host your own (e.g. [openmaptiles/fonts](https://github.com/openmaptiles/fonts)); for sprites, use [Maki](https://github.com/mapbox/maki) or OpenMapTiles sprites and host the JSON + PNG.
+**Self-hosted:** Use MapLibre’s default glyphs or host your own (e.g. [OpenMapTiles fonts](https://github.com/openmaptiles/fonts)); for sprites, use [Maki](https://github.com/mapbox/maki) or OpenMapTiles sprites and host the JSON + PNG.
 
 **Example style snippet with glyphs and sprite:**
 
@@ -136,13 +136,13 @@ If your tiles (or glyphs/sprites) are on another origin, the server must send CO
 
 ## Quick Reference
 
-| Provider | API key | Style URL / usage |
-|----------|---------|-------------------|
-| OpenFreeMap | No | `https://tiles.openfreemap.org/styles/liberty` or `/positron` |
-| MapTiler | Yes | `https://api.maptiler.com/maps/streets-v2/style.json?key=KEY` |
-| Stadia Maps | Yes | Use Stadia style JSON with key |
-| PMTiles | No | Use pmtiles protocol + your PMTiles URL (see maplibre-pmtiles-patterns) |
-| Self-hosted | No | Your tile server URL + glyphs + sprite in your style JSON |
+| Provider    | API key | Style URL / usage                                                       |
+| ----------- | ------- | ----------------------------------------------------------------------- |
+| OpenFreeMap | No      | `https://tiles.openfreemap.org/styles/liberty` or `/positron`           |
+| MapTiler    | Yes     | `https://api.maptiler.com/maps/streets-v2/style.json?key=KEY`           |
+| Stadia Maps | Yes     | Use Stadia style JSON with key                                          |
+| PMTiles     | No      | Use pmtiles protocol + your PMTiles URL (see maplibre-pmtiles-patterns) |
+| Self-hosted | No      | Your tile server URL + glyphs + sprite in your style JSON               |
 
 ## Related Skills
 

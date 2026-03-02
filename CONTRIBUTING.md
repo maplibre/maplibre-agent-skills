@@ -62,7 +62,18 @@ npm run validate:skills # Validate skill structure
 npm run format
 ```
 
-**Spell check (cspell):** When `npm run spellcheck` flags a word that is correct (e.g. a project name, library, acronym, or domain term), add it to the `words` array in `cspell.config.json` so the check passes. Do not change correct technical wording just to satisfy the checker — add the word instead. Edit `cspell.config.json` and add the term to the `words` array.
+**Spell check (cspell):** When `npm run spellcheck` flags a word that is correct (e.g. a project name, library, or acronym), add it to the `words` array in `cspell.config.json`. A few rules:
+
+- **Keep the array alphabetically sorted** (case-insensitive). Insert new entries in the correct position.
+- **One form per word.** cspell matching is case-insensitive and strips possessives, so `mapbox` covers `Mapbox`, `MAPBOX`, and `Mapbox's`. Do not add redundant variants.
+- **Do not add URL slugs or domain names.** If the flagged word is in link display text (e.g. `[service-name.com](https://service-name.com/)` instead of `[Service Name](https://service-name.com/)`), fix the link text to use the service's readable name. Descriptive link text is also better for accessibility.
+
+**When CI fails on a PR:** The same checks run in CI as locally. If a check fails after you open or update a PR:
+
+- **Formatting:** Run `npm run format`, commit the result.
+- **Spelling:** Run `npm run spellcheck` locally to see the flagged words. Fix link text if the flagged word is a URL slug or domain; otherwise add the term to `cspell.config.json` (alphabetically, one form only).
+- **Markdown lint:** Run `npm run lint:markdown` locally.
+- **Skill validation:** Run `npm run validate:skills` locally.
 
 **Bypass pre-push (not recommended):** `git push --no-verify`. CI will still run checks.
 

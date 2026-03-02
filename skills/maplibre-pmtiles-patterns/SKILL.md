@@ -21,7 +21,7 @@ PMTiles is a single-file format for vector or raster map tiles. You host one (or
 - **Single file per map** — One `.pmtiles` file typically contains the full tile pyramid (all zoom levels) and all layers (vector or raster) in one archive. The format stores tiles in a compact layout (e.g. Hilbert curve) so the client can request only the byte ranges it needs. For very large coverage you may split by region into multiple files.
 - **HTTP range requests** — The client requests only the byte ranges it needs (e.g. one tile), so the server does not need to understand x/y/z. Any host that supports `Range` headers works.
 - **Serving** — You can serve directly from static storage (S3, R2, GitHub Pages, Netlify): the client uses range requests, so no tile server is required. Alternatively, [tileserver-gl](https://github.com/maptiler/tileserver-gl) or [Martin](https://maplibre.org/martin/) can serve PMTiles (from local paths, HTTP URLs, or S3), useful if you want one server that also provides styles, glyphs, or other sources.
-- **Creating** — You can get PMTiles by converting from MBTiles (pmtiles CLI) or by generating from source data (Planetiler, tippecanoe, GDAL, etc.). Alternatively, [**Protomaps**](https://protomaps.com) is a provider where you can download pre-built PMTiles (e.g. global or regional basemaps) and serve them yourself, or create custom extracts via the PMTiles CLI—no need to generate from OSM yourself. See *The pmtiles CLI* and *Generating PMTiles* below.
+- **Creating** — You can get PMTiles by converting from MBTiles (pmtiles CLI) or by generating from source data (Planetiler, tippecanoe, GDAL, etc.). Alternatively, [**Protomaps**](https://protomaps.com) is a provider where you can download pre-built PMTiles (e.g. global or regional basemaps) and serve them yourself, or create custom extracts via the PMTiles CLI—no need to generate from OSM yourself. See _The pmtiles CLI_ and _Generating PMTiles_ below.
 - **Good for CDNs** — Range requests cache well; put the file behind a CDN for fast global access.
 
 **When to prefer PMTiles over a traditional tile server:**
@@ -61,7 +61,7 @@ const map = new maplibregl.Map({
   style: {
     version: 8,
     sources: {
-      'tiles': {
+      tiles: {
         type: 'vector',
         url: 'pmtiles://https://example.com/data.pmtiles'
       }
@@ -112,7 +112,7 @@ Any host that serves the file and supports **HTTP Range requests** is suitable.
 
 - **AWS S3** — Enable public read (or signed URLs); S3 supports Range. Set `Cache-Control` and optionally use CloudFront.
 - **Cloudflare R2** — S3-compatible; enable public access or use signed URLs. Put behind Cloudflare for caching.
-- **GitHub Pages** — MapLibre GL JS can load tiles from a .pmtiles file in the same repo as long as the file size is under 100 MB. 
+- **GitHub Pages** — MapLibre GL JS can load tiles from a .pmtiles file in the same repo as long as the file size is under 100 MB.
 - **Netlify / Vercel** — Upload the .pmtiles file; static hosting typically supports Range. Check each provider’s file size limits.
 - **Any static host** — Ensure the server returns `Accept-Ranges: bytes` and responds correctly to `Range` headers.
 
@@ -132,7 +132,7 @@ The [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) is the official comman
 
 **Install:** Download the binary for your OS/arch from [GitHub Releases (go-pmtiles)](https://github.com/protomaps/go-pmtiles/releases), or use Docker: `protomaps/go-pmtiles`.
 
-**What it does not do:** The CLI only works with tile archives (MBTiles and PMTiles). It does not read GeoJSON, Shapefile, OSM, or other source formats. To create PMTiles from those, use a tool that generates tiles (see *Generating PMTiles* below) and, if that tool outputs MBTiles, run `pmtiles convert` to get PMTiles.
+**What it does not do:** The CLI only works with tile archives (MBTiles and PMTiles). It does not read GeoJSON, Shapefile, OSM, or other source formats. To create PMTiles from those, use a tool that generates tiles (see _Generating PMTiles_ below) and, if that tool outputs MBTiles, run `pmtiles convert` to get PMTiles.
 
 ## Generating PMTiles
 
@@ -140,7 +140,7 @@ The [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) is the official comman
 
 ### pmtiles CLI (convert only: MBTiles ↔ PMTiles)
 
-See *The pmtiles CLI* above for why to install it and other commands (`show`, `verify`, `extract`). To convert MBTiles to PMTiles:
+See _The pmtiles CLI_ above for why to install it and other commands (`show`, `verify`, `extract`). To convert MBTiles to PMTiles:
 
 ```bash
 pmtiles convert input.mbtiles output.pmtiles
@@ -175,7 +175,7 @@ GDAL’s `ogr2ogr` **generates** tiles from many geospatial formats (Shapefile, 
 
 ### Raster and raster-dem PMTiles
 
-PMTiles supports **raster** tiles (PNG/JPEG, e.g. satellite or pre-rendered imagery) and **raster-dem** (elevation/terrain, e.g. Terrarium or Mapbox encoding). Use tools that produce raster or raster-dem PMTiles; the same protocol and hosting apply. In the style use `type: 'raster'` for imagery or `type: 'raster-dem'` with `"encoding": "terrarium"` (or `"mapbox"`) for terrain—see *MapLibre Integration* above for an example.
+PMTiles supports **raster** tiles (PNG/JPEG, e.g. satellite or pre-rendered imagery) and **raster-dem** (elevation/terrain, e.g. Terrarium or Mapbox encoding). Use tools that produce raster or raster-dem PMTiles; the same protocol and hosting apply. In the style use `type: 'raster'` for imagery or `type: 'raster-dem'` with `"encoding": "terrarium"` (or `"mapbox"`) for terrain—see _MapLibre Integration_ above for an example.
 
 ## Overture Maps
 

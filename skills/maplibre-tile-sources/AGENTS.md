@@ -4,7 +4,7 @@ Use when the user needs a base map or tile source for MapLibre GL JS.
 
 ## Tiles vs style
 
-- **Style** = the JSON (or style URL) you pass to MapLibre. It defines **sources** (URLs to tile data), **layers** (what to draw from those sources), and **glyphs** + **sprite** (fonts and icons). The style does *not* contain the tiles—it only points to them.
+- **Style** = the JSON (or style URL) you pass to MapLibre. It defines **sources** (URLs to tile data), **layers** (what to draw from those sources), and **glyphs** + **sprite** (fonts and icons). The style does _not_ contain the tiles—it only points to them.
 - **Tiles** = the actual tile data (vector or raster) served at the source URLs. MapLibre fetches tiles when the viewport needs them. So: sources in the style = references to where the tiles live; layers = how to draw that data.
 - **Pre-built style URL** (e.g. OpenFreeMap, MapTiler) = a full style that already has sources, layers, glyphs, and sprite. **Custom style** = you set the source URLs (and glyphs/sprite) yourself.
 
@@ -13,10 +13,10 @@ Use when the user needs a base map or tile source for MapLibre GL JS.
 - **No API key, quick start:** OpenFreeMap — `style: 'https://tiles.openfreemap.org/styles/liberty'` or `/positron`.
 - **Free tier + production:** MapTiler or Stadia Maps (sign up, use style URL with key).
 - **Serverless / static host:** PMTiles (see maplibre-pmtiles-patterns).
-- **Self-hosted:** Build or serve your own vector tiles. 
-  - **Generate tiles:** [Planetiler](https://github.com/onthegomap/planetiler) (OSM → PMTiles/MBTiles or [MLT](https://maplibre.org/maplibre-tile-spec/), OpenMapTiles schema) or [OpenMapTiles data build](https://openmaptiles.org/docs/). 
+- **Self-hosted:** Build or serve your own vector tiles.
+  - **Generate tiles:** [Planetiler](https://github.com/onthegomap/planetiler) (OSM → PMTiles/MBTiles or [MLT](https://maplibre.org/maplibre-tile-spec/), OpenMapTiles schema) or [OpenMapTiles data build](https://openmaptiles.org/docs/).
   - **Serve tiles:** [tileserver-gl](https://github.com/maptiler/tileserver-gl) (MBTiles/PMTiles + style) or [Martin](https://maplibre.org/martin/) (PostGIS → vector tiles).
-- **MLT (MapLibre Tile):** Open vector tile format (successor to MVT); better compression and 3D/elevation support. MapLibre GL JS and Native support MLT; demo tiles at demotiles.maplibre.org.
+- **MLT (MapLibre Tile):** Open vector tile format (successor to MVT); better compression and 3D/elevation support. MapLibre GL JS and Native support MLT; see [MapLibre demo tiles](https://demotiles.maplibre.org).
 
 ## Must-haves in a style
 

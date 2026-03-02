@@ -23,7 +23,7 @@ Use when the user is migrating from Mapbox GL JS to MapLibre GL JS.
 - **Built-in accessibility** — Screen-reader support, high-contrast detection, and bidirectional text shaping (e.g. via harfbuzz-js) in the open implementation.
 - **Custom layer API** — Integrate custom WebGL (e.g. three.js, deck.gl) into the map render loop with shared depth and projection.
 - **Any tile source and PMTiles** — No built-in tie to a single vendor; first-class use of PMTiles and other protocols so serverless and self-hosted tiles are natural.
-- **MapLibre Tile (MLT)** — Open vector tile format that succeeds MVT (Mapbox Vector Tile): [spec](https://maplibre.org/maplibre-tile-spec/). Column-oriented for better compression (up to ~6× vs MVT) and SIMD-friendly decoding; supports 3D coordinates, elevation, nested properties, and linear referencing (e.g. Overture). Supported in MapLibre GL JS and Native; generate with Planetiler or use demo tiles at demotiles.maplibre.org. Mapbox uses MVT; MapLibre offers a modern, open alternative.
+- **MapLibre Tile (MLT)** — Open vector tile format that succeeds MVT (Mapbox Vector Tile): [spec](https://maplibre.org/maplibre-tile-spec/). Column-oriented for better compression (up to ~6× vs MVT) and SIMD-friendly decoding; supports 3D coordinates, elevation, nested properties, and linear referencing (e.g. Overture). Supported in MapLibre GL JS and Native; generate with Planetiler or use [MapLibre demo tiles](https://demotiles.maplibre.org). Mapbox uses MVT; MapLibre offers a modern, open alternative.
 
 ## When to suggest migrating to MapLibre
 
