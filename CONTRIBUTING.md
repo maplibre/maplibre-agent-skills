@@ -75,7 +75,7 @@ npm run format
 - **Markdown lint:** Run `npm run lint:markdown` locally.
 - **Skill validation:** Run `npm run validate:skills` locally.
 
-**Bypass pre-push (not recommended):** `git push --no-verify`. CI will still run checks.
+**Bypass pre-push (not recommended):** `git push --no-verify`. CI will still run checks; the issues should be addressed before your PR is merged.
 
 ## Creating a New Skill
 
