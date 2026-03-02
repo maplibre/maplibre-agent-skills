@@ -101,9 +101,9 @@ You must also provide `glyphs` and `sprite` in the style; see Glyphs and Sprites
 
 ## Protomaps and PMTiles (Serverless)
 
-**PMTiles** is an open single-file tile format: one file per map (all layers, all zoom levels); MapLibre requests byte ranges via the **pmtiles** protocol—no tile server. You can **generate** your own (Planetiler, tippecanoe) or **obtain** tiles from [**Protomaps**](https://protomaps.com): a provider where you can download pre-built PMTiles (e.g. global or regional basemaps) and serve them yourself from static storage (S3, R2, GitHub Pages), or create custom extracts via the [PMTiles CLI](https://docs.protomaps.com/pmtiles/cli). Either way, host the `.pmtiles` file and point your style at it.
+**PMTiles** is an open single-file tile format: one file per map (all layers, all zoom levels); MapLibre requests byte ranges via the **PMTiles** protocol—no tile server. You can **generate** your own (Planetiler, tippecanoe) or **obtain** tiles from [**Protomaps**](https://protomaps.com): a provider where you can download pre-built PMTiles (e.g. global or regional basemaps) and serve them yourself from static storage (S3, R2, GitHub Pages), or create custom extracts via the [PMTiles CLI](https://docs.protomaps.com/pmtiles/cli). Either way, host the `.pmtiles` file and point your style at it.
 
-- Use the **pmtiles** protocol with MapLibre; see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md) for setup, hosting, and performance.
+- Use the **PMTiles** protocol with MapLibre; see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md) for setup, hosting, and performance.
 
 ## Glyphs (Fonts) and Sprites
 
@@ -141,7 +141,7 @@ If your tiles (or glyphs/sprites) are on another origin, the server must send CO
 | OpenFreeMap | No      | `https://tiles.openfreemap.org/styles/liberty` or `/positron`           |
 | MapTiler    | Yes     | `https://api.maptiler.com/maps/streets-v2/style.json?key=KEY`           |
 | Stadia Maps | Yes     | Use Stadia style JSON with key                                          |
-| PMTiles     | No      | Use pmtiles protocol + your PMTiles URL (see maplibre-pmtiles-patterns) |
+| PMTiles     | No      | Use PMTiles protocol + your PMTiles URL (see maplibre-pmtiles-patterns) |
 | Self-hosted | No      | Your tile server URL + glyphs + sprite in your style JSON               |
 
 ## Related Skills

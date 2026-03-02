@@ -102,7 +102,7 @@ Mapbox styles (`mapbox://styles/...`) will not work in MapLibre. You must point 
 - **OpenFreeMap (no key):** `style: 'https://tiles.openfreemap.org/styles/liberty'` or `'https://tiles.openfreemap.org/styles/positron'`
 - **MapTiler (key required):** Use a MapTiler style URL (see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md))
 - **Your own style:** A style JSON that references vector/raster tile URLs, plus glyphs and sprite (see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md); maplibre-style-patterns not yet in repo)
-- **PMTiles:** Use the pmtiles protocol and a .pmtiles URL in your style (see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md))
+- **PMTiles:** Use the PMTiles protocol and a .pmtiles URL in your style (see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md))
 
 Example:
 

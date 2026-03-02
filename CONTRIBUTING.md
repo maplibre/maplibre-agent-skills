@@ -43,7 +43,7 @@ npm install
 1. **Formatting** — Prettier (`.md`, `.json`, `.js`) — fix with `npm run format`
 2. **Spelling** — cspell (markdown) — fix manually or add to [cspell.config.json](cspell.config.json) (see below)
 3. **Markdown linting** — markdownlint — fix manually; see error output for rule and line number
-4. **Terminology** — textlint (e.g. `MapLibre` not `Maplibre`) — fix with `npm run fix:terminology`
+4. **Terminology** — textlint (e.g. `MapLibre` not `Maplibre`) — fix all issues with `npm run fix:terminology`
 5. **Skills validation** — YAML frontmatter and structure — fix manually in `SKILL.md`
 
 ### Fixing Issues
@@ -54,7 +54,9 @@ npm install
 - One form per word — cspell is case-insensitive, so `maplibre` covers `MapLibre`, `MAPLIBRE`, and `MapLibre's`. Do not add redundant variants.
 - Do not add URL slugs or domain names. Fix the link text instead (e.g. `[Service Name](https://...)` not `[service-name.com](https://...)`). Descriptive link text is also better for accessibility.
 
-**Terminology:** When `npm run lint:terminology` flags a term, fix the capitalization in your text or run `npm run fix:terminology` to auto-fix. Terms are defined in [.textlintrc.json](.textlintrc.json).
+**Terminology:** Run `npm run fix:terminology` to auto-fix all flagged terms across all files at once. Terms are defined in [.textlintrc.json](.textlintrc.json).
+
+**Markdown linting:** Fix issues manually using the rule name and line number in the error output. The `DeprecationWarning: fs.R_OK is deprecated` message that appears during this check is a known Node.js compatibility notice from markdownlint-cli — it is harmless and can be ignored.
 
 > **Note:** cspell and textlint serve different roles and cannot share a word list. cspell checks whether a word exists (case-insensitive); textlint enforces how it must be capitalized in prose. Terms with specific capitalization — like `MapLibre`, `GeoJSON`, or `PMTiles` — must be registered in both files: lowercased in `cspell.config.json` so cspell accepts them, and in their canonical form in `.textlintrc.json` so textlint enforces the correct casing.
 

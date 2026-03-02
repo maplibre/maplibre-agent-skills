@@ -21,7 +21,7 @@ PMTiles is a single-file format for vector or raster map tiles. You host one (or
 - **Single file per map** — One `.pmtiles` file typically contains the full tile pyramid (all zoom levels) and all layers (vector or raster) in one archive. The format stores tiles in a compact layout (e.g. Hilbert curve) so the client can request only the byte ranges it needs. For very large coverage you may split by region into multiple files.
 - **HTTP range requests** — The client requests only the byte ranges it needs (e.g. one tile), so the server does not need to understand x/y/z. Any host that supports `Range` headers works.
 - **Serving** — You can serve directly from static storage (S3, R2, GitHub Pages, Netlify): the client uses range requests, so no tile server is required. Alternatively, [tileserver-gl](https://github.com/maptiler/tileserver-gl) or [Martin](https://maplibre.org/martin/) can serve PMTiles (from local paths, HTTP URLs, or S3), useful if you want one server that also provides styles, glyphs, or other sources.
-- **Creating** — You can get PMTiles by converting from MBTiles (pmtiles CLI) or by generating from source data (Planetiler, tippecanoe, GDAL, etc.). Alternatively, [**Protomaps**](https://protomaps.com) is a provider where you can download pre-built PMTiles (e.g. global or regional basemaps) and serve them yourself, or create custom extracts via the PMTiles CLI—no need to generate from OSM yourself. See _The pmtiles CLI_ and _Generating PMTiles_ below.
+- **Creating** — You can get PMTiles by converting from MBTiles (PMTiles CLI) or by generating from source data (Planetiler, tippecanoe, GDAL, etc.). Alternatively, [**Protomaps**](https://protomaps.com) is a provider where you can download pre-built PMTiles (e.g. global or regional basemaps) and serve them yourself, or create custom extracts via the PMTiles CLI—no need to generate from OSM yourself. See _The PMTiles CLI_ and _Generating PMTiles_ below.
 - **Good for CDNs** — Range requests cache well; put the file behind a CDN for fast global access.
 
 **When to prefer PMTiles over a traditional tile server:**
@@ -35,9 +35,9 @@ PMTiles is a single-file format for vector or raster map tiles. You host one (or
 - You need dynamic tiles from a database (PostGIS) or frequently updated data.
 - You have a very large global dataset and want to generate tiles on demand or by region only.
 
-## MapLibre Integration: The pmtiles Protocol
+## MapLibre Integration: The PMTiles Protocol
 
-MapLibre does not speak PMTiles natively. You use the **pmtiles** library to add a protocol handler so that a `pmtiles://` (or `https://` to a .pmtiles file) source works.
+MapLibre does not speak PMTiles natively. You use the **PMTiles** library to add a protocol handler so that a `pmtiles://` (or `https://` to a .pmtiles file) source works.
 
 **Install:**
 
@@ -120,7 +120,7 @@ Any host that serves the file and supports **HTTP Range requests** is suitable.
 
 **Cache headers:** For better performance, set long cache for the .pmtiles file (e.g. `Cache-Control: public, max-age=31536000` if the file is immutable). CDNs will cache range responses.
 
-## The pmtiles CLI
+## The PMTiles CLI
 
 The [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) is the official command-line tool for working with PMTiles (and MBTiles for conversion). It’s a single binary with no runtime dependencies—you download it and run it.
 
@@ -136,11 +136,11 @@ The [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) is the official comman
 
 ## Generating PMTiles
 
-**Two paths:** **(1) Convert** — The pmtiles CLI converts MBTiles ↔ PMTiles only; it does not read GeoJSON, Shapefile, OSM, or other source formats. **(2) Generate from source data** — Tools like tippecanoe, Planetiler, and GDAL read from many file types or databases and produce vector tiles (PMTiles or MBTiles). If they output MBTiles, use `pmtiles convert` to get PMTiles.
+**Two paths:** **(1) Convert** — The PMTiles CLI converts MBTiles ↔ PMTiles only; it does not read GeoJSON, Shapefile, OSM, or other source formats. **(2) Generate from source data** — Tools like tippecanoe, Planetiler, and GDAL read from many file types or databases and produce vector tiles (PMTiles or MBTiles). If they output MBTiles, use `pmtiles convert` to get PMTiles.
 
-### pmtiles CLI (convert only: MBTiles ↔ PMTiles)
+### PMTiles CLI (convert only: MBTiles ↔ PMTiles)
 
-See _The pmtiles CLI_ above for why to install it and other commands (`show`, `verify`, `extract`). To convert MBTiles to PMTiles:
+See _The PMTiles CLI_ above for why to install it and other commands (`show`, `verify`, `extract`). To convert MBTiles to PMTiles:
 
 ```bash
 pmtiles convert input.mbtiles output.pmtiles
@@ -161,7 +161,7 @@ See Planetiler docs for area names, custom sources, and schema options. Output i
 
 ### tippecanoe
 
-[tippecanoe](https://github.com/felt/tippecanoe) **generates** vector tiles from source formats: GeoJSON, Flatgeobuf, CSV. From v2.17 onward it can **output PMTiles directly** (`-o output.pmtiles`). You can also output MBTiles and convert with `pmtiles convert`.
+[tippecanoe](https://github.com/felt/tippecanoe) **generates** vector tiles from source formats: GeoJSON, FlatGeobuf, CSV. From v2.17 onward it can **output PMTiles directly** (`-o output.pmtiles`). You can also output MBTiles and convert with `pmtiles convert`.
 
 ```bash
 # Direct PMTiles output (v2.17+)
