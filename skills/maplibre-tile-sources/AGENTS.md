@@ -14,7 +14,7 @@ Use when the user needs a base map or tile source for MapLibre GL JS.
 - **Free tier + production:** MapTiler or Stadia Maps (sign up, use style URL with key).
 - **Serverless / static host:** PMTiles (see maplibre-pmtiles-patterns).
 - **Self-hosted:** Build or serve your own vector tiles.
-  - **Generate tiles:** [Planetiler](https://github.com/onthegomap/planetiler) (OSM → PMTiles/MBTiles or [MLT](https://maplibre.org/maplibre-tile-spec/), OpenMapTiles schema) or [OpenMapTiles data build](https://openmaptiles.org/docs/).
+  - **Generate tiles:** [Planetiler](https://github.com/onthegomap/planetiler)
   - **Serve tiles:** [tileserver-gl](https://github.com/maptiler/tileserver-gl) (MBTiles/PMTiles + style) or [Martin](https://maplibre.org/martin/) (PostGIS → vector tiles).
 - **MLT (MapLibre Tile):** Open vector tile format (successor to MVT); better compression and 3D/elevation support. MapLibre GL JS and Native support MLT; see [MapLibre demo tiles](https://demotiles.maplibre.org).
 
