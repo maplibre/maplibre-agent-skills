@@ -27,19 +27,19 @@ A **style** (a `style.json` or style object) is the configuration you pass to Ma
 
 So when you “choose a tile source,” you’re choosing the URL (and type) that goes into the style’s `sources`. You can use a **style URL** from a provider (e.g. OpenFreeMap, MapTiler)—that style JSON already has sources, layers, glyphs, and sprite—or you can **build your own style** and set the source URLs (and glyphs/sprite) yourself.
 
-## Rasterizing Vector Tiles for Leaflet
+## Using Vector Tiles with Leaflet
 
 If your app uses Leaflet, you can rasterize vector tile sources via
 [MapLibre GL Leaflet](https://github.com/maplibre/maplibre-gl-leaflet).
 
 ## Decision Framework
 
-| Need                       | Prefer            | Options                                                                          |
-| -------------------------- | ----------------- | -------------------------------------------------------------------------------- |
-| Zero config, no API key    | Hosted free       | OpenFreeMap                                                                      |
-| Serverless, static hosting | Single-file tiles | PMTiles (see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md)) |
+| Need                         | Prefer            | Options                                                                          |
+| ---------------------------- | ----------------- | -------------------------------------------------------------------------------- |
+| Zero config, no API key      | Hosted free       | OpenFreeMap                                                                      |
+| Serverless, static hosting   | Single-file tiles | PMTiles (see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md)) |
 | Free tier, supported hosting | Hosted commercial | MapTiler, Stadia Maps                                                            |
-| Full control, no vendor    | Self-hosted       | planetiler, martin                                                            |
+| Full control, no vendor      | Self-hosted       | planetiler, martin                                                               |
 
 ## OpenFreeMap (Free, No API Key)
 
@@ -50,7 +50,7 @@ If your app uses Leaflet, you can rasterize vector tile sources via
 - **Bright:** `https://tiles.openfreemap.org/styles/bright`
 - **Positron:** `https://tiles.openfreemap.org/styles/positron`
 
-Preview these map styles at [openfreemap.org](https://openfreemap.org/). They include sources, glyphs, and sprite, so you can use them directly as the `style` URL in MapLibre.
+Preview these map styles at the [OpenFreeMap website](https://openfreemap.org/). They include sources, glyphs, and sprite, so you can use them directly as the `style` URL in MapLibre.
 
 To support the project, consider donating to OpenFreeMap or contributing to their ongoing efforts to [maintain and update additional styles](https://github.com/hyperknot/openfreemap-styles).
 
@@ -136,14 +136,14 @@ If your tiles (or glyphs/sprites) are on another origin, the server must send CO
 
 ## Quick Reference
 
-| Provider             | API key | Style URL / usage                                                        |
-| -------------------- | ------- | ------------------------------------------------------------------------ |
-| OpenFreeMap          | No      | `https://tiles.openfreemap.org/styles/liberty` or `/positron`            |
-| MapTiler             | Yes     | `https://api.maptiler.com/maps/streets-v2/style.json?key=KEY`            |
-| Stadia Maps          | Yes     | Use Stadia style JSON with key                                           |
-| PMTiles              | No      | Use PMTiles protocol + your PMTiles URL (see maplibre-pmtiles-patterns)  |
-| Self-hosted          | No      | Your tile server URL + glyphs + sprite in your style JSON                |
-| maplibre-gl-leaflet  | No      | `L.maplibreGL({ style: '...' })` — use any above style in a Leaflet app  |
+| Provider            | API key | Style URL / usage                                                       |
+| ------------------- | ------- | ----------------------------------------------------------------------- |
+| OpenFreeMap         | No      | `https://tiles.openfreemap.org/styles/liberty` or `/positron`           |
+| MapTiler            | Yes     | `https://api.maptiler.com/maps/streets-v2/style.json?key=KEY`           |
+| Stadia Maps         | Yes     | Use Stadia style JSON with key                                          |
+| PMTiles             | No      | Use PMTiles protocol + your PMTiles URL (see maplibre-pmtiles-patterns) |
+| Self-hosted         | No      | Your tile server URL + glyphs + sprite in your style JSON               |
+| maplibre-gl-leaflet | No      | `L.maplibreGL({ style: '...' })` — use any above style in a Leaflet app |
 
 ## Related Skills
 
