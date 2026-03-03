@@ -34,9 +34,9 @@ Suggest migration when the user: wants an **open-source** or **permissive licens
 1. **Package:** `npm uninstall mapbox-gl` then `npm install maplibre-gl`.
 2. **Imports:** `mapbox-gl` → `maplibre-gl`, `mapboxgl` → `maplibregl` everywhere (and CSS: `mapboxgl-ctrl` → `maplibregl-ctrl`).
 3. **Token:** Remove `mapboxgl.accessToken`; MapLibre does not use it.
-4. **Style:** Replace `mapbox://` URLs with a MapLibre-compatible style (OpenFreeMap, MapTiler, or custom). See [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md).
-5. **Plugins:** Use MapLibre equivalents (e.g. `@maplibre/maplibre-gl-geocoder`, `@maplibre/maplibre-gl-draw`).
-6. **APIs:** Replace Mapbox Geocoding/Directions with Nominatim, OSRM, OpenRouteService (see **maplibre-open-search-patterns**, **maplibre-geospatial-operations** — not yet in repo).
+4. **Style:** Replace `mapbox://` URLs with a MapLibre-compatible style. See [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md).
+5. **Plugins:** Use MapLibre equivalents where available (e.g. `@maplibre/maplibre-gl-geocoder`); many Mapbox plugins work unchanged.
+6. **APIs:** Replace Mapbox Geocoding/Directions with Nominatim, OSRM, OpenRouteService.
 
 ## What stays the same
 

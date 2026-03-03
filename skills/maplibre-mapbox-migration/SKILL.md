@@ -28,7 +28,7 @@ Common reasons teams switch from Mapbox to MapLibre:
 - **Community-supported funding** — MapLibre is funded by donations from many companies and individuals; there is no single commercial backer, so the project stays aligned with the community
 - **Open vector tile format (MLT)** — MapLibre offers [MapLibre Tile (MLT)](https://maplibre.org/maplibre-tile-spec/), a modern alternative to Mapbox Vector Tiles (MVT) with better compression and support for 3D coordinates and elevation; supported in GL JS and Native, and can be generated with Planetiler
 
-**What you give up:** Mapbox Studio integration, Mapbox-hosted tiles and styles, Mapbox Search/Directions/Geocoding APIs, official Mapbox support. You replace these with open or third-party alternatives (see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md); maplibre-open-search-patterns and maplibre-geospatial-operations not yet in repo).
+**What you give up:** Mapbox Studio integration, Mapbox-hosted tiles and styles, Mapbox Search/Directions/Geocoding APIs, official Mapbox support.
 
 ## Understanding the Fork
 
@@ -40,10 +40,9 @@ Common reasons teams switch from Mapbox to MapLibre:
 
 ## Step-by-Step Migration
 
-### 1. Swap the Package
+### 1. Install the Package
 
 ```bash
-npm uninstall mapbox-gl
 npm install maplibre-gl
 ```
 
@@ -84,25 +83,15 @@ map.addControl(new maplibregl.NavigationControl());
 
 ### 4. Remove the Access Token
 
-MapLibre does not use `mapboxgl.accessToken`. Remove any line that sets it:
+MapLibre does not use `mapboxgl.accessToken`. Remove any line that sets it.
 
-```javascript
-// Remove this
-mapboxgl.accessToken = process.env.MAPBOX_TOKEN;
-```
-
-Tile and API keys (e.g. for MapTiler or geocoding) are configured per service, not on the map instance. See [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md) for providers that need a key.
+Tile and API keys (e.g. for hosted tile services or geocoding) are configured per service, not on the map instance. See [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md) for providers that need a key.
 
 ### 5. Replace the Style URL (Critical)
 
-Mapbox styles (`mapbox://styles/...`) will not work in MapLibre. You must point the map to a style that uses non-Mapbox tile sources.
+Mapbox styles (`mapbox://styles/...`) will not work in MapLibre. You must point the map to a style that uses non-Mapbox tile sources, sprites, and glyphs.
 
-**Options:**
-
-- **OpenFreeMap (no key):** `style: 'https://tiles.openfreemap.org/styles/liberty'` or `'https://tiles.openfreemap.org/styles/positron'`
-- **MapTiler (key required):** Use a MapTiler style URL (see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md))
-- **Your own style:** A style JSON that references vector/raster tile URLs, plus glyphs and sprite (see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md); maplibre-style-patterns not yet in repo)
-- **PMTiles:** Use the PMTiles protocol and a .pmtiles URL in your style (see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md))
+The simplest option is to use a style URL that does not require an API key, like [OpenFreeMap](https://openfreemap.org/). Once you have tested and verified your migration works, you can explore the many available options (see [awesome-maplibre](https://github.com/maplibre/awesome-maplibre) or [MapLibre Tile Sources](../maplibre-tile-sources/SKILL.md) for further suggestions).
 
 Example:
 
@@ -124,30 +113,32 @@ const map = new maplibregl.Map({
 });
 ```
 
-**Custom Mapbox styles:** If you designed a style in Mapbox Studio, you cannot load it directly in MapLibre. Export the style JSON if possible and replace Mapbox source URLs with a MapLibre-compatible tile source (e.g. OpenMapTiles schema from MapTiler or self-hosted). Layer and paint configuration often stays the same; source and source-layer names may need adjustment (e.g. OpenMapTiles uses `transportation` instead of `road` in some cases).
+From there, you can install the [MapLibre Style Specification & Utilities](https://maplibre.org/maplibre-style-spec/) to validate and debug styles:
+
+```bash
+npm install @maplibre/maplibre-style-spec
+```
+
+**Custom Mapbox styles:** If you designed a style in Mapbox Studio, you cannot load it directly in MapLibre. [Export the style JSON](https://docs.mapbox.com/help/dive-deeper/transfer-styles-between-accounts/) and replace Mapbox source URLs with URLs for your chosen tile source. **Your styles will not render unless and until you adjust all references to the Mapbox tile schema to match the tile schema of your new tile source.** In addition to updating source URLs, this means adapting the `id`, `source`, and `source-layer` properties in your style JSON to match the new source and layer names.
+
+Most properties in Mapbox styles are compatible with MapLibre. Check the [MapLibre Style Specification](https://maplibre.org/maplibre-style-spec/) for details on supported properties and types. You can use [Maputnik](https://maputnik.github.io/), MapLibre's style editor, to visually test and debug your style JSON, and [MapLibre Style Spec CLI Tools](https://github.com/maplibre/maplibre-style-spec?tab=readme-ov-file#cli-tools) to check for compatibility and other validation issues.
+
+```bash
+gl-style-validate style.json
+```
 
 ### 6. Update Plugins (If Used)
 
-If you use Mapbox-specific plugins, switch to MapLibre or open alternatives. Common equivalents:
+Many Mapbox plugins work with MapLibre unchanged, and many have been forked or replaced with MapLibre-native versions. Where a MapLibre-native alternative exists, prefer it for long-term compatibility.
 
-| Mapbox Plugin                | MapLibre / Alternative                                                                                                                                        |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@mapbox/mapbox-gl-geocoder` | [`@maplibre/maplibre-gl-geocoder`](https://github.com/maplibre/maplibre-gl-geocoder) or Nominatim/Photon (see maplibre-open-search-patterns, not yet in repo) |
-| `@mapbox/mapbox-gl-draw`     | [`@maplibre/maplibre-gl-draw`](https://github.com/maplibre/maplibre-gl-draw)                                                                                  |
-| `mapbox-gl-compare`          | [`maplibre-gl-compare`](https://github.com/maplibre/maplibre-gl-compare)                                                                                      |
-| `mapboxgl-minimap`           | [`maplibregl-minimap`](https://github.com/maplibre/maplibre-gl-minimap) or community alternatives                                                             |
-| Mapbox Directions API + UI   | [`maplibre-gl-directions`](https://github.com/maplibre/maplibre-gl-directions) (client-side routing with OSRM etc.) or custom + OSRM/OpenRouteService         |
-
-**Full lists:** [MapLibre GL JS – Plugins](https://maplibre.org/maplibre-gl-js/docs/plugins/) (official docs) and [Made with MapLibre – Plugins](https://madewithmaplibre.com/plugins) (community directory). Many Mapbox plugins work with MapLibre by passing `maplibregl` instead of `mapboxgl`; for long-term maintenance, prefer plugins that officially support MapLibre.
-
-Install the MapLibre variant and replace the import and constructor (e.g. `mapboxgl` → `maplibregl` where the plugin expects the library reference).
+Check the User Interface Plugins, Geocoding & Search Plugins, and Map Rendering Plugins sections of [awesome-maplibre](https://github.com/maplibre/awesome-maplibre) to find compatible plugins and alternatives.
 
 ### 7. Replace Mapbox APIs (Search, Directions, etc.)
 
 If your app calls Mapbox Geocoding, Directions, or other REST APIs, replace them with open or third-party services:
 
-- **Geocoding / search:** Nominatim, Photon, Pelias, or MapTiler Geocoding (see maplibre-open-search-patterns, not yet in repo)
-- **Directions / routing:** OSRM, OpenRouteService, Valhalla (see maplibre-geospatial-operations, not yet in repo)
+- **Geocoding / search:** [Nominatim](https://nominatim.org/), [Photon](https://photon.komoot.io/), [Pelias](https://pelias.io/), or [MapTiler Geocoding](https://docs.maptiler.com/cloud/api/geocoding/)
+- **Directions / routing:** [OSRM](https://project-osrm.org/), [OpenRouteService](https://openrouteservice.org/), [Valhalla](https://github.com/valhalla/valhalla)
 
 Update your code to use the new endpoints and response formats; the map layer and interaction code (e.g. adding a route line) stays the same with MapLibre.
 
@@ -169,18 +160,15 @@ So after swapping the package, namespace, token, and style (and any plugins/APIs
 - [ ] Replace imports and CSS (mapbox-gl → maplibre-gl)
 - [ ] Replace all `mapboxgl` with `maplibregl` (and CSS classes `mapboxgl-` → `maplibregl-`)
 - [ ] Remove `mapboxgl.accessToken`
-- [ ] Set `style` to a non-Mapbox URL (OpenFreeMap, MapTiler, or your own style)
-- [ ] Replace Mapbox plugins with MapLibre or open alternatives
-- [ ] Replace Mapbox Geocoding/Directions with Nominatim, OSRM, or other (see other skills)
+- [ ] Set `style` to a non-Mapbox URL (hosted or your own style)
+- [ ] Replace incompatible Mapbox plugins with MapLibre or open alternatives
+- [ ] Replace Mapbox Geocoding/Directions with Nominatim, OSRM, or other open alternatives
 - [ ] Test map load, controls, and any API-driven features
 
 ## Related Skills
 
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing and configuring tile sources (OpenFreeMap, MapTiler, PMTiles, self-hosted)
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serverless tiles with PMTiles
-- **maplibre-open-search-patterns** — Geocoding and search (Nominatim, Photon, etc.). Not yet in repo.
-- **maplibre-geospatial-operations** — Routing and geometry (OSRM, OpenRouteService, Turf.js). Not yet in repo.
-- **maplibre-web-integration-patterns** — Framework integration (React, Vue, etc.) with MapLibre. Not yet in repo.
 
 ## Sources Used for This Skill
 
