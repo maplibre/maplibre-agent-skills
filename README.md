@@ -1,116 +1,87 @@
 # MapLibre Agent Skills
 
-**Agent Skills** that help AI assistants build MapLibre applications with open tile sources, open-source tooling, and best practices. Covers tile source selection, framework integration patterns, performance, styling, and migration from other platforms.
+Curated guidance for AI assistants building MapLibre GL JS applications — covering ecosystem and open-source best practices.
 
+Agent skills are markdown files that AI coding assistants read as context. When you ask an AI agent to implement something using MapLibre, these skills give the AI the judgment to avoid common API gotchas, and suggest patterns that work.
 
-
-## Quick Start
-
-Install all MapLibre Agent Skills:
-
-```bash
-npx skills add maplibre/maplibre-agent-skills
-```
-
-Install a specific skill:
-
-```bash
-npx skills add maplibre/maplibre-agent-skills --skill maplibre-tile-sources
-```
-
-List available skills:
-
-```bash
-npx skills add maplibre/maplibre-agent-skills --list
-```
-
-(Replace `maplibre/maplibre-agent-skills` with your fork or local path if needed.)
-
-## What Are Agent Skills?
-
-Agent Skills are folders of instructions and resources that AI assistants (e.g. Claude, Cursor, GitHub Copilot) can discover and use to do tasks better. They provide **domain expertise** — the know-how for MapLibre and the open mapping ecosystem — so the assistant can suggest the right tile sources, patterns, and APIs.
+New skills are prioritized based on periodic demand mining — tracking documented AI failures in GitHub issues, Stack Overflow, and community Slack. Each skill is tested with [Promptfoo](https://promptfoo.dev/) evals to verify it improves AI responses on real developer questions.
 
 ## Available Skills
 
-### maplibre-mapbox-migration
+| Skill                                                                    | Use when                                                                                                                             |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| [`maplibre-tile-sources`](skills/maplibre-tile-sources/SKILL.md)         | Choosing how to supply map data; deciding between GeoJSON and tiles; configuring a basemap; debugging blank maps or missing labels   |
+| [`maplibre-pmtiles-patterns`](skills/maplibre-pmtiles-patterns/SKILL.md) | Hosting tiles without a tile server; static or serverless deployments; converting from MBTiles; generating tiles from OSM or GeoJSON |
+| [`maplibre-mapbox-migration`](skills/maplibre-mapbox-migration/SKILL.md) | Moving an existing Mapbox GL JS app to MapLibre; evaluating MapLibre as an open-source alternative                                   |
 
-**Migrating from Mapbox GL JS to MapLibre GL JS.** Use when moving an existing Mapbox map to MapLibre or choosing tile sources and services after leaving Mapbox. Covers package/import swap, removing token, replacing style URLs, plugins, and Mapbox API alternatives. Lists sources used so contributors can be looped in.
+## Development
 
-[View skill →](skills/maplibre-mapbox-migration/SKILL.md)
+Each skill lives under `skills/<skill-name>/`:
 
-### maplibre-tile-sources
+- **SKILL.md** — Required. YAML front-matter (`name`, `description`) plus markdown content.
+- **AGENTS.md** — Optional. Short reference for the LLM.
 
-**Choosing and configuring tile sources for MapLibre GL JS.**
+See [CONTRIBUTING.md](CONTRIBUTING.md) to add or improve a skill. All experience levels welcome, but please note, since we are trying to improve on genAI baseline contributions to MapLibre development, skills or contributions generated entirely by AI agents will likely be rejected.
 
-Use when:
+## Install
 
-- Setting up a new MapLibre map and need a base map
-- Comparing free vs paid or hosted vs self-hosted options
-- Configuring glyphs and sprites for a style
-- Debugging blank maps or CORS issues
-- Migrating from Mapbox and need equivalent tile sources
+Installing skills into your project means AI assistants automatically pick them up when you describe a task — no need to define context manually each time.
 
-Covers: The full range of hosted and self-hosted options. Should you want to host your own, explains ancillary requirements around styles, glyphs, sprites, and CORS.
+### Without the CLI
 
-[View skill →](skills/maplibre-tile-sources/SKILL.md)
+Skills are plain markdown.
 
-### maplibre-pmtiles-patterns
-
-Use when hosting vector or raster tiles without a tile server (S3, R2, GitHub Pages) or generating with Planetiler/tippecanoe.
-
-[View skill →](skills/maplibre-pmtiles-patterns/SKILL.md)
-
-Each issue includes content outlines, requirements, and references from the project plan. See [CONTRIBUTING.md](CONTRIBUTING.md) to add or request skills.
-
-## How to Use
-
-### With Claude Code
-
-```bash
-npx skills add maplibre/maplibre-agent-skills -a claude-code
-```
-
-Or symlink for local development:
+- **Paste into chat**: Open any `SKILL.md` above and paste it directly into your AI assistant's context window.
+- **Copy to your project**: Drop a `SKILL.md` into `.claude/skills/`, `.cursor/rules/`, or append it to `.github/copilot-instructions.md`.
+- **Symlink for local development**:
 
 ```bash
 mkdir -p .claude
 ln -s /path/to/maplibre-agent-skills/skills .claude/skills
 ```
 
-### With Cursor
+### Via the skills CLI
+
+The [skills CLI](https://github.com/vercel-labs/skills) is a package manager for AI agent skills. It places skill files in the right location for your tool automatically, and supports 40+ agents.
 
 ```bash
-npx skills add maplibre/maplibre-agent-skills -a cursor
+# List available skills
+npx skills add maplibre/maplibre-agent-skills --list
+
+# Install all skills
+npx skills add maplibre/maplibre-agent-skills
+
+# Install a single skill
+npx skills add maplibre/maplibre-agent-skills --skill maplibre-tile-sources
 ```
 
-### With VS Code (GitHub Copilot)
+By default, skills are installed per project. To install globally (e.g. to your user profile):
 
 ```bash
+npx skills add maplibre/maplibre-agent-skills -g
+```
+
+To install for a specific agent:
+
+```bash
+npx skills add maplibre/maplibre-agent-skills -a claude-code
+npx skills add maplibre/maplibre-agent-skills -a cursor
 npx skills add maplibre/maplibre-agent-skills -a vscode
 ```
 
-Skills are activated by the assistant when relevant to your task.
+See [Supported Agents](https://github.com/vercel-labs/skills?tab=readme-ov-file#supported-agents) for the full list.
 
-## Development
+Once installed, you can manage skills with:
 
-### Setup
-
-```bash
-git clone https://github.com/maplibre/maplibre-agent-skills.git
-cd maplibre-agent-skills
-nvm use
-npm install
-```
-
-### Skill layout
-
-Each skill lives under `skills/<skill-name>/`:
-
-- **SKILL.md** — Required. YAML frontmatter (`name`, `description`) plus markdown content.
-- **AGENTS.md** — Optional. Short reference for the LLM.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute a skill — whether you're fixing an error, improving an example, or adding new expertise in areas like framework integration, tile pipelines, geocoding, or routing. All experience levels are welcome.
+| Command                      | Description                                    |
+| ---------------------------- | ---------------------------------------------- |
+| `npx skills list`            | List installed skills (alias: `ls`)            |
+| `npx skills find [query]`    | Search for skills interactively or by keyword  |
+| `npx skills remove [skills]` | Remove installed skills from agents            |
+| `npx skills check`           | Check for available skill updates              |
+| `npx skills update`          | Update all installed skills to latest versions |
+| `npx skills init [name]`     | Create a new SKILL.md template                 |
 
 ## License
 
-MIT License. Copyright (c) MapLibre and contributors. Portions adapted from mapbox-agent-skills, Copyright (c) Mapbox, Inc. See [LICENSE.md](LICENSE.md) and [NOTICE](NOTICE).
+MIT License. Copyright (c) MapLibre and contributors. See [LICENSE.md](LICENSE.md) and [NOTICE](NOTICE) for more information.

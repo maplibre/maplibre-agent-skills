@@ -43,7 +43,7 @@ npm install
 1. **Formatting** — Prettier (`.md`, `.json`, `.js`) — fix with `npm run format`
 2. **Spelling** — cspell (markdown) — fix manually or add to [cspell.config.json](cspell.config.json) (see below)
 3. **Markdown linting** — markdownlint — fix manually; see error output for rule and line number
-4. **Terminology** — textlint (e.g. `MapLibre` not `Maplibre`) — fix all issues with `npm run fix:terminology`
+4. **Terminology** — proper noun capitalization (e.g. `MapLibre` not `Maplibre`) — fix all issues with `npm run fix:terminology`
 5. **Skills validation** — YAML frontmatter and structure — fix manually in `SKILL.md`
 
 You haven't gotten all the way through the checks until you see:
@@ -54,17 +54,17 @@ You haven't gotten all the way through the checks until you see:
 
 ### Fixing Issues
 
-**Spell check:** When `npm run spellcheck` flags a word that is correct (e.g. a project name, library, or acronym), add it to the `words` array in [cspell.config.json](cspell.config.json):
+**Markdown linting:** The most common issue is **MD060** (table column spacing) — `npm run format` fixes this automatically. The other likely issue is **MD051** (invalid link fragment): if you link to a heading with `[text](#anchor)`, verify the heading exists and the anchor matches exactly (lowercase, spaces replaced with hyphens). Other errors include the rule code and line number in the output — look up the rule by its ID if the message isn't self-explanatory.
 
-- Keep entries alphabetically sorted.
-- One form per word — cspell is case-insensitive, so `maplibre` covers `MapLibre`, `MAPLIBRE`, and `MapLibre's`. Do not add redundant variants.
-- Do not add URL slugs or domain names. Fix the link text instead (e.g. `[Service Name](https://...)` not `[service-name.com](https://...)`). Descriptive link text is also better for accessibility.
+**Terminology:** Flags incorrect capitalization of proper nouns in prose — for example `maplibre` instead of `MapLibre`, or `geojson` instead of `GeoJSON`. Run `npm run fix:terminology` to auto-fix all flagged terms at once. The full list of enforced terms is in [`terminology.txt`](terminology.txt). The check applies to standalone words in prose only; hyphenated identifiers, package names, and URL paths are intentionally ignored. To add a new proper noun, add it in its canonical form to `terminology.txt`.
 
-**Terminology:** Run `npm run fix:terminology` to auto-fix all flagged terms across all files at once. Terms are defined in [.textlintrc.json](.textlintrc.json).
+**Spell check:** Correct misspelled words manually.
 
-**Markdown linting:** Fix issues manually using the rule name and line number in the error output. The `DeprecationWarning: fs.R_OK is deprecated` message that appears during this check is a known Node.js compatibility notice from markdownlint-cli — it is harmless and can be ignored.
+Occasionally you will introduce new words when writing new skills. When the checks flag a word that is correct, the right place to add it depends on the type of word:
 
-> **Note:** cspell and textlint serve different roles and cannot share a word list. cspell checks whether a word exists (case-insensitive); textlint enforces how it must be capitalized in prose. Terms with specific capitalization — like `MapLibre`, `GeoJSON`, or `PMTiles` — must be registered in both files: lowercased in `cspell.config.json` so cspell accepts them, and in their canonical form in `.textlintrc.json` so textlint enforces the correct casing.
+- **Proper nouns** (product names, project names, acronyms with specific capitalization) — add to [`terminology.txt`](terminology.txt). Both the spell checker and terminology checker read from this file.
+- **Other technical terms** (common domain words, lowercase jargon) — add to the `words` array in [`cspell.config.json`](cspell.config.json), alphabetically sorted.
+- **Do not add URL slugs or domain names** — fix the link text instead (e.g. `[Service Name](https://...)` not `[service-name.com](https://...)`). Descriptive link text is also better for accessibility.
 
 **Bypass pre-push (not recommended):** `git push --no-verify`. Do this if you are not sure how to resolve an issue. CI will still run checks; your reviewer should be able to help. The issues should be addressed before your PR is merged.
 
