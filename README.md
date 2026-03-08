@@ -1,6 +1,8 @@
 # MapLibre Agent Skills
 
-**Agent Skills** that help AI assistants build MapLibre GL JS applications with open tile sources, open-source tooling, and best practices. Covers tile source selection, framework integration patterns, performance, styling, and migration from other platforms.
+**Agent Skills** that help AI assistants build MapLibre applications with open tile sources, open-source tooling, and best practices. Covers tile source selection, framework integration patterns, performance, styling, and migration from other platforms.
+
+
 
 ## Quick Start
 
@@ -99,14 +101,6 @@ cd maplibre-agent-skills
 nvm use
 npm install
 ```
-
-### Checks
-
-```bash
-npm run check
-```
-
-Runs format check, spellcheck, terminology check, markdown lint, and skill validation. Pre-push hook runs the same checks.
 
 ### Skill layout
 
