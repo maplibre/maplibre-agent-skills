@@ -119,12 +119,12 @@ See [Fixing Issues](#fixing-issues) below for how to resolve errors from each ch
 
 Most issues are auto-fixable:
 
-| Check | Fix |
-| ----- | --- |
-| Formatting | `npm run format` |
-| Terminology | `npm run fix:terminology` |
+| Check            | Fix                                                                       |
+| ---------------- | ------------------------------------------------------------------------- |
+| Formatting       | `npm run format`                                                          |
+| Terminology      | `npm run fix:terminology`                                                 |
 | Markdown linting | `npm run format` fixes MD060 (table spacing); others require manual edits |
-| Spell check | Correct manually |
+| Spell check      | Correct manually                                                          |
 
 **Markdown linting details:** Error output includes the rule ID and line number. The most common manual fix is **MD051** (invalid link fragment) — verify the heading exists and the anchor is lowercase with hyphens.
 
