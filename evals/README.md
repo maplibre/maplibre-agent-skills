@@ -39,10 +39,10 @@ so the skill will not be injected. The provider must be configured in the YAML.
 
 Evals use [Promptfoo](https://promptfoo.dev/). Current recommended models:
 
-| Role | Provider | Model ID |
-| ---- | -------- | -------- |
-| Generator + CI judge | [Cerebras](https://inference.cerebras.ai/) | `cerebras:qwen-3-235b-a22b-instruct-2507` |
-| Local judge (optional, stronger) | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite` |
+| Role                             | Provider                                      | Model ID                                  |
+| -------------------------------- | --------------------------------------------- | ----------------------------------------- |
+| Generator + CI judge             | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:qwen-3-235b-a22b-instruct-2507` |
+| Local judge (optional, stronger) | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite`            |
 
 Skill eval YAMLs reference these IDs directly. When models change, update this table.
 
