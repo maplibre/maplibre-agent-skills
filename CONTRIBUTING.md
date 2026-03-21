@@ -68,19 +68,7 @@ npm install
 
 `npm install` installs a pre-push git hook that runs checks before every push.
 
-**2. Get a Cerebras API key** (required to run evals locally):
-
-1. Sign up at [inference.cerebras.ai](https://inference.cerebras.ai/) — free, no credit card required.
-2. Create an API key and add it to your shell:
-
-```bash
-export CEREBRAS_API_KEY=your_key_here
-echo 'export CEREBRAS_API_KEY=your_key_here' >> ~/.zshrc
-```
-
-**3. Get a Google API key** (optional, recommended for a stronger judge):
-
-Get a free key at [Google AI Studio](https://aistudio.google.com/) and add it the same way (`GOOGLE_API_KEY`). See [evals/README.md](evals/README.md) for details.
+**2. Set up eval providers** — See [evals/README.md](evals/README.md#setup) for current recommended providers, API keys, and setup instructions.
 
 ### Running evals locally
 

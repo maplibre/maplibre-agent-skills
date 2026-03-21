@@ -1,6 +1,6 @@
 # MapLibre Agent Skills
 
-Curated guidance for AI assistants building MapLibre GL JS applications — covering ecosystem and open-source best practices.
+Curated guidance for AI assistants building MapLibre applications — covering ecosystem and open-source best practices.
 
 Agent skills are markdown files that AI coding assistants read as context. When you ask an AI agent to implement something using MapLibre, these skills give the AI the judgment to avoid common API gotchas, and suggest patterns that work.
 

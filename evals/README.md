@@ -5,7 +5,7 @@ This directory contains evaluation infrastructure for MapLibre agent skills.
 ```text
 evals/
 ├── prompts/     # Promptfoo eval configs — one per skill
-│   └── lib/     # Shared prompt injection logic (skill-prompt.js)
+│   └── lib/     # Shared prompt injection logic (skill-prompt.mjs)
 └── results/     # Eval results committed by CI — do not edit manually
 ```
 
@@ -17,7 +17,7 @@ the model, and checks responses against assertions.
 
 ### Skill injection
 
-`lib/skill-prompt.js` is a shared Promptfoo prompt function used by every eval config.
+`lib/skill-prompt.mjs` is a shared Promptfoo prompt function used by every eval config.
 It reads the skill file specified by `vars.skillFile` and constructs the messages array —
 system message containing the skill content, followed by the user prompt. Each skill
 YAML sets `vars.skillFile` to the path of its `SKILL.md`.
@@ -32,13 +32,19 @@ Two assertion types are used:
   describes what a correct answer must include — keep items specific and checkable,
   not "gives good advice"
 
-**Important:** Never use `--providers` on the CLI — it bypasses `lib/skill-prompt.js`,
+**Important:** Never use `--providers` on the CLI — it bypasses `lib/skill-prompt.mjs`,
 so the skill will not be injected. The provider must be configured in the YAML.
 
 ## Setup
 
-Evals use [Promptfoo](https://promptfoo.dev/) with [Cerebras](https://inference.cerebras.ai/)
-as the default provider — free, 14,400 requests/day, the same provider used in CI.
+Evals use [Promptfoo](https://promptfoo.dev/). Current recommended models:
+
+| Role | Provider | Model ID |
+| ---- | -------- | -------- |
+| Generator + CI judge | [Cerebras](https://inference.cerebras.ai/) | `cerebras:qwen-3-235b-a22b-instruct-2507` |
+| Local judge (optional, stronger) | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite` |
+
+Skill eval YAMLs reference these IDs directly. When models change, update this table.
 
 **Cerebras** (required):
 
@@ -66,7 +72,7 @@ Run the eval for the skill you are working on. Use `--grader google:gemini-2.5-f
 for a stronger judge when you have a `GOOGLE_API_KEY`:
 
 ```bash
-npx promptfoo@latest eval \
+npm run eval -- \
   --config evals/prompts/<skill-name>.yaml \
   --grader google:gemini-2.5-flash-lite \
   --no-cache -j 1
@@ -81,7 +87,6 @@ npx promptfoo view
 ```
 
 Local results are ephemeral — terminal output and `promptfoo view` are sufficient.
-Do not commit local output files to `evals/results/`; that directory is managed by CI.
 
 ## Proving tests fail without the skill
 
@@ -90,7 +95,7 @@ they should fail without the skill and pass with it. Run the baseline check with
 `--var injectSkill=false` to omit the skill from the system prompt:
 
 ```bash
-npx promptfoo@latest eval \
+npm run eval -- \
   --config evals/prompts/<skill-name>.yaml \
   --var injectSkill=false \
   --grader google:gemini-2.5-flash-lite \
