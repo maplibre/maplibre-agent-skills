@@ -133,6 +133,17 @@ recommend the skill's solution where it doesn't apply.
 Write prompts based on real developer confusion — GitHub issues, Stack Overflow questions,
 or Slack threads where AI assistants are known to fail.
 
+## Example results
+
+`evals/results/` contains example before/after responses showing each skill's effect on
+model output. These are useful for understanding what discriminating power looks like and
+what "failing without the skill" means in practice.
+
+- [`example-mapbox-migration.md`](results/example-mapbox-migration.md) — full questions
+  and responses for the maplibre-mapbox-migration skill
+- [`example-pmtiles-patterns.md`](results/example-pmtiles-patterns.md) — full questions
+  and responses for the maplibre-pmtiles-patterns skill
+
 ## CI
 
 Two workflows run evals automatically:
