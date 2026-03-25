@@ -27,7 +27,7 @@ to answer from training data alone. This is used for the baseline check.
 
 Two assertion types are used:
 
-- **`icontains`** — deterministic substring check; verifies a required term appears in the response
+- **`icontains`** — deterministic substring check; verifies a required term appears in the response. Use this for non-negotiable specific terms where the response is wrong if the term is absent — a required API name, CLI command, or configuration key. Pair with `llm-rubric` for the broader correctness check.
 - **`llm-rubric`** — qualitative check evaluated by a judge model; the `value` field
   describes what a correct answer must include — keep items specific and checkable,
   not "gives good advice"
@@ -102,24 +102,33 @@ npm run eval -- \
   --no-cache -j 1
 ```
 
-If any test passes without the skill, the prompt is not testing skill-specific knowledge —
-revise it before proceeding.
+Explicit, implicit, and anti-pattern tests must all fail without the skill — if any of
+these pass, the prompt is not testing skill-specific knowledge and must be revised.
+Negative tests require judgment: a negative test that passes without the skill may still
+be valid if it is close enough to the skill's topic to confirm the skill doesn't over-apply.
 
 ## Writing eval prompts
 
 When contributing a new skill, copy `evals/prompts/TEMPLATE.yaml` and rename it to
 match your skill directory. Each eval config contains exactly four tests — one of each type:
 
-| Type         | Description                                         |
-| ------------ | --------------------------------------------------- |
-| Explicit     | Names the topic directly                            |
-| Implicit     | Describes the scenario without naming the solution  |
-| Anti-pattern | A wrong approach the skill should correct           |
-| Negative     | An unrelated question the skill should not dominate |
+| Type         | Description                                        |
+| ------------ | -------------------------------------------------- |
+| Explicit     | Names the topic directly                           |
+| Implicit     | Describes the scenario without naming the solution |
+| Anti-pattern | A wrong approach the skill should correct          |
+| Negative     | An adjacent question the skill should not dominate |
 
 Write the `value` field of each `llm-rubric` assertion as a checklist of what a correct
 answer must include. Make items specific enough for a judge model to evaluate — "mentions
 `addProtocol` by name" rather than "explains the API."
+
+**Negative tests:** The question should be adjacent to the skill's topic — close enough
+that an over-eager skill might incorrectly push the user toward the skill's solution, but
+where doing so would be wrong or unhelpful. A trivially unrelated question (e.g. asking
+about a completely different library) has no discriminating power. The rubric should
+assert what a correct answer does: answers the actual question asked, and does NOT
+recommend the skill's solution where it doesn't apply.
 
 Write prompts based on real developer confusion — GitHub issues, Stack Overflow questions,
 or Slack threads where AI assistants are known to fail.

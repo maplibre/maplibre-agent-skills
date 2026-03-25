@@ -78,13 +78,15 @@ npm install
 Evals are stored in `evals/prompts`. Run the eval for the skill you are working on:
 
 ```bash
-npx promptfoo@latest eval \
+npm run eval -- \
   --config evals/prompts/<skill-name>.yaml \
   --grader google:gemini-2.5-flash-lite \
   --no-cache -j 1
 ```
 
-Omit `--grader google:gemini-2.5-flash-lite` if you don't have a `GOOGLE_API_KEY` — Cerebras will be used as judge instead.
+Omit `--grader google:gemini-2.5-flash-lite` if you don't have a `GOOGLE_API_KEY` — Cerebras will be used as judge instead, but note that Cerebras is more permissive and may pass tests that Gemini would flag. Use Gemini whenever possible for reliable results. See [evals/README.md](evals/README.md#setup) for provider details.
+
+Add `--output evals/results/output.csv \` before `--no-cache` to save results locally.
 
 Promptfoo will prompt to install if it isn't already. Results will show up in your terminal; optionally you can view and scroll through past results in your browser locally.
 
@@ -150,10 +152,10 @@ Follow these steps to add a new skill to the collection.
 Before writing any skill content, write the eval prompts and rubric. Evals define what a correct answer must include — independently of what the skill says. This is the quality control mechanism.
 
 1. Copy `evals/prompts/TEMPLATE.yaml`, rename it to `evals/prompts/maplibre-your-skill-name.yaml`.
-2. Write a rubric in `evals/rubrics/maplibre-your-skill-name.md` — a checklist of what correct answers must include. Keep each item specific enough for an LLM judge to evaluate objectively.
+2. Write a set of at least 4, up to 10 prompts. See [evals/README.md](evals/README.md#writing-eval-prompts) for test types and assertion guidance.
 3. Create a branch: `git checkout -b add-maplibre-your-skill-name`
-4. Open a draft PR with only the eval and rubric files for reviewer sign-off.
-5. Run the baseline check to confirm all tests fail without the skill — see [Proving tests fail without the skill](evals/README.md#proving-tests-fail-without-the-skill). If any test passes, the prompt is not testing skill-specific knowledge; revise it before continuing.
+4. Open a draft PR with only the eval and prompt files for reviewer sign-off.
+5. Run a baseline check — see [Proving tests fail without the skill](evals/README.md#proving-tests-fail-without-the-skill). Explicit, implicit, and anti-pattern tests must all fail; negative test results require judgment.
 6. Write the skill to make the evals pass.
 7. Run evals locally to confirm all pass (see [Running evals locally](#running-evals-locally)), then push.
 
