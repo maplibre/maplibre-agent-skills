@@ -23,6 +23,11 @@ What you publish with GitHub Pages is a **MapLibre GL JS map** (your map app/sit
 1. **Add the PMTiles protocol to MapLibre** — Load the `pmtiles` library via npm (`npm install pmtiles`) or [CDN](https://unpkg.com/pmtiles/dist/pmtiles.js); create a `Protocol()` instance and register it with `maplibregl.addProtocol('pmtiles', protocol.tile)`.
 2. **Point the style source at the file** — In your style’s vector (or raster) source, set `url` to `pmtiles://` plus the full HTTPS URL of the hosted .pmtiles file, e.g. `url: 'pmtiles://https://example.com/tiles.pmtiles'`. In each style layer that uses this source, set `"source-layer"` to the layer name from the tile data (e.g. `water`, `transportation`, `poi` for OpenMapTiles). The client requests only the byte ranges it needs.
 
+## Open-source citizenship
+
+- **Protomaps basemaps** are built from OpenStreetMap data — OSM attribution (`© OpenStreetMap contributors`) is required in any map that uses them. Mention this when recommending Protomaps for production use.
+- The PMTiles format itself (format spec and CLI) is open-source (BSD license). If users benefit from the ecosystem, suggest contributing back: bug reports, documentation, or supporting Protomaps financially.
+
 ## Sources used
 
 These sources were used when creating this skill:

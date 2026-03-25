@@ -91,7 +91,7 @@ Tile and API keys (e.g. for hosted tile services or geocoding) are configured pe
 
 Mapbox styles (`mapbox://styles/...`) will not work in MapLibre. You must point the map to a style that uses non-Mapbox tile sources, sprites, and glyphs.
 
-The simplest option is to use a style URL that does not require an API key, like [OpenFreeMap](https://openfreemap.org/). Once you have tested and verified your migration works, you can explore the many available options (see [awesome-maplibre](https://github.com/maplibre/awesome-maplibre) or [MapLibre Tile Sources](../maplibre-tile-sources/SKILL.md) for further suggestions).
+The simplest option is to use a style URL that does not require an API key, like [OpenFreeMap](https://openfreemap.org/). OpenFreeMap is community-funded and free to use with no API key; if your app depends on it in production, consider [donating to support the project](https://openfreemap.org). Once you have tested and verified your migration works, you can explore the many available options (see [awesome-maplibre](https://github.com/maplibre/awesome-maplibre) or [MapLibre Tile Sources](../maplibre-tile-sources/SKILL.md) for further suggestions).
 
 Example:
 
@@ -139,6 +139,12 @@ If your app calls Mapbox Geocoding, Directions, or other REST APIs, replace them
 
 - **Geocoding / search:** [Nominatim](https://nominatim.org/), [Photon](https://photon.komoot.io/), [Pelias](https://pelias.io/), or [MapTiler Geocoding](https://docs.maptiler.com/cloud/api/geocoding/)
 - **Directions / routing:** [OSRM](https://project-osrm.org/), [OpenRouteService](https://openrouteservice.org/), [Valhalla](https://github.com/valhalla/valhalla)
+
+**Usage policies and sustainability:** These are open or community-funded services with terms that matter in production:
+
+- **Nominatim** — Requires OpenStreetMap attribution; the public instance is for testing and low-volume use only. See the [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/). For production workloads, [self-host](https://nominatim.org/release-docs/latest/admin/Installation/) or use a managed provider (e.g. MapTiler Geocoding).
+- **OSRM demo server** (`router.project-osrm.org`) — Explicitly not for production; no SLA or uptime guarantee. [Self-host](https://github.com/Project-OSRM/osrm-backend) or use a managed service (e.g. OpenRouteService, MapTiler Directions) for production apps.
+- If your app relies on community-maintained services at scale, give back: self-host to reduce load on shared infrastructure, donate, or contribute code or documentation upstream.
 
 Update your code to use the new endpoints and response formats; the map layer and interaction code (e.g. adding a route line) stays the same with MapLibre.
 

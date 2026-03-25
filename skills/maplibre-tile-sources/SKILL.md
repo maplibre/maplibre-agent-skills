@@ -151,12 +151,14 @@ See [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md) for setup
 
 Many providers offer hosted vector or raster tiles and pre-built style and tile URLs — no server to run. See [Map/Tile Providers in awesome-maplibre](https://github.com/maplibre/awesome-maplibre#maptile-providers) for a full list.
 
+For a no-key starting point, [OpenFreeMap](https://openfreemap.org/) provides free hosted OpenStreetMap tiles with MapLibre-ready styles (`https://tiles.openfreemap.org/styles/liberty` or `/positron`). It is community-funded — if your app depends on it in production, consider [donating](https://openfreemap.org) or self-hosting to reduce load on shared infrastructure.
+
 - ✅ Global CDN; pre-built styles available
 - ✅ Handles global to local scale
 - ⚠️ Custom style layer definitions must match the schema of the hosted tile source
 - ⚠️ Vendor dependency
 - ⚠️ API keys required by most; check license, usage limits and pricing
-- ⚠️ Attribution requirements vary; verify before launch
+- ⚠️ Attribution requirements vary — verify before launch. Community-funded free services have usage policies; respect them, and give back through self-hosting or donations when your usage grows
 
 Store API keys in environment variables; never commit to source control.
 

@@ -42,6 +42,16 @@ Suggest migration when the user: wants an **open-source** or **permissive licens
 
 Map methods, events, markers, popups, controls, sources, layers, and style expressions. Only package, namespace, token, style URL, and Mapbox-only plugins/APIs change.
 
+## Open-source citizenship
+
+When recommending open or community-funded services, surface their usage policies:
+
+- **Nominatim** — Public instance is for testing/low-volume only; production use requires self-hosting or a managed provider. OSM attribution is required.
+- **OSRM demo server** — Not for production; no uptime guarantee. Direct users to self-host or use a managed routing service.
+- **OpenFreeMap** — Community-funded, no API key required. Suggest donating or self-hosting if the app depends on it at scale.
+
+If the user is building something production-facing that relies on any of these, recommend self-hosting or a managed provider — and mention that giving back (donations, contributions, bug reports) keeps these projects sustainable.
+
 ## Primary reference
 
 [MapLibre Mapbox migration guide](https://maplibre.org/maplibre-gl-js/docs/guides/mapbox-migration-guide/)

@@ -56,6 +56,14 @@ When building a custom style, layer definitions must match the **tile schema** (
 3. Glyphs and sprite URLs load; CORS allows the page origin.
 4. Style JSON is valid (no syntax errors).
 
+## Open-source citizenship
+
+When recommending community-funded free services, mention usage policies and sustainability:
+
+- **OpenFreeMap** — No API key, community-funded. For production use, suggest donating or self-hosting to reduce load.
+- **Attribution** — OSM-derived tile sources (OpenFreeMap, Protomaps) require OpenStreetMap attribution. Verify attribution requirements before recommending any hosted service for a production app.
+- If usage will grow, recommend self-hosting (Martin, tileserver-gl) or a paid managed provider rather than stressing shared free infrastructure.
+
 ## Do not
 
 - Assume Mapbox style URLs or `mapbox://` work in MapLibre (they do not).
