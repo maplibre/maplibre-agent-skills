@@ -42,12 +42,12 @@ hallucination: in [martin#1892](https://github.com/maplibre/martin/issues/1892),
 a developer was told by ChatGPT to use `.toml` format. Martin silently ignored it.
 
  Wrong — Martin will silently ignore this:
-```
+```bash
 martin --config config.toml
 ```
 
  Correct — must be YAML:
-```
+```bash
 martin --config config.yaml
 ```
 
@@ -61,12 +61,12 @@ If `--config` is set, CLI connection strings are **silently ignored** — no
 warning is shown. See [martin#938](https://github.com/maplibre/martin/issues/938).
 
  Wrong — connection string is ignored silently:
-```
+```bash
 martin --config my-config.yaml postgres://user:pass@localhost/mydb
 ```
 
  Correct — use one or the other:
-```
+```bash
 martin --config my-config.yaml
 ```
 
