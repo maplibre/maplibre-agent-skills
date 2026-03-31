@@ -62,7 +62,7 @@ warning is shown. See [martin#938](https://github.com/maplibre/martin/issues/938
 
  Wrong — connection string is ignored silently:
 ```bash
-martin --config my-config.yaml postgres://user:pass@localhost/mydb
+martin --config my-config.yaml postgres://user:pass@localhost/my_db
 ```
 
  Correct — use one or the other:
@@ -121,7 +121,7 @@ See [martin#78](https://github.com/maplibre/martin/issues/78).
 
 Security (JWT, bearer tokens, API keys, IP allowlists) must be layered at:
 - A reverse proxy (Nginx, Caddy, Traefik)
-- A CDN (Cloudflare, Fastly)
+- A CDN (Cloudflare, AWS CloudFront)
 - An API gateway
 
 **Rule:** Do not look for auth config in Martin. Route tile requests through
