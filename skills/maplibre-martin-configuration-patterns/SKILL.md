@@ -41,12 +41,14 @@ Martin config files are **YAML only**. This is a confirmed source of AI
 hallucination: in [martin#1892](https://github.com/maplibre/martin/issues/1892),
 a developer was told by ChatGPT to use `.toml` format. Martin silently ignored it.
 
- Wrong — Martin will silently ignore this:
+Wrong — Martin will silently ignore this:
+
 ```bash
 martin --config config.toml
 ```
 
- Correct — must be YAML:
+Correct — must be YAML:
+
 ```bash
 martin --config config.yaml
 ```
@@ -60,12 +62,14 @@ martin --config config.yaml
 If `--config` is set, CLI connection strings are **silently ignored** — no
 warning is shown. See [martin#938](https://github.com/maplibre/martin/issues/938).
 
- Wrong — connection string is ignored silently:
+Wrong — connection string is ignored silently:
+
 ```bash
 martin --config my-config.yaml postgres://user:pass@localhost/my_db
 ```
 
- Correct — use one or the other:
+Correct — use one or the other:
+
 ```bash
 martin --config my-config.yaml
 ```
@@ -83,6 +87,7 @@ Railway, and Render **automatically inject** `DATABASE_URL`, making this a
 common trap in cloud deployments. See [martin#1050](https://github.com/maplibre/martin/issues/1050).
 
 **Rule:** If Martin connects to the wrong database, check:
+
 ```bash
 echo $DATABASE_URL
 ```
@@ -99,12 +104,14 @@ instead of your public URL. This breaks clients that use TileJSON to discover
 tile endpoints. See [martin#1054](https://github.com/maplibre/martin/issues/1054).
 
 ✅ Fix — set `public_urls` in your config file:
+
 ```yaml
 public_urls:
   - https://tiles.example.com
 ```
 
 Or configure your reverse proxy to forward these headers:
+
 - `X-Forwarded-Host`
 - `X-Forwarded-Proto`
 - `X-Forwarded-Port`
@@ -120,6 +127,7 @@ config — it does not exist. This is intentional.
 See [martin#78](https://github.com/maplibre/martin/issues/78).
 
 Security (JWT, bearer tokens, API keys, IP allowlists) must be layered at:
+
 - A reverse proxy (Nginx, Caddy, Traefik)
 - A CDN (Cloudflare, AWS CloudFront)
 - An API gateway
@@ -165,4 +173,3 @@ When Martin isn't behaving as expected, check in this order:
 - [martin#1050](https://github.com/maplibre/martin/issues/1050) — `DATABASE_URL` silent override
 - [martin#1054](https://github.com/maplibre/martin/issues/1054) — TileJSON host behind proxy
 - [martin#1892](https://github.com/maplibre/martin/issues/1892) — TOML hallucination (confirmed)
-
