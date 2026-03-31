@@ -25,8 +25,8 @@ Eval config: [`evals/prompts/maplibre-mapbox-migration.yaml`](../prompts/maplibr
 > is compatible before deploying. Is there a CLI tool I can run on the file?
 
 **What the skill teaches:** The correct package is `@maplibre/maplibre-style-spec`; the
-command is `gl-style-validate`. The model's training data has a plausible-sounding but
-wrong package name (`@maplibre/maplibre-gl-style-validate`) that does not exist.
+command is `gl-style-validate`. The model's training data has a plausible-sounding explanation but
+confuses the tool (`@maplibre/maplibre-gl-style-validate`) with the style spec package name.
 
 <details>
 <summary>Baseline response (score: 0.75 — FAIL)</summary>
