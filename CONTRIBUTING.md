@@ -81,14 +81,14 @@ Evals are stored in `evals/prompts`. Run the eval for the skill you are working 
 npm run eval -- \
   --config evals/prompts/<skill-name>.yaml \
   --grader google:gemini-2.5-flash-lite \
-  --no-cache -j 1
+  --delay 2000 --no-cache -j 1
 ```
 
-Omit `--grader google:gemini-2.5-flash-lite` if you don't have a `GOOGLE_API_KEY` — Cerebras will be used as judge instead, but note that Cerebras is more permissive and may pass tests that Gemini would flag. Use Gemini whenever possible for reliable results. See [evals/README.md](evals/README.md#setup) for provider details.
+Omit `--grader google:gemini-2.5-flash-lite` and `--delay 2000` if you don't have a `GOOGLE_API_KEY` — Cerebras will be used as judge instead, but note that Cerebras is more permissive and may pass tests that Gemini would flag. Use Gemini whenever possible for reliable results. See [evals/README.md](evals/README.md#setup) for provider details.
 
 Add `--output evals/results/output.csv \` before `--no-cache` to save results locally.
 
-Promptfoo will prompt to install if it isn't already. Results will show up in your terminal; optionally you can view and scroll through past results in your browser locally.
+Results will show up in your terminal; optionally view and scroll through past results in your browser locally.
 
 ### Check format and spelling
 

@@ -37,16 +37,21 @@ so the skill will not be injected. The provider must be configured in the YAML.
 
 ## Setup
 
-Evals use [Promptfoo](https://promptfoo.dev/). Current recommended models:
+Evals use [Promptfoo](https://promptfoo.dev/), pinned as a dev dependency in `package.json`.
+Run `npm install` once before running evals locally.
 
-| Role                             | Provider                                      | Model ID                                  |
-| -------------------------------- | --------------------------------------------- | ----------------------------------------- |
-| Generator + CI judge             | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:qwen-3-235b-a22b-instruct-2507` |
-| Local judge (optional, stronger) | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite`            |
+Current models:
 
-Skill eval YAMLs reference these IDs directly. When models change, update this table.
+| Role          | When                        | Provider                                      | Model ID                                  |
+| ------------- | --------------------------- | --------------------------------------------- | ----------------------------------------- |
+| Generator     | All runs                    | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:qwen-3-235b-a22b-instruct-2507` |
+| Judge (CI)    | CI only                     | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:qwen-3-235b-a22b-instruct-2507` |
+| Judge (local) | Optional — stronger quality | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite`            |
 
-**Cerebras** (required):
+Skill eval YAMLs reference these IDs directly. When models change, update this table
+and the model IDs in the YAML files and CI workflows.
+
+**Cerebras** (required for all runs):
 
 1. Sign up at [inference.cerebras.ai](https://inference.cerebras.ai/) (free, requires account).
 2. Create an API key and add it to your shell:
@@ -56,7 +61,11 @@ export CEREBRAS_API_KEY=your_key_here
 echo 'export CEREBRAS_API_KEY=your_key_here' >> ~/.zshrc
 ```
 
-**Google Gemini** (recommended for local runs — better judge quality):
+**Google Gemini** (optional — recommended for baseline validation):
+
+Gemini is a stricter judge and is better at catching responses that satisfy the
+letter of a rubric without the required reasoning. Use it when validating that new
+tests have discriminating power.
 
 1. Get a free API key at [aistudio.google.com](https://aistudio.google.com/).
 2. Add it to your shell:
@@ -68,14 +77,19 @@ echo 'export GOOGLE_API_KEY=your_key_here' >> ~/.zshrc
 
 ## Running evals
 
-Run the eval for the skill you are working on. Use `--grader google:gemini-2.5-flash-lite`
-for a stronger judge when you have a `GOOGLE_API_KEY`:
+Run the eval for the skill you are working on:
 
 ```bash
+# Cerebras judge (default — uses CEREBRAS_API_KEY only):
+npm run eval -- \
+  --config evals/prompts/<skill-name>.yaml \
+  --no-cache -j 1
+
+# Gemini judge (optional — stronger; requires GOOGLE_API_KEY):
 npm run eval -- \
   --config evals/prompts/<skill-name>.yaml \
   --grader google:gemini-2.5-flash-lite \
-  --no-cache -j 1
+  --delay 2000 --no-cache -j 1
 ```
 
 All assertions must pass before pushing.
@@ -99,7 +113,7 @@ npm run eval -- \
   --config evals/prompts/<skill-name>.yaml \
   --var injectSkill=false \
   --grader google:gemini-2.5-flash-lite \
-  --no-cache -j 1
+  --delay 2000 --no-cache -j 1
 ```
 
 Explicit, implicit, and anti-pattern tests must all fail without the skill — if any of
@@ -110,7 +124,7 @@ be valid if it is close enough to the skill's topic to confirm the skill doesn't
 ## Writing eval prompts
 
 When contributing a new skill, copy `evals/prompts/TEMPLATE.yaml` and rename it to
-match your skill directory. Each eval config contains exactly four tests — one of each type:
+match your skill directory. Each eval config contains four to five tests — one of each type:
 
 | Type         | Description                                        |
 | ------------ | -------------------------------------------------- |
@@ -148,13 +162,15 @@ what "failing without the skill" means in practice.
 
 ## CI
 
+<!-- TODO: set up CI workflows, including setup, environment variables, and troubleshooting steps. -->
+
 Two workflows run evals automatically:
 
 - **`eval-pr.yml`** — Triggered on PRs that modify `skills/**` or `evals/prompts/**`.
   Runs only the eval configs for the modified skills. All assertions must pass to merge.
 - **`eval-scheduled.yml`** — Runs every Monday against all skills on `main`. Results are
-  committed to `evals/results/`. Opens a GitHub issue tagged `eval-regression` if any
-  skill fails.
+  committed to `evals/results/` after every run (pass or fail). Opens a GitHub issue
+  tagged `eval-regression` if any skill fails.
 
-Both workflows use Cerebras as provider and judge. Requires `CEREBRAS_API_KEY`
-in repository secrets.
+Both workflows use the provider configured in each eval YAML as both generator and
+judge. Requires the corresponding API key in repository secrets.
