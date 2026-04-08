@@ -1,4 +1,4 @@
-# Eval Results: maplibre-martin-confiugration-patterns
+# Eval Results: maplibre-martin-configuration-patterns
 
 These results show the baseline model responses without the skill injected.
 
