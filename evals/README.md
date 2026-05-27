@@ -44,8 +44,8 @@ Current models:
 
 | Role          | When                        | Provider                                      | Model ID                                  |
 | ------------- | --------------------------- | --------------------------------------------- | ----------------------------------------- |
-| Generator     | All runs                    | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:qwen-3-235b-a22b-instruct-2507` |
-| Judge (CI)    | CI only                     | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:qwen-3-235b-a22b-instruct-2507` |
+| Generator     | All runs                    | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:gpt-oss-120b`                   |
+| Judge (CI)    | CI only                     | [Cerebras](https://inference.cerebras.ai/)    | `cerebras:gpt-oss-120b`                   |
 | Judge (local) | Optional — stronger quality | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite`            |
 
 Skill eval YAMLs reference these IDs directly. When models change, update this table
