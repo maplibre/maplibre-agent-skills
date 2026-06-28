@@ -225,6 +225,10 @@ Before publishing your PR:
 2. **Run evals** and confirm all assertions pass — see [Running evals locally](#running-evals-locally)
 3. **Test with an AI assistant:** `npx skills add . -a claude-code`, then ask questions the skill should answer
 
+## Note on AI usage
+
+Please take a moment to review [MapLibre's AI Policy](https://github.com/maplibre/maplibre/blob/main/AI_POLICY.md). tl;dr: do not let AI speak for you, verify all generated content before requesting a review and disclose AI usage in pull requests.
+
 ## Attribution and References
 
 Reference these sources in skill content wherever possible:
