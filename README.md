@@ -23,6 +23,10 @@ Each skill lives under `skills/<skill-name>/`:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) to add or improve a skill. All experience levels welcome, but please note, since we are trying to improve on genAI baseline contributions to MapLibre development, skills or contributions generated entirely by AI agents will likely be rejected.
 
+## Note on AI usage
+
+Please take a moment to review [MapLibre's AI Policy](https://github.com/maplibre/maplibre/blob/main/AI_POLICY.md). tl;dr: do not let AI speak for you, verify all generated content before requesting a review and disclose AI usage in pull requests.
+
 ## Install
 
 Installing skills into your project means AI assistants automatically pick them up when you describe a task — no need to define context manually each time.
@@ -85,3 +89,4 @@ Once installed, you can manage skills with:
 ## License
 
 MIT License. Copyright (c) MapLibre and contributors. See [LICENSE.md](LICENSE.md) and [NOTICE](NOTICE) for more information.
+
