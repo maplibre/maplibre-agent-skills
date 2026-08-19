@@ -6,22 +6,21 @@ status: verified
 
 # MapLibre Cartography
 
-MapLibre renders exactly what you describe in your style JSON. This skill covers how to describe it well: choosing label colors for readability on any basemap, building a coherent visual hierarchy, sourcing and self-hosting fonts and icons, and ordering layers correctly.
+MapLibre renders exactly what you describe in your stylesheet. This skill covers how to describe it well: choosing label colors for readability on any basemap, building a coherent visual hierarchy, sourcing and self-hosting fonts and icons, and ordering stylesheet layers correctly.
 
 ## When to Use This Skill
 
-- Choosing label `text-color` and `text-halo-color` for a new or migrated style
-- Map labels are hard to read against a background (imagery, dark basemap, complex vector)
-- Setting up `glyphs` and `sprite` for a custom or self-hosted style
+- Reviewing a stylesheet against cartographic best practices before it ships
+- Choosing label `text-color` and `text-halo-color`, or point symbol/icon colors, for a new or migrated stylesheet — including cases where they read fine on a flat vector basemap but disappear or camouflage once the basemap is imagery
+- Setting up `glyphs` and `sprite` for a custom or self-hosted stylesheet
 - Injecting your own data layers into an existing basemap without covering labels
-- Making point symbols, markers, or custom icons readable on satellite/aerial imagery
 - Restyling roads from a light-basemap vector palette so they sit in (not on top of) imagery
 - Route shields render as bare numbers or missing badges
-- Auditing a style for contrast accessibility
+- Auditing a stylesheet for contrast accessibility
 
 ## Basemap Type Determines Label Colors
 
-MapLibre places labels dynamically, so you cannot mask the background behind each label as you would on a static map. Instead, choose a `text-halo-color` that separates the label from every background it might land on, and a `text-color` that reads against the halo:
+MapLibre places labels dynamically, so you cannot mask the background behind each label as you would on a static map. Instead, choose a `text-halo-color` that separates the label from every background it might land on, and a `text-color` that reads against the halo. On a single uniform basemap tone (flat light or dark vector), the halo can match that tone instead of contrasting it — the text itself does the contrasting against the basemap. Imagery has no single tone to match, so there the halo must contrast every possible background instead:
 
 | Basemap type                                   | Background                                                 | Recommended text color          | Recommended halo                                 |
 | ---------------------------------------------- | ---------------------------------------------------------- | ------------------------------- | ------------------------------------------------ |
@@ -51,14 +50,14 @@ Wider halos increase legibility but add visual weight. Typical values:
 Markers face the same figure-ground problem as labels, but with different tools. A colored icon on aerial imagery competes with an unpredictable, busy, _desaturated_ photographic background.
 
 - **You cannot separate a symbol from a background that owns its hue.** A green icon over green parkland, a brown icon over bare soil: both camouflage. Most aerial imagery is low-saturation, so the axis the background is weakest on is **chroma**. A saturated fill (amber, terracotta) separates while still reading as a natural, earthy color. Shifting hue alone, toward a different earth tone, does not help if that hue is also in the scene.
-- **Carve the symbol out with a casing**, exactly as you would halo a label. A thin light casing reads against dark canopy and water; a darker edge holds against bright soil and rooftops. Keep it thin: a fat ring reads as a sticker. Terminology: a _halo_ contrasts the background to lift the symbol off it; a _knockout_ matches the background to mask busy texture immediately around the symbol. Both buy separation.
+- **Carve the symbol out with `icon-halo-color`/`icon-halo-width`**, exactly as you would halo a label — this only affects SDF sprite images (`addImage(..., { sdf: true })` or a sprite built as SDF); a full-color raster icon has no halo paint property, so any edge treatment on it has to be baked into the artwork itself. A thin light halo reads against dark canopy and water; a darker edge holds against bright soil and rooftops. Keep it thin — a fat ring reads as a sticker — except for the one class of symbol meant to dominate the map (an emergency marker, the single most important thematic feature), where a heavier ring is the point.
 - **Flat fills read as stickers on a photo.** Give landform or 3D symbols dimensional cues. A gradient (lighter on the lit slope, darker on the shaded slope) models form. A _contact shadow_, a blurred flattened ellipse pooled under the base, anchors the symbol to the ground far better than an offset drop-shadow, which makes it look like it floats. Match the symbol's lighting and shadow direction to the basemap's `hillshade-illumination-direction` (commonly NW, 315°) so the symbol sits in the same light as the terrain.
 
 **SVG icons via `addImage`:** when loading an SVG into a sprite image at runtime (fetch the SVG, decode it as an `Image`, then `map.addImage`), the SVG rasterizes at decode time, so `linearGradient` and `feDropShadow` filters bake in correctly.[1] Two gotchas: pad the `viewBox` so halos and shadows are not clipped at the icon edge, and keep `width`/`height` proportional to the `viewBox` or the glyph distorts. Use `"icon-allow-overlap": true` for dense point data.
 
 ## Visual Hierarchy
 
-A well-ordered label hierarchy means the most important features dominate at the appropriate zoom level. MapLibre controls hierarchy through text size, font weight, letter spacing, and zoom-range visibility.
+A well-ordered hierarchy means the most important features dominate at the appropriate zoom level — for labels and for line/polygon data layers alike. For labels, MapLibre controls hierarchy through text size, font weight, letter spacing, contrast, and zoom-range visibility. The same tools apply to lines and polygons: `line-width` and fill saturation stand in for text size, and contrast against the basemap (a saturated line on a muted background, a muted fill on a busy one) does as much hierarchy work as size does — see [Styling Vector Roads Over Imagery](#styling-vector-roads-over-imagery) below for the line/polygon case in detail.
 
 ### Text size by feature class
 
@@ -101,7 +100,7 @@ Values around 0.9 produce tight, readable two-line labels at small sizes. Do not
 
 ## Styling Vector Roads Over Imagery
 
-Vector road palettes from light-basemap styles (OSM Bright, OSM Liberty) are tuned to pop on pale paper. Dropped on imagery they dominate: high saturation against a desaturated photo, warm hues advance toward the eye, full opacity. Invert the priority. The imagery is the subject; roads are a reference overlay.
+Vector road palettes from light-basemap styles (OSM Bright, OSM Liberty) are tuned to pop against pale paper, using high saturation, warm hues, and full opacity. Those same properties compete with the photo once the basemap is imagery. Treat the imagery as the subject and the roads as a reference overlay layered on top of it, not the other way around.
 
 - **Desaturate hard.** Move fills and casings toward neutral greys or muted tones. The bright orange/yellow road hierarchy (`#f90`, `#fd4`, `#b06010`) is the most common offender; replace fills with light greys and casings with a darker grey or a deep same-hue color.
 - **Keep hierarchy in width and value, not hue.** The width ramps already encode motorway > residential; you do not need loud color to say it.
@@ -117,18 +116,18 @@ Vector road palettes from light-basemap styles (OSM Bright, OSM Liberty) are tun
 
 ## Typography: Glyphs and Font Stacks
 
-MapLibre renders text using **SDF (signed-distance field) glyphs** — precomputed font files that scale cleanly at any zoom or screen density. Glyphs are served from a URL matching the pattern in the style's `glyphs` field. **In MapLibre GL JS ≥ 5.11.0** ([PR #4564](https://github.com/maplibre/maplibre-gl-js/pull/4564)), an unresolvable `glyphs` situation is no longer fatal — MapLibre renders text locally via TinySDF instead, treating `text-font` as a cascading list of local/web font names. This covers two cases, both driven by the same fallback:
+MapLibre renders text using **SDF (signed-distance field) glyphs** — precomputed font files that scale cleanly at any zoom or screen density. Glyphs are served from a URL matching the pattern in the stylesheet's `glyphs` field. **In MapLibre GL JS ≥ 5.11.0** ([PR #4564](https://github.com/maplibre/maplibre-gl-js/pull/4564)), an unresolvable `glyphs` situation is no longer fatal — MapLibre renders text locally via TinySDF instead, treating `text-font` as a cascading list of local/web font names. This covers two cases, both driven by the same fallback:
 
-- **`glyphs` omitted from the style entirely.** A first-class local-fonts mode, not just error recovery: every `text-font` name is resolved as a web font (loaded with `@font-face` or `document.fonts.load()`) or a system font, the same way a browser resolves a CSS `font-family` list — no PBF generation, no glyph server. See the [local fonts](https://maplibre.org/maplibre-gl-js/docs/examples/style-labels-with-local-fonts/) and [web fonts](https://maplibre.org/maplibre-gl-js/docs/examples/style-labels-with-web-fonts/) examples.
+- **`glyphs` omitted from the stylesheet entirely.** A first-class local-fonts mode, not just error recovery: every `text-font` name is resolved as a web font (loaded with `@font-face` or `document.fonts.load()`) or a system font, the same way a browser resolves a CSS `font-family` list — no PBF generation, no glyph server. See the [local fonts](https://maplibre.org/maplibre-gl-js/docs/examples/style-labels-with-local-fonts/) and [web fonts](https://maplibre.org/maplibre-gl-js/docs/examples/style-labels-with-web-fonts/) examples.
 - **`glyphs` is set but a specific glyph PBF fails to load** (wrong font name, 404, etc.) — the same local-render path fires per glyph range instead of failing the tile, logging `Unable to load glyph range ... Rendering codepoint U+... locally instead.` in the console. Treat an unresolvable `text-font` as a **cosmetic** risk (renders in a generic local/system font that looks different per OS/browser) rather than a correctness one — it does not go invisible or break the layer.
 
-The PR author's own caveat still holds: **this is GL JS only**, and the PR text explicitly declines to "encourage style authors to rely on non-CJK local text rendering yet, because maplibre-native still needs corresponding Android and iOS implementations for interoperability" — so production styles that need to look the same on GL JS and Native should keep serving glyphs explicitly rather than designing around the fallback.
+The PR author's own caveat still holds: **this is GL JS only**, and the PR text explicitly declines to "encourage style authors to rely on non-CJK local text rendering yet, because maplibre-native still needs corresponding Android and iOS implementations for interoperability" — so production stylesheets that need to look the same on GL JS and Native should keep serving glyphs explicitly rather than designing around the fallback.
 
-**MapLibre Native's equivalent is a different property, not the same one.** Native does not support omitting `glyphs` to fall back to local fonts (tracked, still open: [maplibre-native#165](https://github.com/maplibre/maplibre-native/issues/165)). Instead it has its own `font-faces` property (Android ≥ 11.13.0, iOS ≥ 6.18.0 — **not implemented in GL JS**, [gl-js#6637](https://github.com/maplibre/maplibre-gl-js/issues/6637)), which maps each font name in `text-font` to one or more local font files, each with an explicit Unicode range you specify. It solves the same "render offline without a glyph server" problem GL JS's fallback solves, but the opposite way: you get exact control over which file covers which codepoints instead of an automatic browser/OS font match, at the cost of having to work out those ranges yourself per font. Do not port `font-faces` config to a GL JS style, or the GL JS omit-`glyphs` pattern to Native — the two SDKs solve local fonts with unrelated mechanisms today.
+**MapLibre Native's equivalent is a different property, not the same one.** Native does not support omitting `glyphs` to fall back to local fonts (tracked, still open: [maplibre-native#165](https://github.com/maplibre/maplibre-native/issues/165)). Instead it has its own `font-faces` property (Android ≥ 11.13.0, iOS ≥ 6.18.0 — **not implemented in GL JS**, [gl-js#6637](https://github.com/maplibre/maplibre-gl-js/issues/6637)), which maps each font name in `text-font` to one or more local font files, each with an explicit Unicode range you specify. It solves the same "render offline without a glyph server" problem GL JS's fallback solves, but the opposite way: you get exact control over which file covers which codepoints instead of an automatic browser/OS font match, at the cost of having to work out those ranges yourself per font. Do not port `font-faces` config to a GL JS stylesheet, or the GL JS omit-`glyphs` pattern to Native — the two SDKs solve local fonts with unrelated mechanisms today.
 
 ### Setting the glyphs URL
 
-The style's `glyphs` field is a URL template ending in `/{fontstack}/{range}.pbf` (e.g. `https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf`), where `{fontstack}` is the comma-joined `text-font` list and `{range}` a Unicode range — full mechanics: [style spec — glyphs](https://maplibre.org/maplibre-style-spec/glyphs/). `text-font` is itself a fallback list — see [Noto for global maps](#noto-for-global-maps) below.
+The stylesheet's `glyphs` field is a URL template ending in `/{fontstack}/{range}.pbf` (e.g. `https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf`), where `{fontstack}` is the comma-joined `text-font` list and `{range}` a Unicode range — full mechanics: [style spec — glyphs](https://maplibre.org/maplibre-style-spec/glyphs/). `text-font` is itself a fallback list — see [Noto for global maps](#noto-for-global-maps) below.
 
 ### Font options
 
@@ -139,7 +138,7 @@ The style's `glyphs` field is a URL template ending in `/{fontstack}/{range}.pbf
 | Self-hosted, existing font            | Reuse prebuilt PBFs (openmaptiles/fonts, UNDP-Data/fonts, or your current server's tree) | Full control; no generation needed for standard fonts    |
 | Self-hosted, custom font              | Generate PBFs from your own TTF/OTF                                                      | Only needed when no prebuilt PBF set exists for the font |
 
-**For standard fonts (Noto Sans, Open Sans, Roboto, and similar), you do not need to generate anything.** The simplest no-generation path is to copy the `{fontstack}/{range}.pbf` tree a glyph server already serves (e.g. the one your style currently points at) onto your own origin. Projects such as [openmaptiles/fonts](https://github.com/openmaptiles/fonts) and [UNDP-Data/fonts](https://github.com/UNDP-Data/fonts) package the common standard fonts as glyph PBFs you can build or pull — note both also run hosted endpoints, which are themselves third-party servers to avoid if self-hosting is the point. Point the style's `glyphs` field at your own URL template; the font names in your `text-font` arrays must exactly match the served font-stack folder names.
+**For standard fonts (Noto Sans, Open Sans, Roboto, and similar), you do not need to generate anything.** The simplest no-generation path is to copy the `{fontstack}/{range}.pbf` tree a glyph server already serves (e.g. the one your stylesheet currently points at) onto your own origin. Projects such as [openmaptiles/fonts](https://github.com/openmaptiles/fonts) and [UNDP-Data/fonts](https://github.com/UNDP-Data/fonts) package the common standard fonts as glyph PBFs you can build or pull — note both also run hosted endpoints, which are themselves third-party servers to avoid if self-hosting is the point. Point the stylesheet's `glyphs` field at your own URL template; the font names in your `text-font` arrays must exactly match the served font-stack folder names.
 
 **Generating glyphs from a TTF/OTF is a separate, heavier task** — only needed for a custom or brand font with no existing PBF set. Use [Font Maker](https://maplibre.github.io/font-maker/) or [fontnik](https://github.com/mapbox/fontnik) to produce the `.pbf` files, then serve and reference them the same way as above.
 
@@ -147,7 +146,7 @@ The style's `glyphs` field is a URL template ending in `/{fontstack}/{range}.pbf
 
 Noto ("no tofu") is Google's open-source family built for near-universal Unicode coverage: Noto Sans covers Latin/Greek/Cyrillic, and script-specific fonts (Noto Sans Arabic, Noto Sans Devanagari, Noto Sans Thai, the region-specific Noto Sans CJK SC/TC/JP/KR) extend it. How you handle non-Latin text depends on the script, and CJK is the case people most often get wrong.
 
-**CJK (Chinese, Japanese, Korean) — rendered locally by default; do not serve CJK glyph PBFs.** MapLibre GL JS's `localIdeographFontFamily` map option defaults to `'sans-serif'`, so CJK characters are generated on-device (TinySDF) and the style's `text-font` is **ignored** for them (except the weight keyword). This exists because CJK text has poor locality across Unicode ranges — a single tile can otherwise trigger dozens of large glyph requests.[3] Leave it on; optionally point it at a nicer on-device CJK font. Setting `localIdeographFontFamily: false` restores served glyphs for CJK, which is much slower — only do it if you specifically need the served font's shapes.
+**CJK (Chinese, Japanese, Korean) — rendered locally by default; do not serve CJK glyph PBFs.** MapLibre GL JS's `localIdeographFontFamily` map option defaults to `'sans-serif'`, so CJK characters are generated on-device (TinySDF) and the stylesheet's `text-font` is **ignored** for them (except the weight keyword). This exists because CJK text has poor locality across Unicode ranges — a single tile can otherwise trigger dozens of large glyph requests.[3] Leave it on; optionally point it at a nicer on-device CJK font. Setting `localIdeographFontFamily: false` restores served glyphs for CJK, which is much slower — only do it if you specifically need the served font's shapes.
 
 ```javascript
 const map = new maplibregl.Map({
@@ -156,7 +155,7 @@ const map = new maplibregl.Map({
 });
 ```
 
-**Other non-Latin scripts (Arabic, Hebrew, Thai, …) — need real glyphs.** `localIdeographFontFamily` does not apply here. Add the relevant Noto script font to the layer's `text-font` fallback list and serve its glyph PBFs (or rely on the GL JS ≥ 5.11.0 local fallback, which is environment-dependent — see the top of this section). Font names must match those the glyph server knows.
+**Other non-Latin scripts (Arabic, Hebrew, Thai, …) — need real glyphs.** `localIdeographFontFamily` does not apply here. Add the relevant Noto script font to the stylesheet layer's `text-font` fallback list and serve its glyph PBFs (or rely on the GL JS ≥ 5.11.0 local fallback, which is environment-dependent — see the top of this section). Font names must match those the glyph server knows.
 
 **Devanagari, Khmer, and other scripts requiring ligatures/reordering — glyphs alone will not fix this.** MapLibre maps each Unicode codepoint to one glyph with no shaping engine (no HarfBuzz/Raqm), so it cannot form the conjuncts and reordering these scripts require — serving the correct font's PBFs will not produce correct-looking text. There is currently no configuration fix; this is a known architectural limitation.[6]
 
@@ -175,13 +174,13 @@ Call this before initializing the map.
 
 ## Sprites: Icons and Markers
 
-The style JSON's `sprite` value is a **base URL with no file extension** (e.g. `https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite`, for testing purposes only, do not use in production); MapLibre appends `.json`, `.png`, and `@2x` variants itself. Symbol layers reference sprite images by ID with `icon-image`; the value must exactly match an ID in the sprite JSON index or the icon is silently not rendered.
+The stylesheet's `sprite` value is a **base URL with no file extension** (e.g. `https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite`, for testing purposes only, do not use in production); MapLibre appends `.json`, `.png`, and `@2x` variants itself. Symbol layers reference sprite images by ID with `icon-image`; the value must exactly match an ID in the sprite JSON index or the icon is silently not rendered.
 
 ### Self-hosted sprites
 
-To avoid third-party dependencies, copy an existing sprite directory (PNG + JSON, plus any @2x files) from a style or tileset provider and host it under your own domain, pointing the style's `sprite` property at its base URL. Always check the provider's license before republishing and add attribution if required.
+To avoid third-party dependencies, copy an existing sprite directory (PNG + JSON, plus any @2x files) from a stylesheet or tileset provider and host it under your own domain, pointing the stylesheet's `sprite` property at its base URL. Always check the provider's license before republishing and add attribution if required.
 
-Host sprite assets on a static host you control (GitHub Pages, Netlify, Vercel, S3, same origin as the style). **Do not point production styles at `raw.githubusercontent.com`** Raw is for serving repository blobs, not production assets: anonymous requests are aggressively rate-limited so real users see intermittent HTTP 429s [4], caching is fixed at five minutes with no control, there is no SLA, and private-repo URLs return 404 to everyone but authenticated collaborators (it works for you while logged in, then fails for every other user) [5].
+Host sprite assets on a static host you control (GitHub Pages, Netlify, Vercel, S3, same origin as the stylesheet). **Do not point production stylesheets at `raw.githubusercontent.com`** Raw is for serving repository blobs, not production assets: anonymous requests are aggressively rate-limited so real users see intermittent HTTP 429s [4], caching is fixed at five minutes with no control, there is no SLA, and private-repo URLs return 404 to everyone but authenticated collaborators (it works for you while logged in, then fails for every other user) [5].
 
 ### Building a sprite from SVGs
 
@@ -198,21 +197,21 @@ For a small number of custom icons, `map.loadImage()` and `addImage()` can work 
 Broken-looking route shields (bare floating numbers, missing badges) are almost always a **missing sprite image**. The shield number is text (font) and usually renders fine; the badge behind it is an `icon-image` from the sprite. Diagnose in this order:
 
 1. **Confirm glyphs load.** Probe the `glyphs` server for the exact `text-font` names and expect HTTP 200. If they 200, the font is not the problem.
-2. **Confirm the sprite carries the shield images.** OpenMapTiles and OSM Liberty shield layers use `icon-image: "{network}_{ref_length}"` for known networks (e.g. `us-interstate_2`, `us-highway_3`, `us-state_2`) and `road_{ref_length}` for generic refs. A missing icon is silently omitted, so grep the sprite JSON for those keys.
+2. **Confirm the sprite carries the shield images.** OpenMapTiles and OSM Liberty shield stylesheet layers use `icon-image: "{network}_{ref_length}"` for known networks (e.g. `us-interstate_2`, `us-highway_3`, `us-state_2`) and `road_{ref_length}` for generic refs. A missing icon is silently omitted, so grep the sprite JSON for those keys.
 
-Not every sprite carries shields localized for the US, so grep the sprite JSON for the `{network}_{ref_length}` keys before assuming they exist. Both the `demotiles.maplibre.org/styles/osm-bright-gl-style/sprite` and `openmaptiles.github.io/osm-bright-gl-style/sprite` sheets currently include `us-interstate_*`, `us-highway_*`, and `us-state_*` (alongside the generic `road_1`–`road_6`), but a minimal or custom sprite may ship only the generic `road_*`. If yours lacks the shield images and your tiles populate `network`, `ref`, and `ref_length` (the OSM US OpenMapTiles tiles do), point `sprite` at one that has them — the `{network}_{ref_length}` layers then resolve with no layer edits.
+Not every sprite carries shields localized for the US, so grep the sprite JSON for the `{network}_{ref_length}` keys before assuming they exist. Both the `demotiles.maplibre.org/styles/osm-bright-gl-style/sprite` and `openmaptiles.github.io/osm-bright-gl-style/sprite` sheets currently include `us-interstate_*`, `us-highway_*`, and `us-state_*` (alongside the generic `road_1`–`road_6`), but a minimal or custom sprite may ship only the generic `road_*`. If yours lacks the shield images and your tiles populate `network`, `ref`, and `ref_length` (the OSM US OpenMapTiles tiles do), point `sprite` at one that has them — the `{network}_{ref_length}` stylesheet layers then resolve with no layer edits.
 
-## Layer Ordering
+## Stylesheet Layer Ordering
 
-MapLibre renders layers in the order they appear in the style `layers` array — first item is drawn first (bottom), last is drawn last (top). Getting this wrong is the most common cause of data layers obscuring basemap labels.
+MapLibre renders stylesheet layers in the order they appear in the stylesheet's `layers` array — first item is drawn first (bottom), last is drawn last (top). Getting this wrong is the most common cause of data layers obscuring basemap labels.
 
 ### The injection pattern
 
-When adding your own data to an existing basemap style at runtime, insert your layers **before the first symbol layer** (find it with `map.getStyle().layers.find((l) => l.type === 'symbol')?.id` and pass it as the second argument of `addLayer`) so your geometry renders under labels. Without that argument the layer goes above everything, including labels.
+When adding your own data to an existing basemap stylesheet at runtime, insert your data layers **before the first symbol layer** (find it with `map.getStyle().layers.find((l) => l.type === 'symbol')?.id` and pass it as the second argument of `addLayer`) so your geometry renders under labels. Without that argument the data layer goes above everything, including labels.
 
-### Canonical layer order for custom styles
+### Canonical stylesheet layer order for custom stylesheets
 
-When building a style from scratch, follow this ordering bottom to top:
+When building a stylesheet from scratch, follow this ordering bottom to top:
 
 1. `background`
 2. Raster imagery (if using satellite/aerial source)
@@ -220,7 +219,7 @@ When building a style from scratch, follow this ordering bottom to top:
 4. Terrain fill (water, land, parks — polygon layers)
 5. Line layers (roads, boundaries, rivers)
 6. Your data polygon and line layers
-7. Symbol layers from the basemap (place labels, road labels)
+7. The basemap's own symbol layers (place labels, road labels)
 8. Your data symbol/label layers (if any)
 
 Hillshade sits directly above raster imagery and below all vector layers, with sufficient transparency to allow the imagery to show through. If you add transparency to the imagery and layer it over the hillshade, the imagery will appear faded or washed out. Hillshade applied over vector layers will make line and fill colors look blotchy, blurry or muted.
