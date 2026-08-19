@@ -1,6 +1,6 @@
 ---
 name: maplibre-tile-sources
-description: How to choose and configure data sources for MapLibre GL JS — rendering your own data without tiles, hosted tile services, serverless PMTiles, self-hosted tile servers, tile schemas, glyphs, and sprites.
+description: How to choose and configure data sources for MapLibre GL JS — rendering your own data without tiles, hosted tile services, serverless PMTiles, self-hosted tile servers, tile schemas, and sprites.
 status: verified
 ---
 
@@ -12,7 +12,7 @@ MapLibre GL JS does not ship with map data. You provide a **style** that referen
 
 - Setting up a new MapLibre map and choosing where your data comes from
 - Deciding between GeoJSON, serverless tiles, hosted services, a combination thereof, or self-hosted options
-- Configuring glyphs (fonts) and sprites so labels and icons render
+- Configuring sprites so icons render (for `glyphs`/fonts, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md))
 - Debugging blank maps or missing tiles
 - Migrating from Mapbox and need equivalent tile sources and style setup
 
@@ -26,7 +26,7 @@ A style has three main components:
 
 - **Sources** — Point to the actual data. Each source has a `type` and either inline data or a URL. MapLibre requests tiles or data as the viewport changes. The same source can back many layers (e.g. roads, water, and labels all from one vector URL).
 - **Layers** — An ordered list defining what to draw and how. Each layer references a source (and for vector tiles, a `source-layer` name) and specifies paint/layout properties.
-- **Glyphs and sprite** — URLs to font SDF stacks and icon spritesheets. `sprite` has no fallback: a missing icon is silently omitted. `glyphs` does have one on GL JS ≥ 5.11.0 (text still renders, in a local/system font) — see [maplibre-cartography: Typography](../maplibre-cartography/SKILL.md#typography-glyphs-and-font-stacks) for the mechanism and its limits. Production styles should still supply both explicitly.
+- **Glyphs and sprite** — URLs to font SDF stacks and icon spritesheets. `sprite` has no fallback: a missing icon is silently omitted. `glyphs` does have one on GL JS ≥ 5.11.0 (text still renders, in a local/system font) — see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md) for the mechanism and its limits. Production styles should still supply both explicitly.
 
 **Source types:**
 
@@ -211,18 +211,18 @@ Common schemas:
 
 If you use a provider's pre-built style URL, the schema is already matched.
 
-### Glyphs (Fonts) and Sprites
+### Glyphs and Sprites
 
 Every production MapLibre style that shows text or icons needs:
 
-- **glyphs:** URL template for font stacks — `"glyphs": "https://example.com/fonts/{fontstack}/{range}.pbf"`
-- **sprite:** Base URL for sprite sheet and metadata (serves both `.json` and `.png`) — `"sprite": "https://example.com/sprites/basic"`
+- **glyphs:** URL template for font stacks — `"glyphs": "https://example.com/fonts/{fontstack}/{range}.pbf"`. Setup, self-hosting vs. generating, the GL JS local-font fallback, and non-Latin scripts: [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
+- **sprite:** Base URL for sprite sheet and metadata (serves both `.json` and `.png`) — `"sprite": "https://example.com/sprites/basic"`.
 
-Pre-built style URLs from hosted providers include their own glyphs and sprite. When building a custom style or self-hosting, you must supply these URLs. (GL JS also supports omitting `glyphs` entirely to render text in local/system fonts instead — a real mode, not an error state, but with its own tradeoffs and no Native equivalent: see [maplibre-cartography: Typography](../maplibre-cartography/SKILL.md#typography-glyphs-and-font-stacks) rather than duplicating that here.)
+Pre-built style URLs from hosted providers include their own glyphs and sprite. When building a custom style or self-hosting, you must supply these URLs.
 
-If you are modifying a style based on a pre-defined tile schema, look for an existing style that matches that schema and reuse the glyphs and sprites. Pay attention to licensing and attribution requirements when reusing assets. If needed you can host the same glyphs and sprites yourself by downloading the files and serving them from your own storage or tile server.
+If you are modifying a style based on a pre-defined tile schema, look for an existing style that matches that schema and reuse its sprite. Pay attention to licensing and attribution requirements when reusing assets. If needed you can host the same sprite yourself by downloading the files and serving them from your own storage or tile server.
 
-The alternative is to generate your own glyphs and sprite sheets. See [Font Glyph Generation](https://github.com/maplibre/awesome-maplibre#font-glyph-generation) and [Sprite Generation](https://github.com/maplibre/awesome-maplibre#sprite-generation) in awesome-maplibre for tools to generate your own.
+The alternative is to generate your own sprite sheet. See [Sprite Generation](https://github.com/maplibre/awesome-maplibre#sprite-generation) in awesome-maplibre for tools to generate your own.
 
 ## TileJSON
 
@@ -270,6 +270,7 @@ Hosted providers handle CORS for you. For self-hosted servers or static storage,
 
 ## Related Skills
 
+- [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Setting up the `glyphs` URL, self-hosting or generating font PBFs, and non-Latin script support.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serverless PMTiles hosting and MapLibre integration.
 - **maplibre-style-patterns** — Layer and source configuration for common use cases. (Not yet in repo.)
 - [**maplibre-mapbox-migration**](../maplibre-mapbox-migration/SKILL.md) — Replacing Mapbox tiles with MapLibre-compatible sources.
