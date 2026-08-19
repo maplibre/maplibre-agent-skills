@@ -26,7 +26,7 @@ A style has three main components:
 
 - **Sources** — Point to the actual data. Each source has a `type` and either inline data or a URL. MapLibre requests tiles or data as the viewport changes. The same source can back many layers (e.g. roads, water, and labels all from one vector URL).
 - **Layers** — An ordered list defining what to draw and how. Each layer references a source (and for vector tiles, a `source-layer` name) and specifies paint/layout properties.
-- **Glyphs and sprite** — Required for text and icons: URLs to font SDF stacks and icon spritesheets. Without them, labels and symbols won't appear.
+- **Glyphs and sprite** — URLs to font SDF stacks and icon spritesheets. `sprite` has no fallback: a missing icon is silently omitted. `glyphs` does have one on GL JS ≥ 5.11.0 (text still renders, in a local/system font) — see [maplibre-cartography: Typography](../maplibre-cartography/SKILL.md#typography-glyphs-and-font-stacks) for the mechanism and its limits. Production styles should still supply both explicitly.
 
 **Source types:**
 
@@ -213,12 +213,12 @@ If you use a provider's pre-built style URL, the schema is already matched.
 
 ### Glyphs (Fonts) and Sprites
 
-Every MapLibre style that shows text or icons needs:
+Every production MapLibre style that shows text or icons needs:
 
 - **glyphs:** URL template for font stacks — `"glyphs": "https://example.com/fonts/{fontstack}/{range}.pbf"`
 - **sprite:** Base URL for sprite sheet and metadata (serves both `.json` and `.png`) — `"sprite": "https://example.com/sprites/basic"`
 
-Pre-built style URLs from hosted providers include their own glyphs and sprite. When building a custom style or self-hosting, you must supply these URLs.
+Pre-built style URLs from hosted providers include their own glyphs and sprite. When building a custom style or self-hosting, you must supply these URLs. (GL JS also supports omitting `glyphs` entirely to render text in local/system fonts instead — a real mode, not an error state, but with its own tradeoffs and no Native equivalent: see [maplibre-cartography: Typography](../maplibre-cartography/SKILL.md#typography-glyphs-and-font-stacks) rather than duplicating that here.)
 
 If you are modifying a style based on a pre-defined tile schema, look for an existing style that matches that schema and reuse the glyphs and sprites. Pay attention to licensing and attribution requirements when reusing assets. If needed you can host the same glyphs and sprites yourself by downloading the files and serving them from your own storage or tile server.
 
