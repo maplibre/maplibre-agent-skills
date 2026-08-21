@@ -35,7 +35,7 @@ Common reasons teams switch from Mapbox to MapLibre:
 
 - **Dec 2020:** Mapbox GL JS v2.0 switched to a proprietary license. The community forked v1.13 as **MapLibre GL JS**. [MapLibre organization](https://github.com/maplibre) and [GL JS repo](https://github.com/maplibre/maplibre-gl-js) are the canonical homes.
 - **API:** MapLibre GL JS v1.x is largely backward compatible with Mapbox GL JS v1.x. Most map code (methods, events, layers, sources) works with minimal changes.
-- **Releases since the fork:** MapLibre has moved ahead with its own version line. v2/v3 brought WebGL2, a modern renderer, and features like hillshade and terrain; v4 introduced Promises in public APIs (replacing many callbacks); v5 added globe view and the [Adaptive Composite Map Projection](https://maplibre.org/maplibre-gl-js/docs/API/). See [releases](https://github.com/maplibre/maplibre-gl-js/releases) and [CHANGELOG](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md).
+- **Releases since the fork:** MapLibre has moved ahead with its own version line. v2/v3 brought WebGL2, a modern renderer, and features like hillshade and terrain; v4 introduced Promises in public APIs (replacing many callbacks); v5 added globe view and the [Adaptive Composite Map Projection](https://maplibre.org/maplibre-gl-js/docs/API/); v6 (2026-07-22) ships as **ES modules only** — the UMD bundle and default export are gone (see [Update Imports and CSS](#2-update-imports-and-css) below) — and changed several defaults (see the [v5-to-v6 migration guide](https://maplibre.org/maplibre-gl-js/docs/guides/v5-to-v6-migration-guide/)). See [releases](https://github.com/maplibre/maplibre-gl-js/releases) and [CHANGELOG](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md).
 - **Style spec:** MapLibre maintains its own [MapLibre Style Specification](https://maplibre.org/maplibre-style-spec/) (forked from the Mapbox spec). It is compatible for most styles but has added and diverged in places; check the [style spec site](https://maplibre.org/maplibre-style-spec/) when using newer or MapLibre-specific features.
 - **Ecosystem:** Besides GL JS, the MapLibre org hosts [MapLibre Native](https://maplibre.org/projects/native/) (iOS, Android, desktop), [Martin](https://maplibre.org/martin/) (vector tile server from PostGIS/PMTiles/MBTiles), and the [MapLibre Tile (MLT)](https://maplibre.org/maplibre-tile-spec/) format. Roadmaps and news: [maplibre.org/roadmap](https://maplibre.org/roadmap/), [maplibre.org/news](https://maplibre.org/news/).
 
@@ -54,15 +54,28 @@ npm install maplibre-gl
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
-// After (MapLibre)
-import maplibregl from 'maplibre-gl';
+// After (MapLibre) — v6 ships ES modules only; the default export is gone
+import * as maplibregl from 'maplibre-gl';
+// or pull in just what you need: import {Map} from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 ```
 
-**CDN:** Replace Mapbox script/link with MapLibre:
+**CDN:** Replace Mapbox script/link with MapLibre. MapLibre v6 has no UMD bundle, so a bare
+`<script src>` tag no longer works — use a module script against the `.mjs` build instead:
 
-- Script: `https://api.mapbox.com/mapbox-gl-js/v*.*.*/mapbox-gl.js` → `https://unpkg.com/maplibre-gl@*.*.*/dist/maplibre-gl.js`
-- CSS: same pattern (mapbox-gl.css → maplibre-gl.css).
+```html
+<!-- Before (Mapbox) -->
+<script src="https://api.mapbox.com/mapbox-gl-js/v*.*.*/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v*.*.*/mapbox-gl.css" rel="stylesheet" />
+
+<!-- After (MapLibre) -->
+<script type="module">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
+</script>
+<link href="https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css" rel="stylesheet" />
+```
+
+If you were pinned to a MapLibre v5 CDN script tag, the same swap applies: `dist/maplibre-gl.js` → `type="module"` importing `dist/maplibre-gl.mjs`.
 
 ### 3. Replace the Namespace
 

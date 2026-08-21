@@ -50,7 +50,7 @@ npm install pmtiles
 
 ```javascript
 import * as pmtiles from 'pmtiles';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 // Add PMTiles protocol so sources can reference .pmtiles URLs
