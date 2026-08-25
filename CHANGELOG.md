@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to this repo's skills and tooling. Loosely follows [Keep a Changelog](https://keepachangelog.com/), adapted for a skills repo — skills are additive markdown, so there's no real "breaking change" axis; entries are grouped by what changed, not by semver category.
+Notable changes to this repo's skills and tooling. Loosely follows [Keep a Changelog](https://keepachangelog.com/), adapted for a skills repo — skills are additive markdown, so there's no real "breaking change" axis; entries are grouped by what changed, not by semver category. Entries under [Unreleased] are added automatically from merged PRs.
 
 ## [Unreleased]
 

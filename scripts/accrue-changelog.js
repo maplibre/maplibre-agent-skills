@@ -99,13 +99,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const parsed = parseChangelogField(prBody);
 
   if (parsed.errors.length > 0) {
-    console.error(
-      'Changelog field is missing or invalid in the merged PR body:\n'
+    // The PR-time check is the gate; at merge time a missing or invalid field
+    // (a PR opened before the template carried it, or edited after the check ran)
+    // is surfaced as a warning and the entry is left for a human to add.
+    console.log(
+      `::warning::PR #${prNumber} has no usable Changelog field, so nothing was recorded under [Unreleased]: ${parsed.errors.join('; ')}`
     );
-    for (const err of parsed.errors) {
-      console.error(`  - ${err}`);
-    }
-    process.exit(1);
+    process.exit(0);
   }
 
   if (parsed.bump === 'none') {
