@@ -4,10 +4,8 @@ Canonical results table for this skill. One row per eval test; baseline is the m
 answer with the skill omitted (`--var injectSkill=false`), with-skill is the same prompt
 with the skill injected. See `evals/prompts/maplibre-fonts-glyphs.yaml`.
 
-Run: 2026-08-20 · model `groq:openai/gpt-oss-120b` (pinned inline in
-`evals/prompts/maplibre-fonts-glyphs.yaml`, matching #47's `lib/providers.yaml` values —
-that shared file doesn't exist on this branch yet)
-· judge `google:gemini-2.5-flash-lite` (`npm run eval:graded`, automated). Raw CSVs:
+Run: 2026-08-20 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite`
+(`npm run eval:graded`, automated). Raw CSVs:
 [`maplibre-fonts-glyphs-with-skill_2026-08-20.csv`](latest/maplibre-fonts-glyphs-with-skill_2026-08-20.csv),
 [`maplibre-fonts-glyphs-baseline_2026-08-20.csv`](latest/maplibre-fonts-glyphs-baseline_2026-08-20.csv).
 Supersedes the 2026-08-19 manually-graded run.
@@ -21,13 +19,13 @@ Supersedes the 2026-08-19 manually-graded run.
 
 \* Test 4's `icontains: not 'glyphs'` tripwire false-positives on the model's own
 chain-of-thought, which names the skill (`maplibre-fonts-**glyphs**`) while deciding
-whether it applies, even though the substantive hillshade answer never touches fonts —
-confirmed by reading the raw completion and by the paired `llm-rubric` assertion passing
-(Score 0.50, i.e. one of two assertions passed). Not present in the baseline run (no skill
-name in context, so nothing for the model to reason about). This is a test-tripwire defect,
-not a skill or model defect — left as-is per repo policy against weakening assertions to
-pass; flagging for a maintainer to reword the tripwire (e.g. scope it to the answer only,
-or use a boundary that excludes the skill's own name).
+whether it applies. The hillshade answer itself never touches fonts — confirmed by
+reading the raw completion, and by the paired `llm-rubric` assertion passing (Score
+0.50: one of two assertions passed). The baseline run doesn't hit this, since it has
+no skill name in context to reason about. This is a test-tripwire defect, not a skill
+or model defect. Left as-is per repo policy against weakening assertions to pass;
+flagging for a maintainer to reword the tripwire (e.g. scope it to the answer only, or
+exclude the skill's own name).
 
 **Result: baseline 3 FAIL + 1 correct negative / with-skill 3/4 clean PASS + 1 false-fail
 tripwire (substance correct) — launch bar cleared.**
