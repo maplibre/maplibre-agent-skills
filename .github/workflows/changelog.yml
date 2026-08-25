@@ -1,0 +1,86 @@
+name: Changelog
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: changelog
+  cancel-in-progress: false
+
+jobs:
+  accrue:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Find the merged PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY_FILE: ${{ runner.temp }}/pr_body.txt
+        run: node scripts/merged-pr.js
+
+      - name: Record the changelog entry
+        if: steps.pr.outputs.found == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_BODY_FILE: ${{ runner.temp }}/pr_body.txt
+        run: |
+          node scripts/accrue-changelog.js
+          npx prettier --write CHANGELOG.md
+
+      - name: Commit
+        if: steps.pr.outputs.found == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add CHANGELOG.md
+          git diff --staged --quiet || git commit -m "chore(changelog): record #${PR_NUMBER}"
+          git push
+
+  tag:
+    needs: accrue
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for a version change
+        id: version
+        run: node scripts/version-changed.js
+
+      - name: Tag and publish the release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "Tag $TAG already exists — skipping."
+            exit 0
+          fi
+          node scripts/changelog-section.js "$VERSION" > "$RUNNER_TEMP/notes.md"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
