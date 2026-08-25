@@ -6,17 +6,17 @@ status: verified
 
 # MapLibre Cartography
 
-MapLibre renders exactly what you describe in your stylesheet. This skill covers how to describe it well: choosing label colors for readability on any basemap, building a coherent visual hierarchy, sourcing and self-hosting icons, and ordering stylesheet layers correctly. For font/glyph setup, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
+MapLibre renders exactly what you describe in your style. This skill covers how to describe it well: choosing label colors for readability on any basemap, building a coherent visual hierarchy, sourcing and self-hosting icons, and ordering style layers correctly. For font/glyph setup, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
 
 ## When to Use This Skill
 
-- Reviewing a stylesheet against cartographic best practices before it ships
-- Choosing label `text-color` and `text-halo-color`, or point symbol/icon colors, for a new or migrated stylesheet — including cases where they read fine on a flat vector basemap but disappear or camouflage once the basemap is imagery
-- Setting up `sprite` for a custom or self-hosted stylesheet (for `glyphs`, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md))
+- Reviewing a style against cartographic best practices before it ships
+- Choosing label `text-color` and `text-halo-color`, or point symbol/icon colors, for a new or migrated style — including cases where they read fine on a flat vector basemap but disappear or camouflage once the basemap is imagery
+- Setting up `sprite` for a custom or self-hosted style (for `glyphs`, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md))
 - Injecting your own data layers into an existing basemap without covering labels
 - Restyling roads from a light-basemap vector palette so they sit in (not on top of) imagery
 - Route shields render as bare numbers or missing badges
-- Auditing a stylesheet for contrast accessibility
+- Auditing a style for contrast accessibility
 
 ## Basemap Type Determines Label Colors
 
@@ -116,13 +116,13 @@ Vector road palettes from light-basemap styles (OSM Bright, OSM Liberty) are tun
 
 ## Sprites: Icons and Markers
 
-The stylesheet's `sprite` value is a **base URL with no file extension** (e.g. `https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite`, for testing purposes only, do not use in production); MapLibre appends `.json`, `.png`, and `@2x` variants itself. Symbol layers reference sprite images by ID with `icon-image`; the value must exactly match an ID in the sprite JSON index or the icon is silently not rendered.
+The style's `sprite` value is a **base URL with no file extension** (e.g. `https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite`, for testing purposes only, do not use in production); MapLibre appends `.json`, `.png`, and `@2x` variants itself. Symbol layers reference sprite images by ID with `icon-image`; the value must exactly match an ID in the sprite JSON index or the icon is silently not rendered.
 
 ### Self-hosted sprites
 
-To avoid third-party dependencies, copy an existing sprite directory (PNG + JSON, plus any @2x files) from a stylesheet or tileset provider and host it under your own domain, pointing the stylesheet's `sprite` property at its base URL. Always check the provider's license before republishing and add attribution if required.
+To avoid third-party dependencies, copy an existing sprite directory (PNG + JSON, plus any @2x files) from a style or tileset provider and host it under your own domain, pointing the style's `sprite` property at its base URL. Always check the provider's license before republishing and add attribution if required.
 
-Host sprite assets on a static host you control (GitHub Pages, Netlify, Vercel, S3, same origin as the stylesheet). **Do not point production stylesheets at `raw.githubusercontent.com`** Raw is for serving repository blobs, not production assets: anonymous requests are aggressively rate-limited so real users see intermittent HTTP 429s [2], caching is fixed at five minutes with no control, there is no SLA, and private-repo URLs return 404 to everyone but authenticated collaborators (it works for you while logged in, then fails for every other user) [3].
+Host sprite assets on a static host you control (GitHub Pages, Netlify, Vercel, S3, same origin as the style). **Do not point production styles at `raw.githubusercontent.com`** Raw is for serving repository blobs, not production assets: anonymous requests are aggressively rate-limited so real users see intermittent HTTP 429s [2], caching is fixed at five minutes with no control, there is no SLA, and private-repo URLs return 404 to everyone but authenticated collaborators (it works for you while logged in, then fails for every other user) [3].
 
 ### Building a sprite from SVGs
 
@@ -139,21 +139,21 @@ For a small number of custom icons, `map.loadImage()` and `addImage()` can work 
 Broken-looking route shields (bare floating numbers, missing badges) are almost always a **missing sprite image**. The shield number is text (font) and usually renders fine; the badge behind it is an `icon-image` from the sprite. Diagnose in this order:
 
 1. **Confirm glyphs load.** Probe the `glyphs` server for the exact `text-font` names and expect HTTP 200. If they 200, the font is not the problem.
-2. **Confirm the sprite carries the shield images.** OpenMapTiles and OSM Liberty shield stylesheet layers use `icon-image: "{network}_{ref_length}"` for known networks (e.g. `us-interstate_2`, `us-highway_3`, `us-state_2`) and `road_{ref_length}` for generic refs. A missing icon is silently omitted, so grep the sprite JSON for those keys.
+2. **Confirm the sprite carries the shield images.** OpenMapTiles and OSM Liberty shield style layers use `icon-image: "{network}_{ref_length}"` for known networks (e.g. `us-interstate_2`, `us-highway_3`, `us-state_2`) and `road_{ref_length}` for generic refs. A missing icon is silently omitted, so grep the sprite JSON for those keys.
 
-Not every sprite carries shields localized for the US, so grep the sprite JSON for the `{network}_{ref_length}` keys before assuming they exist. Both the `demotiles.maplibre.org/styles/osm-bright-gl-style/sprite` and `openmaptiles.github.io/osm-bright-gl-style/sprite` sheets currently include `us-interstate_*`, `us-highway_*`, and `us-state_*` (alongside the generic `road_1`–`road_6`), but a minimal or custom sprite may ship only the generic `road_*`. If yours lacks the shield images and your tiles populate `network`, `ref`, and `ref_length` (the OSM US OpenMapTiles tiles do), point `sprite` at one that has them — the `{network}_{ref_length}` stylesheet layers then resolve with no layer edits.
+Not every sprite carries shields localized for the US, so grep the sprite JSON for the `{network}_{ref_length}` keys before assuming they exist. Both the `demotiles.maplibre.org/styles/osm-bright-gl-style/sprite` and `openmaptiles.github.io/osm-bright-gl-style/sprite` sheets currently include `us-interstate_*`, `us-highway_*`, and `us-state_*` (alongside the generic `road_1`–`road_6`), but a minimal or custom sprite may ship only the generic `road_*`. If yours lacks the shield images and your tiles populate `network`, `ref`, and `ref_length` (the OSM US OpenMapTiles tiles do), point `sprite` at one that has them — the `{network}_{ref_length}` style layers then resolve with no layer edits.
 
-## Stylesheet Layer Ordering
+## Style Layer Ordering
 
-MapLibre renders stylesheet layers in the order they appear in the stylesheet's `layers` array — first item is drawn first (bottom), last is drawn last (top). Getting this wrong is the most common cause of data layers obscuring basemap labels.
+MapLibre renders style layers in the order they appear in the style's `layers` array — first item is drawn first (bottom), last is drawn last (top). Getting this wrong is the most common cause of data layers obscuring basemap labels.
 
 ### The injection pattern
 
-When adding your own data to an existing basemap stylesheet at runtime, insert your data layers **before the first symbol layer** (find it with `map.getStyle().layers.find((l) => l.type === 'symbol')?.id` and pass it as the second argument of `addLayer`) so your geometry renders under labels. Without that argument the data layer goes above everything, including labels.
+When adding your own data to an existing basemap style at runtime, insert your data layers **before the first symbol layer** (find it with `map.getStyle().layers.find((l) => l.type === 'symbol')?.id` and pass it as the second argument of `addLayer`) so your geometry renders under labels. Without that argument the data layer goes above everything, including labels.
 
-### Canonical stylesheet layer order for custom stylesheets
+### Canonical style layer order for custom styles
 
-When building a stylesheet from scratch, follow this ordering bottom to top:
+When building a style from scratch, follow this ordering bottom to top:
 
 1. `background`
 2. Raster imagery (if using satellite/aerial source)
