@@ -60,22 +60,23 @@ import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 ```
 
-**CDN:** Replace Mapbox script/link with MapLibre. MapLibre v6 has no UMD bundle, so a bare
-`<script src>` tag no longer works — use a module script against the `.mjs` build instead:
+**CDN:** Replace Mapbox script/link with MapLibre. Don't assume Mapbox's `<script src>`
+pattern carries over unchanged — MapLibre's distributed bundle formats have changed across
+major versions (v6 dropped the UMD build). Check the
+[current release notes](https://github.com/maplibre/maplibre-gl-js/releases) before copying
+this snippet as-is:
 
 ```html
 <!-- Before (Mapbox) -->
 <script src="https://api.mapbox.com/mapbox-gl-js/v*.*.*/mapbox-gl.js"></script>
 <link href="https://api.mapbox.com/mapbox-gl-js/v*.*.*/mapbox-gl.css" rel="stylesheet" />
 
-<!-- After (MapLibre) -->
+<!-- After (MapLibre, current as of v6) -->
 <script type="module">
   import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
 </script>
 <link href="https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css" rel="stylesheet" />
 ```
-
-If you were pinned to a MapLibre v5 CDN script tag, the same swap applies: `dist/maplibre-gl.js` → `type="module"` importing `dist/maplibre-gl.mjs`.
 
 ### 3. Replace the Namespace
 
