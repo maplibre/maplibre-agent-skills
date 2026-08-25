@@ -100,7 +100,7 @@ map.addControl(new maplibregl.NavigationControl());
 
 MapLibre does not use `mapboxgl.accessToken`. Remove any line that sets it.
 
-Tile and API keys (e.g. for hosted tile services or geocoding) are configured per service, not on the map instance. See [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md) for providers that need a key.
+Tile and API keys (e.g. for hosted tile services or geocoding) are configured per service, not on the map instance. See [maplibre-tile-hosting](../maplibre-tile-hosting/SKILL.md) for providers that need a key.
 
 ### 5. Replace the Style URL (Critical)
 
@@ -188,7 +188,8 @@ So after swapping the package, namespace, token, and style (and any plugins/APIs
 
 ## Related Skills
 
-- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing and configuring tile sources (OpenFreeMap, MapTiler, PMTiles, self-hosted)
+- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing a source type for your data
+- [**maplibre-tile-hosting**](../maplibre-tile-hosting/SKILL.md) — Tile infrastructure (OpenFreeMap, MapTiler, PMTiles, self-hosted)
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serverless tiles with PMTiles
 
 ## Sources Used for This Skill

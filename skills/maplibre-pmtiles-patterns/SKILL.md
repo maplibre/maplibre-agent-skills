@@ -93,7 +93,7 @@ const map = new maplibregl.Map({
 
 **Referencing layers:** The style has one source (e.g. `sources.tiles`) pointing at the .pmtiles URL. Each layer in the `layers` array that draws from that file uses `source: 'tiles'` and `"source-layer": "layerName"`, where `layerName` is the name of a vector layer inside the file (from whatever schema the tiles use). Add multiple style layers with different `source-layer` values to show roads, labels, etc. from the same file.
 
-**Important:** The `url` can be `pmtiles://https://...` (protocol + HTTPS URL to the .pmtiles file). The library will fetch the file via range requests. Your style must still define glyphs and sprite if you use labels or icons (see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md)).
+**Important:** The `url` can be `pmtiles://https://...` (protocol + HTTPS URL to the .pmtiles file). The library will fetch the file via range requests. Your style must still define glyphs and sprite if you use labels or icons (see [maplibre-source-wiring](../maplibre-source-wiring/SKILL.md)).
 
 **Zoom range comes from the header — use `url:`, not `tiles:`.** A PMTiles archive stores its own min/max zoom in the header. When you reference it with `url: 'pmtiles://https://...'`, the protocol reads that header and hands MapLibre a TileJSON with the correct `minzoom`/`maxzoom`, so overzoom past the archive's max works automatically and you never set `maxzoom` by hand. If you instead hand-wire a `tiles: ['pmtiles://.../{z}/{x}/{y}']` template, you bypass that header lookup. The protocol still serves the per-tile requests up to the archive's max — this is not a missing-handler or 404 problem — but MapLibre, given no zoom range, assumes `maxzoom: 22` and keeps requesting zoom levels the archive doesn't contain, which come back empty (blank tiles for vector, nothing for raster) instead of overzooming. Always use `url:`.
 
@@ -193,7 +193,9 @@ PMTiles supports **raster** tiles (PNG/JPEG, e.g. satellite or pre-rendered imag
 
 ## Related Skills
 
-- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing tile sources (OpenFreeMap, MapTiler, PMTiles, self-hosted); glyphs and sprites.
+- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
+- [**maplibre-tile-hosting**](../maplibre-tile-hosting/SKILL.md) — Hosted, serverless, and self-hosted tile infrastructure.
+- [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — TileJSON, `source-layer`, glyphs and sprite, CORS.
 - **maplibre-style-patterns** — Layer and paint configuration for vector sources (including PMTiles-backed sources). (Not yet in repo.)
 
 ## References

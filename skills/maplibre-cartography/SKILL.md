@@ -178,7 +178,8 @@ MapLibre styles are rendered in the browser as a WebGL canvas. Accessibility con
 ## Related Skills
 
 - [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Setting up the `glyphs` URL, self-hosting or generating font PBFs, the GL JS local-font fallback, MapLibre Native's `font-faces`, and non-Latin script support.
-- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Sprites and source configuration.
+- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
+- [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — Sprites and source configuration.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serving imagery (raster) and terrain sources from PMTiles files.
 - [**maplibre-terrain-patterns**](../maplibre-terrain-patterns/SKILL.md) — Hillshade configuration, multi-pass techniques, 3D terrain, DEM sources.
 

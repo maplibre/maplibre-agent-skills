@@ -267,7 +267,8 @@ To create a custom DEM tileset from source elevation data, follow standard DEM p
 
 ## Related Skills
 
-- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — General source configuration, raster-dem source type reference.
+- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing a source type; the `raster-dem` source type reference.
+- [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — TileJSON, layer order, CORS, and blank-map debugging.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Self-hosting DEM and imagery tiles from a single PMTiles file.
 - [**maplibre-cartography**](../maplibre-cartography/SKILL.md) — Canonical layer ordering for styles that include hillshade.
 
