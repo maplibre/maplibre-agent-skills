@@ -22,11 +22,11 @@ If you find any inconsistency with this quality bar, please file an issue or PR.
 
 Each skill is tested with [Promptfoo](https://promptfoo.dev/) evals to verify it improves AI responses on real developer questions. A skill's front-matter `status` records where it stands (e.g. whether an eval has proven it fixes a real failure). See [`evals/README.md`](evals/README.md) for how evals work.
 
-| Status           | Means                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------- |
-| ✅ `verified`    | An eval proved the skill fixes a real failure; results are committed to `evals/results/` |
-| 🧪 `provisional` | No eval rubric, an incomplete one, or a rubric that no longer validates the skill's gap  |
-| `process`        | About maintaining this repo, not MapLibre — eval-exempt, no `status` badge               |
+| Status           | Means                                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| ✅ `verified`    | An eval proved the skill fixes a real failure; results are committed to `evals/results/`                       |
+| 🧪 `provisional` | No eval rubric, an incomplete one, or a rubric that no longer validates the skill's gap                        |
+| `process`        | About maintaining this repo, not MapLibre — [eval-exempt](CONTRIBUTING.md#4-process-skills), no `status` badge |
 
 Note that provisional skills are not necessarily lower quality or less reliable. See [CONTRIBUTING.md](CONTRIBUTING.md) for how a skill moves between `provisional` and `verified`.
 
@@ -41,6 +41,7 @@ Each skill's front matter is the source of truth for its current status — see 
 | [`maplibre-mapbox-migration`](skills/maplibre-mapbox-migration/SKILL.md) | Moving an existing Mapbox GL JS app to MapLibre; evaluating MapLibre as an open-source alternative                                   |
 | [`maplibre-terrain-patterns`](skills/maplibre-terrain-patterns/SKILL.md) | Adding elevation context, hillshade, or 3D terrain; choosing raster-dem sources and encodings; self-hosting DEM tiles                |
 | [`maplibre-cartography`](skills/maplibre-cartography/SKILL.md)           | Styling a map; making labels, markers, or roads readable on imagery or vector basemaps; setting up fonts, sprites, or shields        |
+| [`maplibre-skill-authoring`](skills/maplibre-skill-authoring/SKILL.md)   | Turning a session where you researched and shipped something MapLibre didn't document into a skill or a failure report               |
 
 ## Development
 

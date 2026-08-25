@@ -152,6 +152,16 @@ Use this skill when:
 
 **Reference:** Include links to primary sources wherever possible. See [Attribution and References](#attribution-and-references) for a curated list.
 
+### 4. Process skills
+
+A skill marked `status: process` describes how **this repository** works: its lanes, its checks, its eval discipline. It makes no claim about MapLibre, so it is exempt from the eval gate.
+
+The exemption is narrow. The test is whether the skill's correctness depends on facts outside this repo. If it does, it is a domain skill and needs a baseline-failing eval like any other. If correctness is defined by this repo's own process and files, an eval graded by a model that has never read them would measure nothing.
+
+Anything asserting how MapLibre behaves fails that test, whatever the front matter says — "it's a process skill" does not carry untested MapLibre content past the bar. Where a process skill needs a MapLibre example, it should point at a shipped skill that already carries the claim rather than restating it.
+
+Process skills are reviewed by reading them against the files they describe, and they go stale when this repo's process changes rather than when MapLibre ships.
+
 ## Development setup
 
 **1. Clone the repo and install dependencies:**
