@@ -37,8 +37,8 @@ Each skill's front matter is the source of truth for its current status — see 
 <!-- skills-table:start -->
 <!-- Rows are regenerated at release by `npm run generate:skills-table`: sorted by name, new skills added, removed skills dropped. Edit the "Use when" text in place; it is preserved. -->
 
-| Skill                                                                    | Use when                                                                                                                                                              |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Skill                                                                    | Use when                                                                                                                                                             |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`maplibre-cartography`](skills/maplibre-cartography/SKILL.md)           | Styling a map; making labels, markers, or roads readable on imagery or vector basemaps; setting up fonts, sprites, or shields                                        |
 | [`maplibre-fonts-glyphs`](skills/maplibre-fonts-glyphs/SKILL.md)         | Text labels aren't rendering in the intended font, setting up a glyphs server, choosing between self-hosting and generating font PBFs, or handling non-Latin scripts |
 | [`maplibre-mapbox-migration`](skills/maplibre-mapbox-migration/SKILL.md) | Moving an existing Mapbox GL JS app to MapLibre; evaluating MapLibre as an open-source alternative                                                                   |
