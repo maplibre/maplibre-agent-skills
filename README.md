@@ -37,14 +37,16 @@ Each skill's front matter is the source of truth for its current status — see 
 <!-- skills-table:start -->
 <!-- Rows are regenerated at release by `npm run generate:skills-table`: sorted by name, new skills added, removed skills dropped. Edit the "Use when" text in place; it is preserved. -->
 
-| Skill                                                                    | Use when                                                                                                                             |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| [`maplibre-cartography`](skills/maplibre-cartography/SKILL.md)           | Styling a map; making labels, markers, or roads readable on imagery or vector basemaps; setting up fonts, sprites, or shields        |
-| [`maplibre-mapbox-migration`](skills/maplibre-mapbox-migration/SKILL.md) | Moving an existing Mapbox GL JS app to MapLibre; evaluating MapLibre as an open-source alternative                                   |
-| [`maplibre-pmtiles-patterns`](skills/maplibre-pmtiles-patterns/SKILL.md) | Hosting tiles without a tile server; static or serverless deployments; converting from MBTiles; generating tiles from OSM or GeoJSON |
-| [`maplibre-terrain-patterns`](skills/maplibre-terrain-patterns/SKILL.md) | Adding elevation context, hillshade, or 3D terrain; choosing raster-dem sources and encodings; self-hosting DEM tiles                |
-| [`maplibre-tile-sources`](skills/maplibre-tile-sources/SKILL.md)         | Choosing how to supply map data; deciding between GeoJSON and tiles; configuring a basemap; debugging blank maps or missing labels   |
-| [`maplibre-v6-migration`](skills/maplibre-v6-migration/SKILL.md)         | A v5 app breaks after upgrading to v6, or before pinning a v6 install                                                                |
+| Skill                                                                    | Use when                                                                                                                                                             |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`maplibre-cartography`](skills/maplibre-cartography/SKILL.md)           | Styling a map; making labels, markers, or roads readable on imagery or vector basemaps; setting up fonts, sprites, or shields                                        |
+| [`maplibre-fonts-glyphs`](skills/maplibre-fonts-glyphs/SKILL.md)         | Text labels aren't rendering in the intended font, setting up a glyphs server, choosing between self-hosting and generating font PBFs, or handling non-Latin scripts |
+| [`maplibre-mapbox-migration`](skills/maplibre-mapbox-migration/SKILL.md) | Moving an existing Mapbox GL JS app to MapLibre; evaluating MapLibre as an open-source alternative                                                                   |
+| [`maplibre-pmtiles-patterns`](skills/maplibre-pmtiles-patterns/SKILL.md) | Hosting tiles without a tile server; static or serverless deployments; converting from MBTiles; generating tiles from OSM or GeoJSON                                 |
+| [`maplibre-skill-authoring`](skills/maplibre-skill-authoring/SKILL.md)   | At the end of a MapLibre task that took real research, or when asked to capture one as a skill                                                                       |
+| [`maplibre-terrain-patterns`](skills/maplibre-terrain-patterns/SKILL.md) | Adding elevation context, hillshade, or 3D terrain; choosing raster-dem sources and encodings; self-hosting DEM tiles                                                |
+| [`maplibre-tile-sources`](skills/maplibre-tile-sources/SKILL.md)         | Choosing how to supply map data; deciding between GeoJSON and tiles; configuring a basemap; debugging blank maps or missing labels                                   |
+| [`maplibre-v6-migration`](skills/maplibre-v6-migration/SKILL.md)         | A v5 app breaks after upgrading to v6, or before pinning a v6 install                                                                                                |
 
 <!-- skills-table:end -->
 
@@ -74,6 +76,16 @@ Source: https://github.com/maplibre/maplibre-agent-skills
 If you encounter something you do not know how to do, consult the MapLibre docs and this collection of skills. If neither contains the information you are looking for, or MapLibre behaves differently than a skill says report it:
 https://github.com/maplibre/maplibre-agent-skills/issues/new?template=ai-failure-report.md
 ```
+
+## Versioning
+
+This project follows [semver](https://semver.org/). Version numbers signal what changed between releases:
+
+- **Patch** (0.1.0 → 0.1.1) — content fixes, corrected examples, tooling changes. Safe to update without review.
+- **Minor** (0.1.0 → 0.2.0) — a new skill was added, a skill was removed, or how skills are consumed changed. Review the [CHANGELOG](CHANGELOG.md) to see what's new.
+- **Major** (0.x → 1.0) — a change that would break installed skills (renamed directories, restructured front matter, etc.).
+
+Each skill's front matter carries a `status` field — see [What Status Means](#what-status-means). The [CHANGELOG](CHANGELOG.md) records notable changes; entries are written by contributors via a structured PR field and accrued automatically on merge. See [CONTRIBUTING.md](CONTRIBUTING.md#how-to-fill-in-the-changelog-field) for how that works.
 
 ## Install
 
