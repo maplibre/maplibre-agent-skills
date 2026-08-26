@@ -8,6 +8,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Added
 
+- `maplibre-skill-authoring` process skill, for turning a research session into a new skill or a failure report ([#57](https://github.com/maplibre/maplibre-agent-skills/pull/57))
 - `maplibre-fonts-glyphs` skill, extracted from `maplibre-cartography` and `maplibre-tile-sources` ([#56](https://github.com/maplibre/maplibre-agent-skills/pull/56))
 
 ### Fixed
