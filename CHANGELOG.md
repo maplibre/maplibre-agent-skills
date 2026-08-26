@@ -4,7 +4,15 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ## [Unreleased]
 
-<!-- bump: patch -->
+<!-- bump: minor -->
+
+### Added
+
+- `maplibre-fonts-glyphs` skill, extracted from `maplibre-cartography` and `maplibre-tile-sources` ([#56](https://github.com/maplibre/maplibre-agent-skills/pull/56))
+
+### Fixed
+
+- `maplibre-mapbox-migration` and `maplibre-pmtiles-patterns`: corrected import and CDN examples broken by MapLibre GL JS v6's ES-module-only build ([#59](https://github.com/maplibre/maplibre-agent-skills/pull/59))
 
 ### Internal
 
