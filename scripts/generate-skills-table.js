@@ -28,7 +28,6 @@ export function parseExistingRows(block) {
 export function generateTable(skills, existing = new Map()) {
   const warnings = [];
   const rows = skills
-    .filter((s) => s.status !== 'process')
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((s) => {
       let text = existing.get(s.name);

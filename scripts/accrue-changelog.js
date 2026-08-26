@@ -50,8 +50,8 @@ export function accrueEntry(
 
   if (catRegex.test(sectionContent)) {
     sectionContent = sectionContent.replace(
-      new RegExp(`(### ${category}\\n)(\\n)`),
-      `$1$2${entryLine}\n`
+      new RegExp(`(### ${category}\\n)\\n*`),
+      `$1\n${entryLine}\n`
     );
   } else {
     let inserted = false;

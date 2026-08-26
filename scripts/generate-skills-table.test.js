@@ -87,8 +87,8 @@ describe('generateTable', () => {
     assert.ok(table.indexOf('alpha-skill') < table.indexOf('beta-skill'));
   });
 
-  it('skips process skills', () => {
-    assert.ok(!generateTable(skills).table.includes('process-skill'));
+  it('includes process skills', () => {
+    assert.ok(generateTable(skills).table.includes('process-skill'));
   });
 
   it('warns on fallback descriptions', () => {

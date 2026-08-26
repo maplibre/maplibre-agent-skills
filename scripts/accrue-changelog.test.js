@@ -101,6 +101,44 @@ describe('accrueEntry', () => {
     assert.ok(internalIdx > addedIdx);
   });
 
+  it('inserts under a category heading that has no blank line after it', () => {
+    const noBlank = `# Changelog\n\n## [Unreleased]\n\n### Added\n- existing skill\n`;
+    const result = accrueEntry(noBlank, {
+      ...OPTS,
+      category: 'Added',
+      entry: 'new skill'
+    });
+    assert.ok(result.changed);
+    const lines = result.changelog.split('\n');
+    const addedIdx = lines.findIndex((l) => l === '### Added');
+    assert.ok(addedIdx >= 0);
+    assert.equal(lines[addedIdx + 1], '');
+    assert.equal(
+      lines[addedIdx + 2],
+      '- new skill ([#42](' + OPTS.prUrl + '))'
+    );
+    assert.equal(lines[addedIdx + 3], '- existing skill');
+  });
+
+  it('inserts under a category heading with multiple trailing blank lines', () => {
+    const extraBlanks = `# Changelog\n\n## [Unreleased]\n\n### Added\n\n\n\n- existing skill\n`;
+    const result = accrueEntry(extraBlanks, {
+      ...OPTS,
+      category: 'Added',
+      entry: 'new skill'
+    });
+    assert.ok(result.changed);
+    const lines = result.changelog.split('\n');
+    const addedIdx = lines.findIndex((l) => l === '### Added');
+    assert.ok(addedIdx >= 0);
+    assert.equal(lines[addedIdx + 1], '');
+    assert.equal(
+      lines[addedIdx + 2],
+      '- new skill ([#42](' + OPTS.prUrl + '))'
+    );
+    assert.equal(lines[addedIdx + 3], '- existing skill');
+  });
+
   it('handles empty unreleased section', () => {
     const empty = `# Changelog\n\n## [Unreleased]\n`;
     const result = accrueEntry(empty, OPTS);
