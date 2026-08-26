@@ -77,7 +77,7 @@ Call this before initializing the map.
 ## Related Skills
 
 - [**maplibre-cartography**](../maplibre-cartography/SKILL.md) — Font size, weight, and letter-spacing for visual hierarchy; sprites and icons.
-- [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Where `glyphs` and `sprite` fit into a style's other components; CORS for self-hosted assets.
+- [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — Where `glyphs` and `sprite` fit into a style's other components; CORS for self-hosted assets.
 
 ## References
 

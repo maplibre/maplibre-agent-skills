@@ -114,7 +114,7 @@ If tiles render but text or icons do not, the style root is usually missing:
 
 Pre-built style URLs from hosted providers include their own. When building a custom style or self-hosting, you must supply them.
 
-For font stacks, self-hosting versus generating, script coverage, and the GL JS local-font fallback, see **maplibre-fonts-glyphs**. (Not yet in repo — in review as [#56](https://github.com/maplibre/maplibre-agent-skills/pull/56).)
+For font stacks, self-hosting versus generating, script coverage, and the GL JS local-font fallback, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
 
 ## CORS
 
@@ -141,7 +141,7 @@ Work down this list — the symptoms overlap heavily:
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
 - [**maplibre-tile-hosting**](../maplibre-tile-hosting/SKILL.md) — Hosted, serverless, and self-hosted tile infrastructure.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Registering the `pmtiles://` protocol and PMTiles-specific source setup.
-- **maplibre-fonts-glyphs** — Font stacks, glyph endpoints, and script coverage. (Not yet in repo.)
+- [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Font stacks, glyph endpoints, and script coverage.
 
 ## References
 
