@@ -18,6 +18,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- `eval.yml`: a publish-job failure after a passing eval now opens an `eval-publish` issue (#55) ([#60](https://github.com/maplibre/maplibre-agent-skills/pull/60))
 - Versioning and CHANGELOG automation: a `Changelog` field in the PR template, entries recorded on merge, a Release workflow that cuts the version and regenerates the README skills table ([#58](https://github.com/maplibre/maplibre-agent-skills/pull/58))
 
 ## [0.1.0] - 2026-08-25
