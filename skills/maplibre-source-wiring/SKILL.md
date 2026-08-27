@@ -115,6 +115,22 @@ Pre-built style URLs from hosted providers include their own. When building a cu
 
 For font stacks, self-hosting versus generating, script coverage, and the GL JS local-font fallback, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
 
+## Raster sources: `tileSize` and naming traps
+
+Two raster-specific pitfalls that wire without error but render wrong or against the wrong assumption:
+
+**`tileSize` defaults to 512; classic OSM tiles are 256.** `tile.openstreetmap.org` and other classic slippy-map tile servers serve 256px tiles, but MapLibre's raster `tileSize` defaults to 512px. Omitting `tileSize: 256` for a 256px source doesn't error — it renders at the wrong effective zoom level, with imagery and labels appearing a zoom level off, with no error or warning:
+
+```json
+{
+  "type": "raster",
+  "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+  "tileSize": 256
+}
+```
+
+**A raster endpoint's name is not its type.** An endpoint named "hillshade," "terrain," or similar is not necessarily a `raster-dem` source. `raster-dem` requires the tiles to encode elevation as pixel-packed RGB (Mapbox or Terrarium encoding) in PNG or WebP — TileJSON's `encoding` field, when present, names which. A tile format that can't hold that encoding (JPEG, for instance) with no `encoding` field is ordinary `raster` imagery whatever the endpoint is named — a "hillshade" endpoint is often a pre-rendered hillshade *image*, not raw elevation data for MapLibre to shade client-side. Check the tile format and any `encoding` field before treating a name as evidence of `raster-dem`.
+
 ## CORS
 
 If your tiles, glyphs, or sprites are on a different origin, the server must send CORS headers (`Access-Control-Allow-Origin`). Otherwise the browser blocks the requests and the map is blank or missing labels.
@@ -134,6 +150,7 @@ Work down this list — the symptoms overlap heavily:
 | Tiles render, no icons                        | Missing `sprite` at the style root                                   |
 | Data draws but hides labels                   | Layer order; insert before the first `symbol` layer                  |
 | Vector source draws nothing, raster fine      | `source-layer` missing entirely — it is required for vector sources  |
+| Raster tiles render a zoom level off          | Missing `tileSize: 256` on a classic 256px source (default is 512)   |
 
 ## Related Skills
 
