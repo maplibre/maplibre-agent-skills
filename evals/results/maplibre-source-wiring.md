@@ -49,6 +49,21 @@ no longer answer the question it poses. Restoring one sentence (an absent `glyph
 wrong font, not absent text) makes it pass. Mechanism can live behind a pointer; a fact the
 pointing skill needs in order to reason cannot.
 
+## Truncation
+
+Groq truncates completions mid-sentence at roughly 11,900 characters, affecting two baseline
+rows here (tests 1 and 4). This is a property of the provider pin rather than of these tests —
+the ceiling is identical at `max_tokens: 8192` and at `4096`; see
+`evals/prompts/lib/providers.yaml`.
+
+Test 1 is the row that matters, since its FAIL is one of the two gaps this skill closes. It is
+sound: the grader's objection is that `vector_layers` is never named as the authoritative
+lookup, and `vector_layers` appears nowhere in the completion, cut or uncut. Test 4 is a
+truncated PASS, which is the safe direction — the grader found what it needed before the cut.
+
+Rows in the raw CSV are in run order, not the order above, because test 3 was reworded and
+re-run after the rest. Match rows by description, never by position.
+
 ## Eight baseline passes
 
 Tests 2, 4, 5, 8, 10, 11, 12, 13 pass without the skill. They are not evidence of a gap, and

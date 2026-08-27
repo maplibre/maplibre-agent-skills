@@ -20,7 +20,7 @@ Tests 5–7 are new and had no prior baseline.
 | 4   | Small dataset, no tile server needed                  | Negative     | PASS                                                                                            | PASS                                                                                   |
 | 5   | Georeferencing a scanned map image                    | Implicit     | PASS                                                                                            | PASS                                                                                   |
 | 6   | Vector tiles for a restylable basemap                 | Explicit     | PASS                                                                                            | PASS                                                                                   |
-| 7   | Leaflet cannot render vector tiles natively           | Implicit     | **FAIL** — says Leaflet lacks native support, then explains how anyway, never naming the plugin | **ERROR** — no result; Groq returned HTTP 429 before the model answered                |
+| 7   | Leaflet cannot render vector tiles natively           | Implicit     | **FAIL** — recommends Leaflet.VectorGrid, and inverts the package name to `leaflet-maplibre-gl` | **ERROR** — no result; Groq returned HTTP 429 before the model answered                |
 
 **Result: the launch bar is not cleared. `status: provisional`.**
 
@@ -35,8 +35,23 @@ fixed:
   a principle in prose does not overcome the pull to comply with the premise. Closing it
   likely needs the skill to say what to do when asked for this, not only what is true. Filed
   rather than patched at the end of a session.
-- **Test 7 has no with-skill data.** The baseline failure is real and the skill does carry the
-  `maplibre-gl-leaflet` answer, but the with-skill call was rate-limited, so no claim is made.
+- **Test 7 has no with-skill data.** The baseline failure is real: the answer names
+  Leaflet.VectorGrid as a way to consume vector tiles in Leaflet, and gives the integration
+  package as `leaflet-maplibre-gl` — the correct name, `maplibre-gl-leaflet`, inverted. A
+  plausible-looking wrong package name is the failure mode the `icontains` tripwire exists to
+  catch, and an `llm-rubric` alone would likely have scored the answer as broadly correct. The
+  with-skill call was rate-limited, so no claim is made about whether the skill closes it.
+
+## Truncation
+
+Groq truncates completions mid-sentence at roughly 11,900 characters, and six of the seven
+baseline rows and three of the six with-skill rows here are affected. This is a property of the
+provider pin, not of these tests: the ceiling is the same at `max_tokens: 8192` and at `4096`
+(see `evals/prompts/lib/providers.yaml`).
+
+Every FAIL above was checked against its raw completion before being recorded. Test 3's
+truncation is immaterial — the full merge pipeline is delivered well before the cut, in both
+directions. Test 7's likewise: the inverted package name appears in the delivered text.
 
 The five passing tests pass in both directions. They confirm the skill does not regress
 answers the model already gets right, and they are not evidence of a gap being closed.
