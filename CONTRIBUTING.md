@@ -184,7 +184,8 @@ Run `npm run check` frequently while developing, not just before pushing — it 
 2. **Spelling** — cspell (markdown)
 3. **Markdown linting** — markdownlint
 4. **Terminology** — proper noun capitalization (e.g. `MapLibre` not `Maplibre`)
-5. **Skills validation** — YAML frontmatter and structure
+5. **Model pins** — provider ids must match the pinned generator/judge
+6. **Skills validation** — YAML frontmatter and structure
 
 All checks pass when the output ends with:
 
