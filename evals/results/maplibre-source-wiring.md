@@ -7,30 +7,40 @@ with the skill injected. See `evals/prompts/maplibre-source-wiring.yaml`.
 Run: 2026-08-27 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite`
 (`npm run eval:graded`, automated). Raw CSVs:
 [`maplibre-source-wiring-baseline_2026-08-27.csv`](latest/maplibre-source-wiring-baseline_2026-08-27.csv),
-[`maplibre-source-wiring-with-skill-partial_2026-08-27.csv`](latest/maplibre-source-wiring-with-skill-partial_2026-08-27.csv).
+[`maplibre-source-wiring-with-skill-partial_2026-08-27.csv`](latest/maplibre-source-wiring-with-skill-partial_2026-08-27.csv)
+(with-skill data for tests 1 and 3).
 
-The baseline is complete: all 13 tests. **The with-skill run is not** — Groq's rate limit was
-reached partway, so only the tests below marked with a verdict have with-skill data. Rows
-marked "not run" are gaps in the evidence, not passes.
+Follow-up run: 2026-08-28 · same model, judge, and command · with-skill only, tests 6, 7, and
+9 (the three the 2026-08-27 run rate-limited before answering). Raw CSV:
+[`maplibre-source-wiring-with-skill-tests-6-7-9_2026-08-28.csv`](latest/maplibre-source-wiring-with-skill-tests-6-7-9_2026-08-28.csv)
+— test 9 returned a verdict; tests 6 and 7 errored again (see table).
 
-| #   | Test                                                      | Type         | Baseline (no skill)                                                                   | With skill                                                     |
-| --- | --------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| 1   | Custom style layers invisible (`source-layer` mismatch)   | Implicit     | **FAIL**                                                                              | **PASS** — names the mismatch and the `vector_layers` lookup   |
-| 2   | `addLayer` covering basemap labels                        | Anti-pattern | PASS                                                                                  | not run                                                        |
-| 3   | No text labels at all is not a missing `glyphs`           | Implicit     | **FAIL** — asserts adding `glyphs` restores the labels                                | **PASS** — directs diagnosis at `text-field` and GL JS version |
-| 4   | TileJSON `url` vs. hand-wired `tiles`                     | Explicit     | PASS                                                                                  | not run                                                        |
-| 5   | Unrelated question, expression syntax                     | Negative     | PASS                                                                                  | not run                                                        |
-| 6   | Naming published tile schemas and their doc URLs          | Explicit     | **FAIL** — names OpenMapTiles only; substitutes other schemas and a doubtful citation | **ERROR** — rate-limited, no result                            |
-| 7   | "Hillshade"-named JPEG endpoint is raster, not raster-dem | Implicit     | **FAIL**                                                                              | **ERROR** — rate-limited, no result                            |
-| 8   | Literal `{z}/{x}/{y}` fetched by hand is not an outage    | Implicit     | PASS                                                                                  | not run                                                        |
-| 9   | Raster `tileSize` defaults to 512, OSM tiles are 256      | Implicit     | **FAIL**                                                                              | **ERROR** — rate-limited, no result                            |
-| 10  | A glyphs URL is not a vector tile source (`.pbf`)         | Anti-pattern | PASS                                                                                  | not run                                                        |
-| 11  | A whole style document is not itself a source             | Implicit     | PASS                                                                                  | not run                                                        |
-| 12  | A `mapbox://` URL is not directly usable                  | Implicit     | PASS                                                                                  | not run                                                        |
-| 13  | GeoParquet has no native MapLibre source                  | Implicit     | PASS                                                                                  | not run                                                        |
+The baseline is complete: all 13 tests. **The with-skill run is not** — the 2026-08-27 run
+rate-limited partway, and the 2026-08-28 follow-up cleared test 9 but tests 6 and 7 timed out
+in the provider queue (300s, promptfoo's ceiling) with no completion returned. Only the tests
+below marked with a verdict have with-skill data. Rows marked "not run" or "ERROR" are gaps in
+the evidence, not passes.
 
-**Result: two gaps demonstrated closed (tests 1 and 3); three confirmed gaps still lack
-with-skill evidence (6, 7, 9). `status: provisional` until those three are run.**
+| #   | Test                                                      | Type         | Baseline (no skill)                                                                   | With skill                                                                                                                                                                      |
+| --- | --------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Custom style layers invisible (`source-layer` mismatch)   | Implicit     | **FAIL**                                                                              | **PASS** — names the mismatch and the `vector_layers` lookup                                                                                                                    |
+| 2   | `addLayer` covering basemap labels                        | Anti-pattern | PASS                                                                                  | not run                                                                                                                                                                         |
+| 3   | No text labels at all is not a missing `glyphs`           | Implicit     | **FAIL** — asserts adding `glyphs` restores the labels                                | **PASS** — directs diagnosis at `text-field` and GL JS version                                                                                                                  |
+| 4   | TileJSON `url` vs. hand-wired `tiles`                     | Explicit     | PASS                                                                                  | not run                                                                                                                                                                         |
+| 5   | Unrelated question, expression syntax                     | Negative     | PASS                                                                                  | not run                                                                                                                                                                         |
+| 6   | Naming published tile schemas and their doc URLs          | Explicit     | **FAIL** — names OpenMapTiles only; substitutes other schemas and a doubtful citation | **ERROR** — 2026-08-27 rate-limited; 2026-08-28 re-run timed out in the provider queue (300s, promptfoo's ceiling). No data.                                                    |
+| 7   | "Hillshade"-named JPEG endpoint is raster, not raster-dem | Implicit     | **FAIL**                                                                              | **ERROR** — 2026-08-27 rate-limited; 2026-08-28 re-run timed out in the provider queue (300s, promptfoo's ceiling). No data.                                                    |
+| 8   | Literal `{z}/{x}/{y}` fetched by hand is not an outage    | Implicit     | PASS                                                                                  | not run                                                                                                                                                                         |
+| 9   | Raster `tileSize` defaults to 512, OSM tiles are 256      | Implicit     | **FAIL**                                                                              | **PASS** (2026-08-28) — states `tileSize: 256` is required and explains the wrong-effective-zoom consequence; completion complete (~6.6k chars), grader "All assertions passed" |
+| 10  | A glyphs URL is not a vector tile source (`.pbf`)         | Anti-pattern | PASS                                                                                  | not run                                                                                                                                                                         |
+| 11  | A whole style document is not itself a source             | Implicit     | PASS                                                                                  | not run                                                                                                                                                                         |
+| 12  | A `mapbox://` URL is not directly usable                  | Implicit     | PASS                                                                                  | not run                                                                                                                                                                         |
+| 13  | GeoParquet has no native MapLibre source                  | Implicit     | PASS                                                                                  | not run                                                                                                                                                                         |
+
+**Result: three gaps demonstrated closed with the skill (tests 1, 3, and 9); two confirmed
+gaps (6 and 7) still lack with-skill evidence — both errored again on the 2026-08-28 re-run.
+The frontmatter still reads `status: provisional`; whether tests 6 and 7 need a verdict before
+that changes is a maintainer call, not one this run settles.**
 
 ## Test 3 is worth reading closely
 
@@ -56,13 +66,18 @@ rows here (tests 1 and 4). This is a property of the provider pin rather than of
 the ceiling is identical at `max_tokens: 8192` and at `4096`; see
 `evals/prompts/lib/providers.yaml`.
 
-Test 1 is the row that matters, since its FAIL is one of the two gaps this skill closes. It is
+Test 1 is the row that matters, since its FAIL is one of the gaps this skill closes. It is
 sound: the grader's objection is that `vector_layers` is never named as the authoritative
 lookup, and `vector_layers` appears nowhere in the completion, cut or uncut. Test 4 is a
 truncated PASS, which is the safe direction — the grader found what it needed before the cut.
 
-Rows in the raw CSV are in run order, not the order above, because test 3 was reworded and
-re-run after the rest. Match rows by description, never by position.
+Test 9's with-skill PASS (2026-08-28) is **not** truncated — the completion runs ~6,600
+characters and ends cleanly. `256` and the wrong-zoom consequence both appear, and the grader
+scored "All assertions passed".
+
+Rows in the raw CSVs are in run order, not the order above: test 3 was reworded and re-run
+after the rest of the baseline, and the 2026-08-28 follow-up CSV holds only tests 6, 7, and 9.
+Match rows by description, never by position.
 
 ## Eight baseline passes
 
