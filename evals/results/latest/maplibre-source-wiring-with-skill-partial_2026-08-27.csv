@@ -1,0 +1,215 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — custom style layers invisible against hosted tiles,skills/maplibre-source-wiring/SKILL.md,"I'm using a hosted tile provider's style URL and everything looks great. But when I try to write my own custom style against the same tile source, none of my layers show up.
+","Thinking: We need to respond with guidance using the skill. Explain likely cause: source-layer mismatch, need to inspect TileJSON vector_layers, ensure source-layer names correct, also layer order, ensure style includes glyphs/sprite, ensure source added correctly, maybe need to use url vs tiles, etc. Provide steps to debug. Provide example. Also mention using addLayer with before argument. Provide checklist.
+
+Below is a **step‑by‑step checklist** that will get you from “the provider’s style works” → “my custom style draws nothing” to a working map.  
+It follows the “MapLibre Source Wiring” skill, so you can see exactly which part of the wiring chain is most likely broken.
+
+---
+
+## 1️⃣  Verify that the **source definition** is correct
+
+| What to check | Why it matters | How to test |
+|---------------|----------------|-------------|
+| **Use the TileJSON `url`** (if the provider offers one) | The TileJSON tells MapLibre the tile URL template **and** the list of `source‑layer` names. Hand‑wiring a `tiles` array loses that metadata and often leaves you with the wrong zoom range. | ```json { ""type"":""vector"", ""url"":""https://tiles.example.com/tileset.json"" } ``` |
+| **If you must use `tiles`** – add `minzoom` / `maxzoom` | Without them MapLibre will request zooms the tileset doesn’t have (default `maxzoom:22`). You’ll see tiles appear at low zooms and then disappear as you zoom in. | ```json { ""type"":""vector"", ""tiles"":[""https://tiles.example.com/{z}/{x}/{y}.pbf""], ""minzoom"":0, ""maxzoom"":14 } ``` |
+| **CORS** – the tile endpoint must send `Access‑Control‑Allow‑Origin:*` (or your domain) | Otherwise the browser blocks the request and you get a completely blank map. | Open the Network tab → look at the response headers of a tile request. |
+
+> **Quick test** – Drop the source into a *bare* style that only contains a single `background` layer. If you see the vector tiles loading (check the Network tab for `*.pbf` requests) you’ve passed the source‑level checks.
+
+---
+
+## 2️⃣  Find the **exact `source‑layer` names** the tiles provide
+
+1. **Open the TileJSON** (the URL you used in step 1).  
+   Look for the `vector_layers` array. Example:
+
+   ```json
+   ""vector_layers"": [
+     { ""id"":""transportation"", ""minzoom"":5, ""maxzoom"":14, ""fields"":{ ... } },
+     { ""id"":""water"",          ""minzoom"":0, ""maxzoom"":14, ""fields"":{ ... } },
+     { ""id"":""building"",       ""minzoom"":13,""maxzoom"":14, ""fields"":{ ... } }
+   ]
+   ```
+
+2. **If `vector_layers` is missing** – consult the provider’s documentation (most providers publish a layer list for their schema: OpenMapTiles, Shortbread, Protomaps, etc.).  
+
+3. **Copy the exact string** (case‑sensitive, no extra spaces) for each layer you want to style.
+
+> **Common pitfall** – using the *display name* you see in the provider’s UI (e.g. “Roads”) instead of the actual source‑layer id (`transportation`). The style will silently draw nothing.
+
+---
+
+## 3️⃣  Wire your **style layers** to those source‑layers
+
+```json
+{
+  ""id"": ""my-roads"",
+  ""type"": ""line"",
+  ""source"": ""my-basemap"",          // the source id you gave in the style JSON
+  ""source-layer"": ""transportation"", // **must match TileJSON exactly**
+  ""paint"": {
+    ""line-color"": ""#ff6600"",
+    ""line-width"": 2
+  }
+}
+```
+
+### Checklist for each layer
+
+| ✅ | Item |
+|---|------|
+| ✅ | `source` points to the source id you added (`my-basemap`). |
+| ✅ | `source-layer` matches a name from the TileJSON (or provider docs). |
+| ✅ | The layer has a visual property (`paint` or `layout`) that can actually render (e.g. a `line-color` for a line layer). |
+| ✅ | No `filter` that eliminates all features (e.g. `[""=="", ""class"", ""highway""]` when the source has no `class` field). |
+
+---
+
+## 4️⃣  Insert your layers **below the label/symbol layers**
+
+If you add layers with `map.addLayer(myLayer)` **without a second argument**, they are placed *on top* of everything—including the provider’s street‑name symbols. The result looks like “my data is there but it hides all the labels”.
+
+**Solution:** add the layer *before* the first symbol layer.
+
+```js
+// Find the first symbol layer in the existing style
+const firstSymbol = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
+// Add your custom layer just before it
+map.addLayer(myLayer, firstSymbol);
+```
+
+> **Why not hard‑code a name?** Symbol layer IDs differ between schemas (`road-label`, `place-label`, etc.). Using the programmatic lookup works for any provider.
+
+---
+
+## 5️⃣  Make sure the **style root assets** are present
+
+| Asset | What it does | What happens if missing |
+|-------|--------------|--------------------------|
+| `glyphs` | Font stacks for text symbols | Since GL JS 5.11 the text falls back to a system font (you’ll see the right words but in the wrong typeface). |
+| `sprite` | PNG + JSON for icons (e.g. `marker`, `airport`) | Icons disappear silently; the layer still draws but you see no symbols. |
+
+If you are building the style from scratch, copy the provider’s `glyphs` and `sprite` URLs (or host your own). Example:
+
+```json
+{
+  ""glyphs"": ""https://tiles.example.com/fonts/{fontstack}/{range}.pbf"",
+  ""sprite"": ""https://tiles.example.com/sprites/basic""
+}
+```
+
+---
+
+## 6️⃣  Run a **quick “debug style”** to isolate the problem
+
+Create a minimal style JSON that contains:
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""my-basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://tiles.example.com/tileset.json""
+    }
+  },
+  ""glyphs"": ""https://tiles.example.com/fonts/{fontstack}/{range}.pbf"",
+  ""sprite"": ""https://tiles.example.com/sprites/basic"",
+  ""layers"": [
+    { ""id"":""bg"", ""type"":""background"", ""paint"":{""background-color"":""#f0f0f0""} },
+    {
+      ""id"":""debug-water"",
+      ""type"":""fill"",
+      ""source"":""my-basemap"",
+      ""source-layer"":""water"",
+      ""paint"":{""fill-color"":""#00bfff"",""fill-opacity"":0.5}
+    }
+  ]
+}
+```
+
+1. Load this style in your page (`map.setStyle('debug-style.json')`).  
+2. If you see the blue water polygons, the source wiring is correct.  
+3. Then add one of your own layers at a time, checking the console/network tab after each addition.
+
+---
+
+## 7️⃣  Common “nothing shows” symptom table (quick reference)
+
+| Symptom | First thing to look at |
+|---------|------------------------|
+| **All network requests 404** | Wrong tile URL / missing `tiles` vs `url`. |
+| **Requests succeed (200) but map stays blank** | `source-layer` typo or missing. |
+| **Tiles appear at low zoom, disappear when you zoom in** | Hand‑wired `tiles` without `maxzoom`. Switch to `url` or add `maxzoom`. |
+| **Your data draws but labels disappear** | Layer order – you added above the first `symbol` layer. |
+| **Text appears in a weird font** | `glyphs` URL wrong or missing. |
+| **Icons missing** | `sprite` URL wrong or missing. |
+| **Map is shifted/zoomed one level** | Raster source missing `tileSize:256` (default is 512). |
+| **CORS error in console** | Server not sending `Access-Control-Allow-Origin`. |
+
+---
+
+## 8️⃣  TL;DR “What to do right now”
+
+1. **Replace your source definition with the provider’s TileJSON `url`.**  
+2. **Open that TileJSON** and copy the exact `source-layer` names you need.  
+3. **Create a layer that uses those names** and add it *before* the first symbol layer.  
+4. **Add `glyphs` and `sprite` URLs** (or copy them from the provider’s style).  
+5. **Reload the map** – you should now see your custom layers *and* the provider’s labels.
+
+If after those steps you still see nothing, open the browser dev‑tools → Network tab:
+
+- Look for tile (`*.pbf`) requests → status 200? → good.  
+- Look for glyph (`*.pbf`) and sprite (`*.json/.png`) requests → status 200? → good.  
+- Look for CORS errors in the Console → fix server headers.
+
+---
+
+### Example full style (minimal but functional)
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://tiles.example.com/tileset.json""
+    }
+  },
+  ""glyphs"": ""https://tiles.example.com/fonts/{fontstack}/{range}.pbf"",
+  ""sprite"": ""https://tiles.example.com/sprites/basic"",
+  ""layers"": [
+    { ""id"":""bg"", ""type"":""background"", ""paint"":{""background-color"":""#fff""} },
+
+    // ---- your custom layer(s) ----
+    {
+      ""id"":""my-water"",
+      ""type"":""fill"",
+      ""source"":""basemap"",
+      ""source-layer"":""water"",          // <-- exact name from TileJSON
+      ""paint"":{""fill-color"":""#a0c8f0"",""fill-opacity"":0.6}
+    },
+
+    // ---- keep the provider’s label layers after yours ----
+    // (you can copy them from the provider’s style or just let the
+    //  provider’s style load after you add your layer with `addLayer(..., firstSymbolId)`)
+  ]
+}
+```
+
+Load this JSON with `map.setStyle('my-style.json')` and you should see a light‑blue water layer underneath the provider’s street‑name labels.
+
+---
+
+## 🎯 Bottom line
+
+**The most frequent cause of “my custom style draws nothing” is a mismatched `source‑layer` name.**  
+Everything else (TileJSON vs `tiles`, CORS, glyphs/sprite, layer order) can also produce a blank map, but they each leave a distinct fingerprint in the network/console logs. Follow the checklist above, and you’ll pinpoint the exact wiring break in seconds. Happy styling!",PASS,1.00,,All assertions passed,
+explicit — naming published tile schemas and their doc URLs,skills/maplibre-source-wiring/SKILL.md,"I'm writing style layers against an unfamiliar vector tile source and need to know the possible source-layer names. What are the major published vector tile schemas I should check, and where are their layer lists documented?
+",,ERROR,0.00,,,
+"implicit — hillshade-named endpoint is raster imagery, not raster-dem",skills/maplibre-source-wiring/SKILL.md,"Here's a TileJSON response from a tile endpoint named ""hillshade"": { ""tilejson"": ""3.0.0"", ""tiles"": [""https://tiles.example.com/hillshade/{z}/{x}/{y}.jpg""], ""minzoom"": 0, ""maxzoom"": 12 }. What MapLibre source type should I use for this, and why?
+",,ERROR,0.00,,,
+"implicit — raster tileSize defaults to 512, classic OSM tiles are 256",skills/maplibre-source-wiring/SKILL.md,"I'm adding tile.openstreetmap.org as a raster source in MapLibre: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'] }. Is anything missing before this will render correctly?
+",,ERROR,0.00,,,
