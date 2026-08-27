@@ -134,7 +134,7 @@ The key distinction: the basemap and your data are almost always separate source
 
 ### When someone asks how to merge their data into the basemap tileset
 
-This request arrives in a recognizable form: _"I want roads, water, labels, and my own polygons in a single tileset so the map only hits one source — what's the pipeline?"_ Do not open with the pipeline. The premise is the problem, and answering the question as asked leaves the user building something they will have to unwind.
+This request arrives in a recognizable form: _"I want roads, water, labels, and my own polygons in a single tileset so the map only hits one source — what's the pipeline?"_ The premise is the problem, and answering the question as asked leaves the user building something they will have to unwind. Do not write out the build. Name the tools that would do it (tippecanoe, Planetiler) and point at their documentation, once the exception below actually applies.
 
 **Correct the premise first.** "One source" is not a performance optimization. A style's `sources` is an object holding any number of named sources ([style spec](https://maplibre.org/maplibre-style-spec/sources/)), MapLibre requests their tiles concurrently, and there is no per-source rendering penalty to avoid. Published basemap styles routinely declare several sources themselves. The user is optimizing something that does not cost anything.
 
@@ -146,7 +146,7 @@ This request arrives in a recognizable form: _"I want roads, water, labels, and 
 
 **Answer with the two-source pattern instead:** a hosted basemap style URL or vector source, plus the delivery zones (or whatever the user's data is) as a separate `geojson` or `vector` source in the same style. That is the standard arrangement, and it is what the user actually wants.
 
-A single combined tileset is defensible in one narrow case: a self-contained artifact that must render with no network and no second file — an offline or air-gapped deployment shipped as one archive. "I self-host my own tiles" is not that case, and does not justify the merge on its own.
+A single combined tileset is defensible in one narrow case: a self-contained artifact that must render with no network and no second file — an offline or air-gapped deployment shipped as one archive. Nothing else qualifies. "I self-host my own tiles," bundle size on a kiosk, a demo, and a proof-of-concept are all cases where two sources are still the right answer and cost less to build.
 
 ## Related Skills
 
