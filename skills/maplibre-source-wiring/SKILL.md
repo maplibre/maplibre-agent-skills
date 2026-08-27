@@ -89,14 +89,14 @@ For the injection pattern in full, and the canonical layer order for a style bui
 
 ## Missing labels and icons: `glyphs` and `sprite`
 
-If tiles render but text or icons do not, the style root is usually missing:
+Two style-root properties supply the assets that symbol layers draw with:
 
 - **`glyphs`** — URL template for font stacks: `"glyphs": "https://example.com/fonts/{fontstack}/{range}.pbf"`
 - **`sprite`** — base URL for the sprite sheet and metadata, serving both `.json` and `.png`: `"sprite": "https://example.com/sprites/basic"`
 
 Pre-built style URLs from hosted providers include their own. When building a custom style or self-hosting, you must supply them.
 
-For font stacks, self-hosting versus generating, script coverage, and the GL JS local-font fallback, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
+The two fail differently when absent, which is what makes a symptom readable backwards to a cause — see the diagnostic table below, and [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md) for font stacks, self-hosting versus generating, script coverage, and the GL JS local-font fallback.
 
 ## Raster sources: `tileSize` and naming traps
 
@@ -112,7 +112,7 @@ Two raster-specific pitfalls that wire without error but render wrong or against
 }
 ```
 
-**A raster endpoint's name is not its type.** An endpoint named "hillshade," "terrain," or similar is not necessarily a `raster-dem` source. `raster-dem` requires the tiles to encode elevation as pixel-packed RGB (Mapbox or Terrarium encoding) in PNG or WebP — TileJSON's `encoding` field, when present, names which. A tile format that can't hold that encoding (JPEG, for instance) with no `encoding` field is ordinary `raster` imagery whatever the endpoint is named — a "hillshade" endpoint is often a pre-rendered hillshade *image*, not raw elevation data for MapLibre to shade client-side. Check the tile format and any `encoding` field before treating a name as evidence of `raster-dem`.
+**A raster endpoint's name is not its type.** An endpoint named "hillshade," "terrain," or similar is not necessarily a `raster-dem` source. `raster-dem` requires the tiles to encode elevation as pixel-packed RGB (Mapbox or Terrarium encoding) in PNG or WebP — TileJSON's `encoding` field, when present, names which. A tile format that can't hold that encoding (JPEG, for instance) with no `encoding` field is ordinary `raster` imagery whatever the endpoint is named — a "hillshade" endpoint is often a pre-rendered hillshade _image_, not raw elevation data for MapLibre to shade client-side. Check the tile format and any `encoding` field before treating a name as evidence of `raster-dem`.
 
 ## CORS
 
@@ -129,7 +129,8 @@ Work down this list — the symptoms overlap heavily:
 | Nothing at all, network shows failed requests | CORS headers; the tile URL itself (404s in the network tab)          |
 | Nothing at all, network shows 200s            | `source-layer` names against the TileJSON `vector_layers`            |
 | Tiles appear then vanish as you zoom in       | Missing zoom range on a hand-wired `tiles` source; use `url` instead |
-| Tiles render, no text                         | Missing `glyphs` at the style root                                   |
+| Tiles render, text in the wrong font          | `glyphs` missing, or its URL failing to load                         |
+| Tiles render, no text at all                  | No `text-field` on any symbol layer; or GL JS older than 5.11        |
 | Tiles render, no icons                        | Missing `sprite` at the style root                                   |
 | Data draws but hides labels                   | Layer order; insert before the first `symbol` layer                  |
 | Vector source draws nothing, raster fine      | `source-layer` missing entirely — it is required for vector sources  |
