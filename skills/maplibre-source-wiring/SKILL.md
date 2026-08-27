@@ -83,26 +83,9 @@ When generating tiles with Planetiler or tippecanoe, the output embeds TileJSON 
 
 ## Layer order: drawing below labels
 
-Layers are drawn bottom-to-top in the order they appear in the style. `map.addLayer()` with no second argument appends the layer **above everything**, including street names — which is why a data overlay added this way hides the basemap's labels.
+Layers are drawn bottom-to-top in the order they appear in the style. `map.addLayer()` with no second argument appends the layer **above everything**, including street names — which is why a data overlay added this way hides the basemap's labels. The fix is to pass the ID of the first `symbol` layer as `addLayer`'s second argument, found programmatically rather than hardcoded (`road-label` and friends are schema-specific and break the moment you change basemaps). A raster layer added after vector layers obscures them for the same reason.
 
-Pass the ID of the first symbol layer as the second argument to insert beneath it:
-
-```javascript
-map.on('load', () => {
-  // Find the first symbol (label) layer to insert below
-  const firstSymbolId = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
-
-  map.addSource('my-data', { type: 'geojson', data: '/path/to/data.geojson' });
-  map.addLayer(
-    { id: 'my-layer', type: 'circle', source: 'my-data' },
-    firstSymbolId // insert before labels; omit to append above everything
-  );
-});
-```
-
-Find the layer programmatically rather than hardcoding an ID from one provider's style — `road-label` and friends are schema-specific and break the moment you change basemaps.
-
-A raster layer added after vector layers will obscure them for the same reason.
+For the injection pattern in full, and the canonical layer order for a style built from scratch, see [maplibre-cartography](../maplibre-cartography/SKILL.md).
 
 ## Missing labels and icons: `glyphs` and `sprite`
 
@@ -157,6 +140,7 @@ Work down this list — the symptoms overlap heavily:
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Registering the `pmtiles://` protocol and PMTiles-specific source setup.
 - [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Font stacks, glyph endpoints, and script coverage.
+- [**maplibre-cartography**](../maplibre-cartography/SKILL.md) — The layer-injection pattern in full, and canonical layer order for a custom style.
 
 ## References
 
