@@ -8,7 +8,7 @@ status: verified
 
 MapLibre GL JS does not ship with map data. You provide a **style** that references **sources** — URLs or inline data that MapLibre fetches and renders. MapLibre works equally well for a store locator with 200 addresses, a city transit map, and a global basemap — the right source type depends on geographic scale and level of detail, update frequency, infrastructure constraints, and use case.
 
-This skill is about **choosing** that source type. For where tiles are hosted see [maplibre-tile-hosting](../maplibre-tile-hosting/SKILL.md); for getting a configured source to render see [maplibre-source-wiring](../maplibre-source-wiring/SKILL.md).
+This skill is about **choosing** that source type. For getting a configured source to render see [maplibre-source-wiring](../maplibre-source-wiring/SKILL.md).
 
 ## When to Use This Skill
 
@@ -135,7 +135,6 @@ The key distinction: the basemap and your data are almost always separate source
 ## Related Skills
 
 - [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Setting up the `glyphs` URL, self-hosting or generating font PBFs, and non-Latin script support.
-- [**maplibre-tile-hosting**](../maplibre-tile-hosting/SKILL.md) — Hosted providers, serverless PMTiles, and self-hosted tile servers.
 - [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — TileJSON, `source-layer`, layer order, CORS, and blank-map debugging.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serverless PMTiles hosting and MapLibre integration.
 - [**maplibre-mapbox-migration**](../maplibre-mapbox-migration/SKILL.md) — Replacing Mapbox tiles with MapLibre-compatible sources.

@@ -194,7 +194,6 @@ PMTiles supports **raster** tiles (PNG/JPEG, e.g. satellite or pre-rendered imag
 ## Related Skills
 
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
-- [**maplibre-tile-hosting**](../maplibre-tile-hosting/SKILL.md) — Hosted, serverless, and self-hosted tile infrastructure.
 - [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — TileJSON, `source-layer`, glyphs and sprite, CORS.
 - **maplibre-style-patterns** — Layer and paint configuration for vector sources (including PMTiles-backed sources). (Not yet in repo.)
 

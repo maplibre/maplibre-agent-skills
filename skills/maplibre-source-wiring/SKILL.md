@@ -10,8 +10,7 @@ You have a tile URL or a data file and a style, and the map is blank, missing la
 drawing in the wrong order. This skill covers connecting a source to a style correctly and
 the failure modes that look identical from the outside.
 
-For choosing a source type, see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md);
-for choosing where tiles live, see [maplibre-tile-hosting](../maplibre-tile-hosting/SKILL.md).
+For choosing a source type, see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md).
 
 ## When to Use This Skill
 
@@ -139,7 +138,6 @@ Work down this list — the symptoms overlap heavily:
 ## Related Skills
 
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
-- [**maplibre-tile-hosting**](../maplibre-tile-hosting/SKILL.md) — Hosted, serverless, and self-hosted tile infrastructure.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Registering the `pmtiles://` protocol and PMTiles-specific source setup.
 - [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Font stacks, glyph endpoints, and script coverage.
 
