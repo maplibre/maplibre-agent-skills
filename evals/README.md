@@ -114,14 +114,6 @@ be valid if it is close enough to the skill's topic to confirm the skill doesn't
 Once the skill is written, re-run the same command with `--var injectSkill=true` (or
 omit the flag — that's the default) to confirm every test now passes.
 
-## Reading a verdict
-
-Check the raw CSV before recording a FAIL. The pinned generator truncates answers mid-sentence
-at roughly 11,900 characters, so a FAIL may be an answer cut off before the part the rubric
-wanted (`evals/results/maplibre-pmtiles-patterns.md` documents one such false FAIL). An empty
-row is a rate limit or a provider timeout, never a FAIL. And one run is a sample: the generator
-is nondeterministic even at `temperature: 0`.
-
 ## Writing eval prompts
 
 When contributing a new skill, copy `evals/prompts/TEMPLATE.yaml` and rename it to
