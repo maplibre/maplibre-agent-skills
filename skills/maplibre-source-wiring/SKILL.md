@@ -96,7 +96,9 @@ Two style-root properties supply the assets that symbol layers draw with:
 
 Pre-built style URLs from hosted providers include their own. When building a custom style or self-hosting, you must supply them.
 
-The two fail differently when absent, which is what makes a symptom readable backwards to a cause — see the diagnostic table below, and [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md) for font stacks, self-hosting versus generating, script coverage, and the GL JS local-font fallback.
+**The two fail differently when absent, and the difference is what makes a symptom readable backwards to a cause.** Since GL JS 5.11.0 an absent `glyphs` does _not_ remove text: MapLibre renders it in a local system font instead, so the symptom is text in the wrong face, not missing text. Reach for `glyphs` when the labels are there but wrong, not when they are absent entirely. An absent `sprite` has no equivalent fallback — icons are silently omitted.
+
+For the fallback's mechanism and its limits (it is GL JS only; Native still needs served PBFs), font stacks, self-hosting versus generating, and script coverage, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
 
 ## Raster sources: `tileSize` and naming traps
 
