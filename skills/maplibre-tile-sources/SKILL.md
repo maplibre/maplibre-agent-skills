@@ -130,7 +130,23 @@ Most real-world apps combine source types — a hosted basemap for the reference
 | Your own data over any basemap                                  | Hosted basemap style URL + your data as a separate GeoJSON or vector tile source |
 | Satellite/aerial imagery + labels                               | Raster tile source for imagery + vector source for roads and labels              |
 
-The key distinction: the basemap and your data are almost always separate sources, even if both are vector tiles. The basemap provides context; your sources provide your application's data. Mixing them into a single custom tile source is rarely the right approach unless you are building a self-hosted map with full control of the tile pipeline.
+The key distinction: the basemap and your data are almost always separate sources, even if both are vector tiles. The basemap provides context; your sources provide your application's data.
+
+### When someone asks how to merge their data into the basemap tileset
+
+This request arrives in a recognizable form: _"I want roads, water, labels, and my own polygons in a single tileset so the map only hits one source — what's the pipeline?"_ Do not open with the pipeline. The premise is the problem, and answering the question as asked leaves the user building something they will have to unwind.
+
+**Correct the premise first.** "One source" is not a performance optimization. A style's `sources` is an object holding any number of named sources ([style spec](https://maplibre.org/maplibre-style-spec/sources/)), MapLibre requests their tiles concurrently, and there is no per-source rendering penalty to avoid. Published basemap styles routinely declare several sources themselves. The user is optimizing something that does not cost anything.
+
+**Then name what merging actually costs**, since the request usually survives a bare "you don't need to":
+
+- Every change to your own data means regenerating the entire combined tileset, basemap and all — a planet or regional extract build, to publish an edit to a few dozen polygons.
+- You can no longer swap or upgrade the basemap. It is baked in.
+- You take on the basemap's attribution and licensing obligations as a redistributor of derived data, rather than consuming a hosted style that carries them.
+
+**Answer with the two-source pattern instead:** a hosted basemap style URL or vector source, plus the delivery zones (or whatever the user's data is) as a separate `geojson` or `vector` source in the same style. That is the standard arrangement, and it is what the user actually wants.
+
+A single combined tileset is defensible in one narrow case: a self-contained artifact that must render with no network and no second file — an offline or air-gapped deployment shipped as one archive. "I self-host my own tiles" is not that case, and does not justify the merge on its own.
 
 ## Related Skills
 
