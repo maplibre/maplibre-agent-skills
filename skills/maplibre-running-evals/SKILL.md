@@ -12,8 +12,6 @@ Writing a good prompt and rubric is half the job. The other half is running Prom
 
 ## The order this plumbing serves
 
-Golden Rule 1 (`CLAUDE.md`) fixes the sequence:
-
 1. **Baseline first** (`--var injectSkill=false`), before any content is written. A test that passes at baseline has nothing for the skill to fix; one that fails is the evidence a section is warranted.
 2. **Write content only for the confirmed failures.**
 3. **With-skill second** — confirms it fixes what failed and did not regress what passed.
@@ -104,11 +102,11 @@ A verdict is a claim about the model. Four things routinely make it a claim abou
 
 One run is a sample: the generator is nondeterministic even at `temperature: 0`. Never conclude "the skill regressed" from one run.
 
-## Untested is not proven-unneeded
+## A section with no baseline test is a gap, not a failure.
 
-A section with no passing baseline test is an absence of evidence either way. Deleting on that basis and padding a skill with untested content are the same violation from opposite directions — both skip the probe that gates the change. The fix for untested prose is a new baseline test. Only a section covered by a test that _passes at baseline_ has earned a cut.
+The unambiguous fix for untested prose is a new baseline test. Only a section covered by a test that _passes at baseline_ has earned a cut. However, a section with no passing baseline test is an absence of evidence either way. The decision of whether to delete it, design new tests, or leave it requires discretion and careful consideration of factors outside the evals.
 
-## A rubric goes stale too, and a green run will not tell you
+## A rubric goes stale too
 
 When the thing a test grades moves and the rubric does not, the failure is invisible: the model's outdated assumption and the rubric's outdated expectation agree. Two things can move, and only one is the library.
 
