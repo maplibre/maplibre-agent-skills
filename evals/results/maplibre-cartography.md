@@ -1,16 +1,16 @@
 # Eval Results: maplibre-cartography
 
-Canonical results table for this skill. One row per eval test; baseline is the model's
-answer with the skill omitted (`--var injectSkill=false`), with-skill is the same prompt
-with the skill injected. See `evals/prompts/maplibre-cartography.yaml`.
+Canonical results table for this skill. One row per eval test; baseline is the model's answer with the skill omitted (`--var injectSkill=false`), with-skill is the same prompt with the skill injected. See `evals/prompts/maplibre-cartography.yaml`.
 
-Run: 2026-07-03 · model `cerebras:gpt-oss-120b` · judge `cerebras:gpt-oss-120b` (CI default) rejudged by Claude Sonnet 5
+Run: 2026-08-28 · model `groq:openai/gpt-oss-120b` (`max_tokens: 4096`) · judge `google:gemini-2.5-flash-lite` (`npm run eval:graded`, automated). Raw CSVs: [`maplibre-cartography-with-skill_2026-08-28.csv`](latest/maplibre-cartography-with-skill_2026-08-28.csv), [`maplibre-cartography-baseline_2026-08-28.csv`](latest/maplibre-cartography-baseline_2026-08-28.csv). Supersedes the 2026-07-03 run on `cerebras:gpt-oss-120b` (#64).
 
-| #   | Test                                           | Type         | Baseline (no skill)                                                               | With skill                                                            |
-| --- | ---------------------------------------------- | ------------ | --------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 1   | Route shields on the open OpenMapTiles stack   | Explicit     | FAIL — invents a `road_shield_1..10` scheme                                       | PASS — names `us-interstate_2` / `{network}_{ref_length}`             |
-| 2   | Point symbols camouflaged on aerial imagery    | Implicit     | FAIL — halo/outline/background-shape advice only, never a saturated distinct fill | PASS — saturated accent fill (e.g. amber/teal/magenta) plus dark halo |
-| 3   | Lowering road opacity to calm roads on imagery | Anti-pattern | FAIL — endorses lowering opacity                                                  | PASS — opaque and desaturated; hierarchy carried in width and value   |
-| 4   | flyTo camera animation (out of scope)          | Negative     | PASS                                                                              | PASS                                                                  |
+| #   | Test                                           | Type         | Baseline (no skill)                                                                                                                                                                                         | With skill                                                                     |
+| --- | ---------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 1   | Route shields on the open OpenMapTiles stack   | Explicit     | FAIL — knows `ref_length` and `us-interstate`, but wraps them in an invented `road_shield_us_interstate_2`-style sprite scheme (40+ `road_shield_*` names); trips the `not-icontains: road_shield` tripwire | PASS — names `us-interstate_2` / `{network}_{ref_length}` directly             |
+| 2   | Point symbols camouflaged on aerial imagery    | Implicit     | FAIL — halo and background-circle advice only; never a saturated accent fill (colors named: white, red, yellow)                                                                                             | PASS — saturated accent fill (amber, terracotta, teal, magenta) plus dark halo |
+| 3   | Lowering road opacity to calm roads on imagery | Anti-pattern | FAIL — endorses lowering opacity "as a temporary fix"                                                                                                                                                       | PASS — "lowering the opacity … is the wrong fix"; hierarchy in width and value |
+| 4   | flyTo camera animation (out of scope)          | Negative     | PASS                                                                                                                                                                                                        | PASS                                                                           |
 
-**Result: baseline 3 FAIL + 1 correct negative / with-skill 4/4 PASS — launch bar cleared.**
+**Result: baseline 3 FAIL + 1 correct negative / with-skill 4/4 PASS — launch bar cleared on the Groq pin.**
+
+Truncation check (#64): Groq stops this model at 3,072 completion tokens (`finish_reason: length`) at both 8192 and 4096. Three completions here hit it: baseline test 1 (the `road_shield` tripwire had already fired), baseline test 2 (cut inside its closing checklist), and with-skill test 2 (cut inside a trailing JSON example). In each the graded substance was already complete, so no verdict here rests on a truncated answer.
