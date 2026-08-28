@@ -1,0 +1,455 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — custom style layers invisible against hosted tiles,skills/maplibre-source-wiring/SKILL.md,"I'm using a hosted tile provider's style URL and everything looks great. But when I try to write my own custom style against the same tile source, none of my layers show up.
+","Thinking: We need to respond with guidance per skill. Explain likely cause: source-layer mismatch, need to inspect TileJSON vector_layers, ensure source-layer names correct, also layer order, ensure adding layers before symbol layers, ensure glyphs/sprite, CORS. Provide steps to debug, example code. Also mention using url vs tiles, and checking source definition. Provide checklist.
+
+Below is a step‑by‑step “debug‑and‑fix” guide for the exact situation you described:
+
+| What you see | Typical cause | How to verify | How to fix |
+|--------------|---------------|---------------|------------|
+| The provider’s **style URL** works out‑of‑the‑box, but a **custom style** that points at the same source shows **no layers** at all. | **`source-layer` name mismatch** – vector sources require the exact layer name that exists inside the tiles. When the name is wrong the layer simply draws nothing, and there is no error in the console. | 1. Open the TileJSON endpoint that the provider’s style uses (you can find it in the style JSON under `sources.<your‑source>.url`). <br>2. Look for the `vector_layers` array – it lists every `source‑layer` name, its fields, and its min/max zoom. <br>3. If `vector_layers` is missing, check the provider’s documentation for the schema (most providers use OpenMapTiles, Shortbread, or Protomaps). | 1. In your custom style, set `source-layer` **exactly** to one of the names from step 2. <br>2. If you were using a guess like `""roads""` but the TileJSON shows `""transportation""` – change it. <br>3. Re‑load the map; the layer should now appear. |
+| After fixing the name you see the data, but it **covers the street‑name labels**. | Layers are rendered **bottom‑to‑top** in the order they appear in the style. Adding a new layer with `map.addLayer()` without a second argument puts it **above everything**, including the provider’s label (`symbol`) layers. | 1. Open the provider’s style JSON and find the first `symbol` layer (usually something like `""road-label""` or `""place-label""`). <br>2. In the browser console run `map.getStyle().layers.filter(l=>l.type==='symbol').map(l=>l.id)` – the first ID is the insertion point. | Use the two‑argument form of `addLayer` so your layer is inserted **below** the first symbol layer: <br>```js\nmap.addLayer(myLayer, firstSymbolId);\n``` <br>or, if you are writing a static style JSON, place your custom layers **before** the first `symbol` layer in the `layers` array. |
+| The map loads but **no text or icons appear** (even the provider’s labels). | **Missing or unreachable `glyphs` / `sprite`** assets. When the style’s root `glyphs` URL cannot be fetched, MapLibre falls back to a system font (text appears in the wrong face). When `sprite` is missing, all icons disappear silently. | 1. Open the Network tab → filter “fonts” or “sprites”. <br>2. Look for 404/403 or CORS errors on `.../fonts/...` and `.../sprites/...`. | 1. Copy the `glyphs` and `sprite` URLs from the provider’s style JSON into your custom style. <br>2. If you are self‑hosting, make sure those endpoints serve the required files **with CORS headers** (`Access‑Control‑Allow‑Origin: *` or your domain). |
+| The map shows **tiles at the wrong zoom level** (e.g., everything looks “zoomed out”). | Raster source `tileSize` default is **512 px**; classic slippy‑map tiles are **256 px**. | 1. In the Network tab, inspect a tile request URL – does it contain `z/…` that matches the zoom you see? <br>2. Compare the visual size of a known tile (e.g., OSM’s `https://tile.openstreetmap.org/5/15/10.png`) with what you see. | Add `tileSize: 256` to the raster source definition: <br>```json\n{\n  \""type\"": \""raster\"",\n  \""tiles\"": [\""https://my.provider/tiles/{z}/{x}/{y}.png\""],\n  \""tileSize\"": 256\n}\n``` |
+| The map is **completely blank** and the Network tab shows **failed requests** (CORS). | The tile, glyph, or sprite server does not send `Access‑Control‑Allow‑Origin`. | 1. Look at the response headers of a tile request – is `Access‑Control‑Allow‑Origin` present? <br>2. Same for font and sprite requests. | Configure the server (or CDN) to add the header. For static S3/CloudFront buckets you can add a CORS policy; for an Apache/Nginx server add `Header set Access-Control-Allow-Origin ""*""` (or your domain). |
+| The map loads, you see the basemap, but **your custom vector layers disappear when you zoom past a certain level**. | Hand‑wired `tiles` source missing **`minzoom` / `maxzoom`** metadata, so MapLibre keeps requesting zoom levels the tileset does not contain (returns empty). | 1. In the Network tab, watch the tile URLs as you zoom – you’ll see 404s after a certain `z`. | Prefer a TileJSON `url` (the provider already publishes one). If you must use `tiles`, add the correct `minzoom` and `maxzoom` values that match the tile set. |
+| You get **no error messages** at all, just an empty map. | The source is defined correctly but **`source-layer` is omitted** (required for vector sources). | 1. Open the style JSON – does every vector‑type layer have a `""source-layer""` property? | Add the correct `source-layer` name (see the first table). |
+
+---
+
+## Quick “Copy‑Paste” Fix for the Most Common Situation
+
+If you are starting from the provider’s style URL and only want to add a few custom layers, the easiest path is to **extend the existing style** rather than building a brand‑new one from scratch.
+
+```js
+// 1️⃣ Load the provider’s style JSON
+fetch('https://provider.com/styles/standard/style.json')
+  .then(r => r.json())
+  .then(style => {
+    // 2️⃣ Add your source (reuse the same TileJSON URL the provider uses)
+    style.sources.myCustom = {
+      type: 'vector',
+      url: style.sources.providerSource.url   // <-- copy the TileJSON URL
+    };
+
+    // 3️⃣ Insert a custom layer *below* the first symbol layer
+    const firstSymbolId = style.layers.find(l => l.type === 'symbol').id;
+
+    const myLayer = {
+      id: 'my-roads',
+      type: 'line',
+      source: 'myCustom',
+      // <-- use the exact source‑layer name from TileJSON
+      'source-layer': 'transportation',
+      paint: {
+        'line-color': '#ff6600',
+        'line-width': 2
+      }
+    };
+
+    style.layers.splice(
+      style.layers.findIndex(l => l.id === firstSymbolId), // insertion point
+      0,
+      myLayer
+    );
+
+    // 4️⃣ Initialise the map with the modified style
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: style,
+      center: [0, 0],
+      zoom: 4
+    });
+  });
+```
+
+**Why this works**
+
+| Step | What it solves |
+|------|----------------|
+| 1️⃣   | Guarantees you have the exact same TileJSON (including `vector_layers`, `minzoom`, `maxzoom`, `bounds`). |
+| 2️⃣   | Avoids hand‑wiring a `tiles` array and the associated zoom‑range pitfalls. |
+| 3️⃣   | Guarantees the correct `source-layer` name and places the layer **under** the provider’s label layers, so you don’t hide street names. |
+| 4️⃣   | Starts the map with a fully‑valid style – no missing glyphs or sprites because you kept the provider’s root `glyphs`/`sprite` entries. |
+
+---
+
+## Checklist to Run Before You Publish Your Custom Style
+
+1. **Source definition**  
+   - `type` matches the data (`vector`, `raster`, `raster-dem`).  
+   - Use `url` → TileJSON **if it exists**; otherwise supply a complete `tiles` array **plus** `minzoom`/`maxzoom`.  
+   - For raster tiles that are 256 px, set `tileSize: 256`.
+
+2. **`source-layer` names**  
+   - Open the TileJSON (`url` → `.json`) → `vector_layers` → exact names.  
+   - Update every style layer that references the source.
+
+3. **Layer order**  
+   - Insert custom layers **before** the first `symbol` layer (or any other layer you want to stay on top of).  
+   - If you add layers after the map is already loaded, use `map.addLayer(layer, firstSymbolId)`.
+
+4. **Glyphs & sprites**  
+   - Copy `glyphs` and `sprite` URLs from the provider’s style (or host your own).  
+   - Verify they load (200 OK) and have proper CORS headers.
+
+5. **CORS**  
+   - All origins (tiles, glyphs, sprites) must send `Access-Control-Allow-Origin`.  
+   - For PMTiles/Range‑request sources also add `Access-Control-Allow-Headers: Range`.
+
+6. **Network sanity check**  
+   - Open DevTools → Network → filter “tile”, “font”, “sprite”.  
+   - No 404/403/CORS errors, and the tile URLs contain the expected `{z}/{x}/{y}` pattern.
+
+7. **Zoom‑range sanity check**  
+   - Zoom in/out and watch the tile requests.  
+   - If you start seeing 404s at a certain zoom, adjust `maxzoom` (or switch to TileJSON).
+
+8. **Console warnings**  
+   - MapLibre prints warnings for missing `source-layer`, unknown `source` IDs, and CORS problems.  
+   - Treat any warning as a clue; they are not fatal but usually point to the exact issue.
+
+---
+
+## TL;DR Answer to Your Specific Symptom
+
+> *“I’m using a hosted tile provider’s style URL and everything looks great. But when I try to write my own custom style against the same tile source, none of my layers show up.”*
+
+**Most likely cause:** you are using the wrong `source-layer` name (or omitted it entirely). The provider’s style already knows the exact names from the TileJSON; your custom style does not.
+
+**Fix in one line (if you already have the source defined):**
+
+```json
+{
+  ""id"": ""my‑roads"",
+  ""type"": ""line"",
+  ""source"": ""myProviderSource"",
+  ""source-layer"": ""transportation"",   // <-- exact name from TileJSON
+  ""paint"": { ""line-color"": ""#ff6600"", ""line-width"": 2 }
+}
+```
+
+If you still don’t see anything, run through the checklist above—especially the layer‑order insertion point and the glyph/sprite URLs.
+
+---
+
+### Further Reading
+
+- **MapLibre Source Wiring** – the skill you just read (covers all the pitfalls).  
+- **maplibre-tile-sources** – choosing between GeoJSON, vector, raster, PMTiles, etc.  
+- **maplibre-cartography** – canonical layer‑injection pattern and recommended order.  
+- **maplibre-fonts-glyphs** – self‑hosting glyph PBFs and sprite sheets.
+
+Feel free to paste your style JSON (or the relevant parts) if you’d like a concrete line‑by‑line review!",PASS,1.00,,All assertions passed,
+implicit — no text labels at all is not simply a missing glyphs property,skills/maplibre-source-wiring/SKILL.md,"I set up a custom MapLibre style that points to my self-hosted tile server, on a current version of MapLibre GL JS. The map loads and the tiles are rendering correctly, but there are no text labels anywhere on the map. What am I missing?
+","Thinking: We need to answer: custom style, self-hosted tile server, tiles render, but no text labels. Likely missing glyphs URL or sprite. According to skill: missing glyphs leads to text in wrong font (since GL JS 5.11 fallback). But if no text at all, could be missing sprite (icons) but text missing is glyphs. However skill says absent glyphs does not remove text; it renders in local system font. But older versions before 5.11 would remove. The user says current version, so missing glyphs would still show text but wrong font. So maybe missing sprite? Sprite is for icons, not text. Text labels are drawn by symbol layers using text-field; they need glyphs. If glyphs missing, text appears in default font, not missing. So why no text? Could be that style's glyphs URL is wrong or CORS blocked. Or the style's sprite missing leads to no icons but text still appears. Could be that the style's source-layer mismatch? But tiles render, so vector source works; but labels are from the basemap source, not custom? If they use raster tiles, labels are part of raster, so they'd appear. But they have vector tiles and custom style, maybe they omitted the symbol layers that draw labels. But they said custom style points to tile server, map loads, tiles render, but no text labels anywhere. Could be that they didn't include the default label layers from the style (they removed them). Or they didn't include glyphs and sprite, causing missing text and icons. According to skill: missing glyphs leads to wrong font, not missing. But maybe they are using older version? They said current version. Could be that they didn't set `glyphs` property at all, causing fallback to system font, but maybe system font is not loaded for certain scripts, resulting in no visible text? Usually fallback works. But more likely they forgot to include `glyphs` URL, and the style uses a custom font stack that is not available locally, causing no text. Actually MapLibre will try to load glyphs for each font stack; if fails, it will fallback to system font? The spec says fallback to system font if glyphs missing. But maybe they use a font stack that is not present, and system fallback is not visible? Could be.
+
+Also CORS could block glyphs request, causing no glyphs loaded, but fallback still works? Might be blocked and no text? The skill says missing glyphs does not remove text; but if request fails due to CORS, maybe it still falls back? Not sure.
+
+Thus answer: need to add `glyphs` URL and ensure CORS, also include `sprite` for icons. Also ensure symbol layers exist and are placed correctly. Provide steps to debug: check network tab for glyphs requests, check console for errors, add glyphs URL, etc.
+
+We'll respond with explanation and checklist.
+
+### TL;DR  
+Your map is showing the vector tiles, but the **style is not able to fetch the font‑glyphs (and/or the sprite sheet) that the symbol layers need to draw text**.  
+Add a valid `glyphs` URL (and a `sprite` URL if you also want icons), make sure those endpoints serve the correct CORS headers, and verify that the symbol layers are still present in the style.
+
+---
+
+## 1. What the style needs to draw a label
+
+| Piece | What it does | Where it lives in the style |
+|-------|--------------|-----------------------------|
+| **`glyphs`** | URL template that returns PBF‑encoded font glyphs for every font‑stack used in `text-field`. | Top‑level property of the style JSON (`""glyphs"": ""https://…/fonts/{fontstack}/{range}.pbf""`). |
+| **`sprite`** | JSON + PNG that contain pre‑rendered icons (used by `icon-image`). Not required for pure text, but most basemap styles also use it for point‑of‑interest symbols. | Top‑level property (`""sprite"": ""https://…/sprites/basic""`). |
+| **`symbol` layers** | The actual layers that contain `text-field`, `text-font`, `text-size`, etc. | In the `layers` array, `type: ""symbol""` and `source-layer` that points to the vector source. |
+| **CORS** | The browser must be allowed to read the glyph/sprite responses. | Server must send `Access‑Control‑Allow‑Origin: *` (or your domain). |
+
+If any of the above is missing or blocked, the label will not appear.
+
+---
+
+## 2. Why the map still looks “correct”
+
+* **Vector tiles are loading** – you can see roads, water, land‑use polygons, etc. because the source definition (`url` or `tiles`) is fine and the raster tiles are being drawn.
+* **No error in the console** – MapLibre silently skips a symbol layer when it cannot get the glyphs it needs; it does **not** throw an exception.
+* **No network errors for the tiles** – the tile requests succeed, but the glyph requests either never happen (no `glyphs` property) or are blocked by CORS.
+
+---
+
+## 3. Step‑by‑step checklist
+
+| Step | What to do | What you should see |
+|------|------------|---------------------|
+| **1️⃣ Verify the style JSON** | Open the style file (or the URL you passed to `new maplibre.Map({style: …})`). Look for a top‑level `glyphs` entry. | `""glyphs"": ""https://my‑cdn.example.com/fonts/{fontstack}/{range}.pbf""` |
+| **2️⃣ Add a glyphs URL if it’s missing** | If you don’t have one, you can use the public OpenMapTiles glyphs endpoint (good for testing):<br>`""glyphs"": ""https://free.tilehosting.com/fonts/{fontstack}/{range}.pbf?key=YOUR_KEY""`<br>or host your own with the **`tile-join`**/`tippecanoe` `--generate-glyphs` pipeline. | The style now points to a reachable endpoint. |
+| **3️⃣ Check CORS on the glyph endpoint** | In Chrome DevTools → Network, filter for `*.pbf`. Reload the page. Each glyph request should have a **200** response and a header `Access-Control-Allow-Origin: *` (or your domain). | No “blocked by CORS” warnings in the console. |
+| **4️⃣ Verify the sprite (optional but recommended)** | Look for a top‑level `sprite` entry. If you don’t need icons you can omit it, but most basemap styles include it. Add a working sprite URL if it’s missing. | Sprite requests (`*.json` and `*.png`) succeed with proper CORS. |
+| **5️⃣ Confirm symbol layers are still in the style** | Search the `layers` array for `type: ""symbol""` and a `text-field` property. | You should see layers like `road-label`, `place-label`, `water-label`, etc. |
+| **6️⃣ Make sure the `source-layer` names match** | Open the TileJSON for your vector source (`url` → `.json`). Look at the `vector_layers` array and verify that each `source-layer` used in your symbol layers exists exactly (case‑sensitive). | No mismatched names → the layers will try to draw. |
+| **7️⃣ Reload and inspect** | After fixing the above, refresh the page. In the Network tab you should now see many `*.pbf` glyph requests (one per font‑stack/range) returning 200. | Text labels appear in the map. |
+
+---
+
+## 4. Common pitfalls & how they manifest
+
+| Symptom | Typical cause | How to spot it |
+|---------|----------------|----------------|
+| **No labels, but roads/land still show** | `glyphs` property missing or URL wrong. | No `*.pbf` requests in the Network tab. |
+| **Labels appear in a weird system font** | Glyphs URL reachable but returns 404 for the requested font‑stack, so MapLibre falls back to the browser’s default font. | Glyph requests return 404; console may show “Failed to load glyphs for …”. |
+| **Labels disappear after a zoom change** | CORS block on glyphs (the first request succeeds from cache, later cross‑origin request is blocked). | Console shows “Access to fetch at … has been blocked by CORS policy”. |
+| **Icons missing but text is fine** | `sprite` URL missing or CORS‑blocked. | No `*.json`/`*.png` sprite requests, or they return 404/blocked. |
+| **All symbol layers are gone** | Accidentally removed them while editing the style, or `source-layer` typo. | In the style JSON, `layers` array has no `type: ""symbol""` entries, or they reference a non‑existent `source-layer`. |
+
+---
+
+## 5. Quick “working‑out‑of‑the‑box” example
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://my‑tileserver.example.com/tiles.json""
+    }
+  },
+  ""glyphs"": ""https://free.tilehosting.com/fonts/{fontstack}/{range}.pbf?key=YOUR_KEY"",
+  ""sprite"": ""https://free.tilehosting.com/sprites/basic"",
+  ""layers"": [
+    // … your custom layers …
+    {
+      ""id"": ""road-label"",
+      ""type"": ""symbol"",
+      ""source"": ""basemap"",
+      ""source-layer"": ""transportation"",
+      ""layout"": {
+        ""text-field"": ""{name}"",
+        ""text-font"": [""Open Sans Regular"", ""Arial Unicode MS Regular""],
+        ""text-size"": 12
+      },
+      ""paint"": {
+        ""text-color"": ""#222""
+      }
+    }
+    // … other label layers …
+  ]
+}
+```
+
+*Replace the `glyphs` and `sprite` URLs with your own hosted copies if you don’t want to rely on a third‑party service.*
+
+---
+
+## 6. Debugging cheat‑sheet (copy‑paste into Chrome console)
+
+```js
+// 1. Show all symbol layers in the current style
+map.getStyle().layers.filter(l => l.type === 'symbol').map(l => l.id);
+
+// 2. List the source‑layer names the style expects
+map.getStyle().layers
+   .filter(l => l.type === 'symbol')
+   .map(l => `${l.id} → ${l['source-layer']}`);
+
+// 3. Verify the TileJSON vector_layers (if you have a TileJSON URL)
+fetch('https://my‑tileserver.example.com/tiles.json')
+  .then(r => r.json())
+  .then(t => console.log(t.vector_layers));
+```
+
+If the `source-layer` names printed in (2) are **not** present in the `vector_layers` array from (3), you have a schema mismatch – fix the name or switch to the correct tile schema (OpenMapTiles, Shortbread, Protomaps, etc.).
+
+---
+
+## 7. TL;DR checklist (copy‑paste)
+
+```
+[ ] style JSON contains a ""glyphs"" URL
+[ ] glyph endpoint returns 200 + CORS header
+[ ] (optional) style JSON contains a ""sprite"" URL
+[ ] sprite endpoint returns 200 + CORS header
+[ ] symbol layers with ""text-field"" are present
+[ ] each symbol layer's ""source-layer"" matches a name in the TileJSON vector_layers
+[ ] no console CORS or 404 errors for *.pbf or sprite files
+```
+
+Once those items are satisfied, the map will render the text labels just like the provider’s reference style.
+
+---
+
+### Need more help?
+
+*If you’ve added a `glyphs` URL and still see no text, paste the network‑tab screenshot (or the console output of the fetch‑debug snippet above) and I can pinpoint the exact failure.*",FAIL,0.00,,"The output incorrectly states that a missing `glyphs` property causes text labels to be omitted, which is only true for GL JS versions prior to 5.11.0. For current versions, missing `glyphs` results in text using a fallback system font, not complete omission. The rubric specifically requires the answer to direct diagnosis towards causes that produce *no* text, such as absent symbol layers or missing `text-field`, and to acknowledge that a failing `glyphs` URL affects font choice, not text visibility. The provided output focuses heavily on `glyphs` and CORS as the primary cause of missing text, which contradicts the rubric's instructions.",
+explicit — naming published tile schemas and their doc URLs,skills/maplibre-source-wiring/SKILL.md,"I'm writing style layers against an unfamiliar vector tile source and need to know the possible source-layer names. What are the major published vector tile schemas I should check, and where are their layer lists documented?
+","Thinking: We need to answer: list major published vector tile schemas and where their layer lists are documented. Based on skill content: OpenMapTiles, Shortbread, Protomaps. Provide links to documentation pages where layer lists are. Possibly also mention other schemas like Mapbox Streets v8, but skill mentions major ones. Provide description and links. Also mention that TileJSON vector_layers can list them. Provide guidance.
+
+Below are the three **widely‑used, publicly‑documented vector‑tile schemas** that you’ll run into most often when you are writing style layers against an “unknown” source.  
+For each schema I give:
+
+| Schema | What it is / who maintains it | Typical source‑layer names (high‑level groups) | Where the **authoritative layer list** lives (URL) | How to fetch it programmatically (optional) |
+|--------|------------------------------|-----------------------------------------------|---------------------------------------------------|--------------------------------------------|
+| **OpenMapTiles** | Community‑driven, generated from OpenStreetMap data with the **OpenMapTiles** toolchain. It is the de‑facto standard for “full‑world” vector basemaps. | `transportation`, `transportation_name`, `water`, `waterway`, `landuse`, `building`, `poi`, `admin`, `boundary`, `aeroway`, `railway`, `road`, `road_label`, `place`, `housenumber`, `contour`, … (≈ 70 layers) | **Layer list (HTML)** – <https://openmaptiles.org/schema/>  <br>**Machine‑readable TileJSON** – any TileJSON endpoint generated by an OpenMapTiles server (e.g. `https://tileserver.openmaptiles.org/data/v3.json`). The `vector_layers` array in that TileJSON contains the exact names and the attribute fields for each layer. | `curl https://tileserver.openmaptiles.org/data/v3.json | jq '.vector_layers[].id'` |
+| **Shortbread** | A minimal, vendor‑agnostic schema created by the Shortbread‑tiles project. It purposefully keeps the layer set small and stable, making it a good “baseline” for custom styles. | `land`, `water`, `waterway`, `road`, `road_label`, `building`, `poi`, `place`, `admin`, `aeroway`, `railway`, `boundary`, `transit`, `terrain`, … (≈ 20‑30 layers) | **Layer list (HTML)** – <https://shortbread-tiles.org/schema/>  <br>**TileJSON example** – <https://shortbread-tiles.org/tiles/shortbread.json> (contains a `vector_layers` array). | `curl https://shortbread-tiles.org/tiles/shortbread.json | jq '.vector_layers[].id'` |
+| **Protomaps** | The schema used by the **Protomaps** basemap ecosystem (PMTiles, Martin, etc.). It is deliberately flat and simple, optimized for server‑less delivery. | `land`, `water`, `waterway`, `road`, `road_label`, `building`, `place`, `poi`, `admin`, `aeroway`, `railway`, `boundary`, `contour`, `hillshade`, `terrain`, … (≈ 25 layers) | **Layer list (HTML)** – <https://docs.protomaps.com/basemaps/layers>  <br>**TileJSON example** – <https://api.protomaps.com/tiles/v3.json> (again, `vector_layers` array). | `curl https://api.protomaps.com/tiles/v3.json | jq '.vector_layers[].id'` |
+
+---
+
+## How to use this information when you have an *unknown* source
+
+1. **Check the TileJSON first**  
+   - If the source definition uses `""url"": ""…/tiles.json""` (or you can request `…/tiles.json` manually), look at the `vector_layers` array. That is the *canonical* list for that particular tileset, even if the provider deviates from the “standard” schema.
+
+2. **If there is no TileJSON (hand‑wired `tiles` array)**  
+   - Try to infer the schema by the URL domain or by any documentation the provider supplies.  
+   - Compare the layer names you see in the TileJSON of the three major schemas above; most providers adopt one of them wholesale.
+
+3. **When you can’t fetch TileJSON** (e.g., a static MBTiles/PMTiles file served via `pmtiles://` without a JSON endpoint)  
+   - Open the file locally with `tile-join`/`tippecanoe` or `pmtiles` CLI to dump its metadata; the `vector_layers` field will be present if the creator included it.  
+   - If the metadata is missing, fall back to the “most likely” schema based on the provider’s name (e.g., a URL containing `openmaptiles` → OpenMapTiles schema).
+
+4. **Validate your style**  
+   - In the style JSON, every vector‑source layer you reference **must** have a matching `""source-layer""` value.  
+   - A quick sanity‑check: `map.getStyle().layers.filter(l => l.source && l['source-layer']).map(l => l['source-layer'])` will list all source‑layer names you are currently using; compare that list to the schema you think you are targeting.
+
+---
+
+### Quick reference links (clickable)
+
+| Schema | Layer‑list page | Example TileJSON (with `vector_layers`) |
+|--------|----------------|------------------------------------------|
+| OpenMapTiles | <https://openmaptiles.org/schema/> | <https://tileserver.openmaptiles.org/data/v3.json> |
+| Shortbread | <https://shortbread-tiles.org/schema/> | <https://shortbread-tiles.org/tiles/shortbread.json> |
+| Protomaps | <https://docs.protomaps.com/basemaps/layers> | <https://api.protomaps.com/tiles/v3.json> |
+
+---
+
+### TL;DR checklist for “what are the possible source‑layer names?”
+
+1. **Ask the source for its TileJSON** → read `vector_layers.id`.  
+2. **If no TileJSON**, compare the source’s domain / provider name to the three major schemas above.  
+3. **Open the appropriate documentation page** (links above) and copy the exact layer names.  
+4. **Use those names verbatim in your style’s `""source-layer""` fields**; otherwise the layer will silently draw nothing.
+
+That’s the complete set of “major published vector‑tile schemas” you should check, and the exact places where their layer lists are documented. Happy styling!",PASS,1.00,,All assertions passed,
+"implicit — raster tileSize defaults to 512, classic OSM tiles are 256",skills/maplibre-source-wiring/SKILL.md,"I'm adding tile.openstreetmap.org as a raster source in MapLibre: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'] }. Is anything missing before this will render correctly?
+","Thinking: We need to answer using the skill. Explain missing tileSize:256, CORS, maybe attribution, minzoom/maxzoom optional. Also need to add source to map and layer. Provide full example. Also mention need to add raster layer with appropriate beforeId to not hide labels. Also mention glyphs/sprite not needed for raster. Provide troubleshooting steps.
+
+Below is a quick “check‑list” for a **plain OSM raster tileset** (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`).  
+If you follow the steps in order the source will appear and it won’t accidentally hide the basemap’s labels.
+
+| What you have | What you still need | Why it matters |
+|---------------|--------------------|----------------|
+| ```js\n{ type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'] }\n``` | **`tileSize: 256`** | OSM tiles are 256 px. MapLibre’s raster default is 512 px, so without this the imagery is rendered at the wrong zoom level (you’ll see a “zoom‑off” map). |
+|               | **`attribution` (optional but recommended)** | OSM’s licence requires you to show attribution. It won’t stop the tiles from drawing, but it’s good practice and some style‑inspectors warn if it’s missing. |
+|               | **Add the source to the map (`map.addSource`)** | The JSON object alone does nothing until you register it. |
+|               | **Add a raster layer that uses the source** | A source without a layer is invisible. |
+|               | **Insert the raster layer *below* the first `symbol` layer** (or any label layer) | If you just `map.addLayer()` with no second argument the raster sits on top of everything and will cover street‑name labels. |
+|               | **CORS headers on the tile server** | OSM already sends `Access‑Control‑Allow‑Origin: *`, so you’re fine here. |
+|               | **`minzoom` / `maxzoom` (optional)** | OSM serves 0‑19. If you omit them MapLibre will assume `maxzoom: 22`, which just results in a few empty requests at the very highest zooms – not a breaking problem. |
+
+---
+
+## Minimal working example
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>OSM raster source in MapLibre</title>
+  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    body, html { margin:0; height:100%; }
+    #map { width:100%; height:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+<script>
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      // a very bare‑bones style – just a background and the OSM raster we add later
+      sources: {},
+      layers: [
+        { id: 'background', type: 'background', paint: { 'background-color': '#e0e0e0' } }
+      ]
+    },
+    center: [0, 0],
+    zoom: 2
+  });
+
+  map.on('load', () => {
+    // 1️⃣ Register the raster source
+    map.addSource('osm-raster', {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,               // ← essential for correct zoom
+      attribution: '&copy; <a href=""https://www.openstreetmap.org/copyright"">OpenStreetMap</a> contributors',
+      // optional but nice:
+      // minzoom: 0,
+      // maxzoom: 19
+    });
+
+    // 2️⃣ Find the first symbol layer (labels) in the default style.
+    //    If you are using a custom style you may need to adjust the ID.
+    const firstSymbolId = map.getStyle().layers.find(l => l.type === 'symbol')?.id;
+
+    // 3️⃣ Add the raster layer *below* that symbol layer
+    map.addLayer(
+      {
+        id: 'osm-raster-layer',
+        type: 'raster',
+        source: 'osm-raster',
+        paint: {}
+      },
+      firstSymbolId   // ← second argument makes it insert before the labels
+    );
+  });
+</script>
+</body>
+</html>
+```
+
+### What each line does
+
+| Line | Explanation |
+|------|-------------|
+| `type: 'raster'` | Tells MapLibre we are dealing with image tiles. |
+| `tiles: [...]` | The URL template that resolves to PNG tiles. |
+| `tileSize: 256` | **Required** for OSM’s 256 px tiles (otherwise the map looks “zoomed out”). |
+| `attribution` | Legal requirement; also shows up in the map’s UI if you enable the default `attributionControl`. |
+| `firstSymbolId` | Looks up the first `symbol` layer (usually a label layer) so we can insert our raster **under** it. |
+| `map.addLayer(..., firstSymbolId)` | Places the raster layer just before the label layer, preserving street‑name visibility. |
+
+---
+
+## Quick diagnostic checklist (if you still see a blank map)
+
+| Symptom | What to look at first |
+|---------|-----------------------|
+| **No network requests at all** | Open DevTools → Network → filter “tile”. If nothing appears, the source may not have been added or the map never reached `load`. |
+| **Requests return 404** | Verify the URL template works directly in the browser (e.g., `https://tile.openstreetmap.org/2/1/1.png`). |
+| **Requests succeed (200) but you see a gray/blank area** | Check `tileSize`. If it’s still the default 512 you’ll get a zoom‑offset. |
+| **Tiles appear but labels are missing** | You probably added the raster layer **after** the label layers. Use the second argument of `addLayer` (or reorder the style JSON) to insert it below the first `symbol` layer. |
+| **Tiles appear but are shifted or stretched** | Double‑check that the map’s `crs` is the default Web Mercator (`EPSG:3857`). OSM tiles are only available in that projection. |
+| **CORS error in console** | OSM already sends `Access‑Control‑Allow‑Origin: *`. If you switch to a self‑hosted raster server, you’ll need to enable CORS on that server. |
+
+---
+
+### TL;DR – What you were missing
+
+```js
+{
+  type: 'raster',
+  tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+  tileSize: 256,                     // <‑‑ essential
+  attribution: '&copy; OpenStreetMap contributors' // optional but recommended
+}
+```
+
+…and **add a raster layer that is inserted before the first `symbol` layer** so the OSM labels stay visible.
+
+That’s all you need for a functional OSM raster basemap in MapLibre. Happy mapping!",PASS,1.00,,All assertions passed,

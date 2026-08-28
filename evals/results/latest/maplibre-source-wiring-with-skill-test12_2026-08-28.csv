@@ -1,0 +1,276 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — setFeatureState silently does nothing without a feature id,skills/maplibre-source-wiring/SKILL.md,"I have a GeoJSON source of parcel polygons and I want to highlight one on hover using map.setFeatureState(). Each feature has a `parcel_id` in its properties. I call setFeatureState with that value and nothing happens — no error in the console, the paint expression never picks it up, and reading the state back comes up empty. What am I missing?
+","Thinking: We need to answer: why setFeatureState not working with GeoJSON source of parcel polygons, each feature has parcel_id property. They call setFeatureState with that value but nothing happens. Likely missing promoteId to map parcel_id to feature id. Need to set promoteId in source definition, or generateId, but generateId not appropriate. Also need to ensure source is added before calling setFeatureState, and that the layer uses feature-state in paint expression, and that the feature is in view (maybe not). Also need to ensure that the source is of type 'geojson' and that the layer is referencing that source. Also need to ensure that the feature id is integer or string? Actually promoteId can be any primitive. So answer: set promoteId: 'parcel_id' in source definition, then call setFeatureState with id equal to parcel_id. Also ensure that the layer's paint uses 'feature-state' expression, e.g., fill-color: ['case', ['boolean', ['feature-state', 'hover'], false], '#f00', '#00f']. Also need to handle mouse events to set state and reset previous. Also need to ensure that the source is not reloaded (setData) after setting state, which would clear state. Also need to ensure that the map is loaded before adding source and layer.
+
+Thus answer: explain missing promoteId, how to add it, example code, also mention that generateId is not appropriate, and that you need to use integer/string id. Also mention that you need to use map.on('mouseenter') etc. Also mention that you need to use map.getSource('parcels').setData if you need to update.
+
+Provide troubleshooting steps.
+
+Let's craft final answer.
+
+### TL;DR  
+`setFeatureState()` only works on **features that have an *id***.  
+Your GeoJSON features only have a `parcel_id` **property**, so MapLibre doesn’t know what the id is.  
+Add a `promoteId` declaration (or give the features a top‑level `id` yourself) when you create the source, then call `setFeatureState()` with that same value.  
+
+Below is a complete, minimal example that shows the whole wiring – from source definition → layer → hover handling → state read‑back.
+
+---
+
+## 1. Why `setFeatureState` silently does nothing
+
+| Symptom | What’s really happening |
+|---------|------------------------|
+| No console error, paint expression never matches, `getFeatureState` returns `{}` | The source’s features **have no id**. `setFeatureState({source, id, …})` looks for a feature whose *internal* `id` equals the value you passed. If the feature has only a property (`parcel_id`) the lookup fails, but MapLibre does **not** throw an error – it just does nothing. |
+
+### Two ways to give a feature an id
+
+| Method | When to use | How it works |
+|--------|-------------|--------------|
+| **`promoteId`** (recommended) | You already have a stable property (`parcel_id`) that uniquely identifies each parcel. | MapLibre copies the value of that property into the feature’s internal `id` field *as the source is loaded*. |
+| **Explicit top‑level `id`** | You generate the GeoJSON yourself and can add an `id` field to each feature. | The `id` must be a number or a string that can be cast to a number (MapLibre will coerce strings that look like integers). Not ideal for non‑numeric business keys. |
+| **`generateId: true`** | You have no natural key and only need a temporary id (e.g., for debugging). | MapLibre assigns sequential numeric ids **by array index** each time the source data is set. The ids change whenever the data order changes, so feature‑state will be lost on any `setData`. |
+
+> **Bottom line:** For a stable business key like `parcel_id`, use `promoteId`.
+
+---
+
+## 2. Adding `promoteId` to the GeoJSON source
+
+```js
+// 1️⃣  Create the source – note the `promoteId` line
+map.addSource('parcels', {
+  type: 'geojson',
+  data: 'https://example.com/parcels.geojson', // or a raw GeoJSON object
+  promoteId: 'parcel_id'          // <‑‑ tells MapLibre to treat parcel_id as the feature id
+});
+```
+
+*If you already have the GeoJSON object in memory you can also do:*
+
+```js
+map.addSource('parcels', {
+  type: 'geojson',
+  data: parcelsGeojson,
+  promoteId: 'parcel_id'
+});
+```
+
+> **Important:** `promoteId` must be set **when the source is added** (or before you call `setData`). Changing it later requires removing and re‑adding the source.
+
+---
+
+## 3. A layer that reacts to the feature‑state
+
+```js
+map.addLayer({
+  id: 'parcels-fill',
+  type: 'fill',
+  source: 'parcels',
+  paint: {
+    // Normal colour
+    'fill-color': '#3388ff',
+    // When the feature‑state key `hover` is true, use a highlight colour
+    'fill-color': [
+      'case',
+      ['boolean', ['feature-state', 'hover'], false],
+      '#ff8800',          // ← highlighted colour
+      '#3388ff'           // ← default colour
+    ],
+    'fill-opacity': 0.5
+  }
+});
+```
+
+> The `fill-color` expression is evaluated **per feature**. The `feature-state` expression reads the state you set with `setFeatureState`.
+
+---
+
+## 4. Hover handling – the “glue” that actually calls `setFeatureState`
+
+```js
+let hoveredParcelId = null;
+
+// When the mouse moves over a parcel…
+map.on('mousemove', 'parcels-fill', (e) => {
+  if (!e.features.length) return;
+
+  const feature = e.features[0];
+  const id = feature.id;               // <-- thanks to promoteId, this is parcel_id
+
+  // If we moved onto a new parcel, clear the old one first
+  if (hoveredParcelId !== null && hoveredParcelId !== id) {
+    map.setFeatureState(
+      { source: 'parcels', id: hoveredParcelId },
+      { hover: false }
+    );
+  }
+
+  // Set hover state on the new parcel
+  map.setFeatureState(
+    { source: 'parcels', id },
+    { hover: true }
+  );
+
+  hoveredParcelId = id;
+});
+
+// When the mouse leaves the layer, clear the hover state
+map.on('mouseleave', 'parcels-fill', () => {
+  if (hoveredParcelId !== null) {
+    map.setFeatureState(
+      { source: 'parcels', id: hoveredParcelId },
+      { hover: false }
+    );
+    hoveredParcelId = null;
+  }
+});
+```
+
+### What this does
+
+1. **`feature.id`** is now the `parcel_id` because of `promoteId`.
+2. `setFeatureState` receives the correct id, so the paint expression (`feature-state`) evaluates to `true` and the colour changes.
+3. When you move off the feature, we reset the state so only one parcel is highlighted at a time.
+
+---
+
+## 5. Verifying that the state is really set
+
+```js
+// Somewhere else (e.g., a button click) you can read the state:
+if (hoveredParcelId !== null) {
+  const state = map.getFeatureState({ source: 'parcels', id: hoveredParcelId });
+  console.log('Current state for', hoveredParcelId, state);
+}
+```
+
+If `promoteId` is missing, `state` will always be `{}` even though you called `setFeatureState`. With `promoteId` present you’ll see `{ hover: true }`.
+
+---
+
+## 6. Common pitfalls & checklist
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `setFeatureState` does nothing, no console error | No `id` on the feature (no `promoteId` or top‑level `id`) | Add `promoteId: 'parcel_id'` (or give each feature an `id`). |
+| Hover works once, then stops after a `setData` call | Feature ids were generated (`generateId:true`) and got re‑assigned on the new data | Use `promoteId` instead of `generateId`. |
+| Paint expression never sees `hover` even though you call `setFeatureState` | Layer’s paint does not reference `feature-state` or uses a different key name | Ensure the expression uses `['feature-state', 'hover']`. |
+| Hover works but the colour is wrong | `glyphs`/`sprite` missing (only affects symbols) – not relevant for fills. | Not applicable. |
+| `setFeatureState` throws “source not found” | Source name typo or source not yet added when you call it | Call after `map.on('load')` and after the source is added. |
+| Hover works on desktop but not on mobile | `mousemove` never fires on touch devices | Use `touchstart`/`touchend` or `mouseenter`/`mouseleave` events. |
+| State disappears after zoom/pan | You called `setData` on the source (e.g., to filter) which clears state | Preserve state yourself or avoid resetting the source while hover is active. |
+
+---
+
+## 7. Full minimal working example (copy‑paste)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>Parcel hover with feature‑state</title>
+  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+<script>
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://demotiles.maplibre.org/style.json', // any base style
+    center: [-122.45, 37.78],
+    zoom: 12
+  });
+
+  map.on('load', () => {
+    // 1️⃣ Add the GeoJSON source with promoteId
+    map.addSource('parcels', {
+      type: 'geojson',
+      data: 'https://raw.githubusercontent.com/public-data/geojson-samples/main/parcels.geojson',
+      promoteId: 'parcel_id'
+    });
+
+    // 2️⃣ Add a fill layer that reacts to the hover state
+    map.addLayer({
+      id: 'parcels-fill',
+      type: 'fill',
+      source: 'parcels',
+      paint: {
+        'fill-color': [
+          'case',
+          ['boolean', ['feature-state', 'hover'], false],
+          '#ff8800',   // highlighted
+          '#3388ff'    // default
+        ],
+        'fill-opacity': 0.5
+      }
+    });
+
+    // 3️⃣ Hover handling
+    let hoveredId = null;
+
+    map.on('mousemove', 'parcels-fill', (e) => {
+      if (!e.features.length) return;
+      const id = e.features[0].id; // <-- comes from parcel_id
+
+      if (hoveredId !== null && hoveredId !== id) {
+        map.setFeatureState({ source: 'parcels', id: hoveredId }, { hover: false });
+      }
+
+      map.setFeatureState({ source: 'parcels', id }, { hover: true });
+      hoveredId = id;
+    });
+
+    map.on('mouseleave', 'parcels-fill', () => {
+      if (hoveredId !== null) {
+        map.setFeatureState({ source: 'parcels', id: hoveredId }, { hover: false });
+        hoveredId = null;
+      }
+    });
+  });
+</script>
+</body>
+</html>
+```
+
+Open the page, move the mouse over a parcel polygon, and you’ll see it turn orange. Open the console and run:
+
+```js
+map.getFeatureState({ source: 'parcels', id: hoveredId })
+```
+
+while a parcel is hovered – you’ll get `{ hover: true }`.
+
+---
+
+## 8. Quick checklist you can run in the console
+
+```js
+// 1️⃣ Does the source have promoteId?
+map.getSource('parcels')._options.promoteId   // should be ""parcel_id""
+
+// 2️⃣ Does a feature actually have an id after the source is loaded?
+map.queryRenderedFeatures({ layers: ['parcels-fill'] })[0].id   // should be the parcel_id value
+
+// 3️⃣ Can you set a state manually?
+map.setFeatureState({ source: 'parcels', id: map.queryRenderedFeatures({ layers: ['parcels-fill'] })[0].id }, { hover: true });
+console.log(map.getFeatureState({ source: 'parcels', id: ... }));
+```
+
+If any of those steps return `undefined` or an empty object, the missing piece is **the id** – i.e. `promoteId`.
+
+---
+
+### TL;DR Recap
+
+1. **Give the features an id** – the easiest way is `promoteId: 'parcel_id'` when you add the GeoJSON source.  
+2. **Use that id** in `setFeatureState({source, id}, {hover:true})`.  
+3. Make sure your layer’s paint expression actually reads `['feature-state', 'hover']`.  
+4. Reset the state on `mouseleave` (or when you change the hovered feature).  
+
+Once those three pieces line up, hover highlighting works reliably and `getFeatureState` will return the state you set. Happy mapping!",PASS,1.00,,All assertions passed,

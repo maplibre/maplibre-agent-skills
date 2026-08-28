@@ -1,24 +1,34 @@
 ---
 name: maplibre-source-wiring
-description: Getting a MapLibre GL JS source to actually render — TileJSON `url` versus hand-wired `tiles` templates, matching `source-layer` names to the tile schema, layer order and inserting below labels, and the CORS and glyph failures behind a blank map. Use when a source is configured but nothing is drawing.
-status: provisional
+description: Getting a MapLibre GL JS source to actually render — TileJSON `url` versus hand-wired `tiles` templates, matching `source-layer` names to the tile schema, layer order and inserting below labels, `promoteId` and the feature ids that feature state needs, and the CORS and glyph failures behind a blank map. Use when a source is configured but nothing is drawing, or when setFeatureState does nothing.
+status: verified
 ---
 
 # MapLibre Source Wiring
 
-You have a tile URL or a data file and a style, and the map is blank, missing labels, or
-drawing in the wrong order. This skill covers connecting a source to a style correctly and
-the failure modes that look identical from the outside.
-
-For choosing a source type, see [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md).
+You have a tile URL or a data file and a style, and the map is blank, drawing at the wrong
+scale, or drawing in the wrong order. This skill covers connecting a source to a style
+correctly, and the failure modes that look identical from the outside.
 
 ## When to Use This Skill
 
-- The map loads but no tiles or features appear
+The source is already configured and the map is wrong in a way that produces no error. These are
+symptoms as you would observe them, before you know the cause:
+
+- The map is blank, or a layer you added draws nothing, and the console is clean
 - A custom style renders nothing against a tile source that works with the provider's own style
-- Your data layer covers up street names and labels
-- Labels or icons are missing while tiles render fine
-- Deciding between a `tiles` array and a TileJSON `url` in a source definition
+- The basemap is blurry, or sits at a different scale than everything drawn on top of it
+- Data you added has covered the street names
+- Icons are missing while the rest of the map draws fine
+- Hover or click highlighting does nothing at all, and no error is raised
+- You have a tile endpoint and are unsure which source type it needs, or whether to point `url`
+  at its TileJSON instead of hand-writing `tiles`
+
+**Not this skill.** Text in the wrong font, missing scripts, or self-hosting glyph
+PBFs — [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md). Deciding the colors, type,
+and drawing order of a style you are designing — [maplibre-cartography](../maplibre-cartography/SKILL.md).
+Deciding whether a dataset belongs in GeoJSON or vector tiles at
+all — [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md).
 
 ## Referencing tiles: `url` vs `tiles`
 
@@ -116,6 +126,28 @@ Two raster-specific pitfalls that wire without error but render wrong or against
 
 **A raster endpoint's name is not its type.** An endpoint named "hillshade," "terrain," or similar is not necessarily a `raster-dem` source. `raster-dem` requires the tiles to encode elevation as pixel-packed RGB (Mapbox or Terrarium encoding) in PNG or WebP — TileJSON's `encoding` field, when present, names which. A tile format that can't hold that encoding (JPEG, for instance) with no `encoding` field is ordinary `raster` imagery whatever the endpoint is named — a "hillshade" endpoint is often a pre-rendered hillshade _image_, not raw elevation data for MapLibre to shade client-side. Check the tile format and any `encoding` field before treating a name as evidence of `raster-dem`.
 
+## Feature state: the source needs an id, and `promoteId` is usually how it gets one
+
+`setFeatureState` and the `feature-state` expression key on a feature's **`id`** — a top-level member of the feature object, not a value inside `properties`. A source whose features have no id gives `setFeatureState` nothing to attach to, so it fails silently: no console error, the paint expression never fires, and `getFeatureState` returns empty.
+
+**Set `promoteId` to the property you already key on.** It tells MapLibre to use that property as the feature id, and it is the right answer whenever the identifier lives in `properties`:
+
+```js
+map.addSource('parcels', {
+  type: 'geojson',
+  data: parcels,
+  promoteId: 'parcel_id'
+});
+map.setFeatureState({ source: 'parcels', id: 'APN-1234' }, { hover: true });
+```
+
+For a vector source, `promoteId` is either a property name applied across all source-layers, or an object of the form `{<sourceLayer>: <propertyName>}`.[9]
+
+**Do not reach for `generateId` or a hand-written `id` when a business key exists.** Both look like fixes and both fail this case:
+
+- `generateId: true` assigns ids **by index in the `features` array, overwriting any existing values**.[9] The ids are not stable across a `setData` that reorders, filters, or appends, so state silently attaches to the wrong feature after an update.
+- Writing a top-level `id` works only for integers: without `promoteId`, a feature's id "must be an integer or a string that can be cast to an integer."[9] A key like `APN-1234` is accepted and then never matches. With `promoteId` the value may be any primitive.
+
 ## CORS
 
 If your tiles, glyphs, or sprites are on a different origin, the server must send CORS headers (`Access-Control-Allow-Origin`). Otherwise the browser blocks the requests and the map is blank or missing labels.
@@ -137,6 +169,7 @@ Work down this list — the symptoms overlap heavily:
 | Data draws but hides labels                   | Layer order; insert before the first `symbol` layer                  |
 | Vector source draws nothing, raster fine      | `source-layer` missing entirely — it is required for vector sources  |
 | Raster tiles render a zoom level off          | Missing `tileSize: 256` on a classic 256px source (default is 512)   |
+| `setFeatureState` does nothing, no error      | Features have no `id`; set `promoteId` to the identifying property   |
 
 ## Related Skills
 
@@ -148,13 +181,14 @@ Work down this list — the symptoms overlap heavily:
 ## References
 
 1. **MapLibre Style Specification** — [maplibre.org/maplibre-style-spec/](https://maplibre.org/maplibre-style-spec/)
-2. **TileJSON specification** — [github.com/mapbox/tilejson-spec](https://github.com/mapbox/tilejson-spec)
-3. **Slippy map tilenames (Z/X/Y scheme)** — [OpenStreetMap wiki](https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames)
+2. **TileJSON specification** — [specification repository on GitHub](https://github.com/mapbox/tilejson-spec)
+3. **Slippy map tile naming (Z/X/Y scheme)** — [OpenStreetMap wiki](https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames)
 4. **OpenMapTiles schema** — [openmaptiles.org/schema/](https://openmaptiles.org/schema/)
 5. **Shortbread tile schema** — [shortbread-tiles.org](https://shortbread-tiles.org/)
 6. **Protomaps basemap layers** — [docs.protomaps.com/basemaps/layers](https://docs.protomaps.com/basemaps/layers)
 7. **Martin tile server** (TileJSON endpoints) — [maplibre.org/martin/](https://maplibre.org/martin/)
 8. **MapLibre GL JS docs** — [maplibre.org/maplibre-gl-js/docs/](https://maplibre.org/maplibre-gl-js/docs/)
+9. **`promoteId`, `generateId`, and `feature-state`** — [Style Specification: sources](https://maplibre.org/maplibre-style-spec/sources/) and [expressions](https://maplibre.org/maplibre-style-spec/expressions/)
 
 ---
 

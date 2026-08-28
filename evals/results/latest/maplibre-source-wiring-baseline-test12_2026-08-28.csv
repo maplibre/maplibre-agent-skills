@@ -1,0 +1,264 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"implicit — gdal2tiles output is TMS, MapLibre defaults to XYZ",skills/maplibre-source-wiring/SKILL.md,false,"I generated raster tiles from a GeoTIFF with gdal2tiles.py and I'm serving them at https://example.com/tiles/{z}/{x}/{y}.png. In MapLibre every tile loads — all 200s in the network tab, no CORS errors — but the imagery is in the wrong place. It looks mirrored top-to-bottom: what should be at the north edge of the map is drawn at the south. What's wrong with my source?
+","Thinking: We need to answer: user generated raster tiles from GeoTIFF with gdal2tiles.py, serving at URL pattern. In MapLibre, tiles load but imagery is mirrored top-to-bottom (north appears south). Likely the tiles are flipped vertically because of TMS vs XYZ scheme. gdal2tiles defaults to TMS (origin bottom-left) while MapLibre expects XYZ (origin top-left). Need to set --xyz flag when generating tiles, or adjust tile URL scheme, or set tile scheme in source: ""scheme"": ""tms"". Also need to ensure correct projection (Web Mercator EPSG:3857). So answer: they used TMS scheme, causing vertical flip. Use gdal2tiles.py -z ... --xyz or set ""scheme"": ""tms"" in source. Also ensure correct tile matrix set. Provide details.
+
+Let's craft answer: explain difference between TMS and XYZ, how gdal2tiles default, how MapLibre expects XYZ, how to fix: regenerate with --xyz, or add ""scheme"":""tms"" to source, or use tilejson with ""tiles"":..., ""scheme"":""tms"". Also mention that if using raster-dem, need to set ""bounds"" correctly. Provide example MapLibre source config.
+
+Also mention that if using raster-dem with ""type"":""raster"", ""tiles"":..., ""tileSize"":256, ""scheme"":""tms"". Or use ""url"": ""https://example.com/tiles/{z}/{x}/{-y-1}.png""? Actually MapLibre supports ""scheme"":""tms"". So answer accordingly.
+
+Let's produce final.
+
+### TL;DR  
+You generated the tiles in **TMS** order (origin = bottom‑left) while MapLibre (and most web‑maps) expect **XYZ** order (origin = top‑left). The result is a north‑south flip – everything that should be at the top of the map ends up at the bottom.
+
+Fix it by either  
+
+* **Regenerating the tiles with the `--xyz` switch** (the easiest, most future‑proof way), **or**  
+* **Telling MapLibre that the tiles are in TMS order** (`""scheme"": ""tms""` in the source definition).
+
+Below is a quick checklist, the exact cause, and the two ways to solve it.
+
+---
+
+## 1. Why the image is mirrored
+
+| Tool / library | Tile origin convention |
+|----------------|------------------------|
+| **gdal2tiles.py** (default) | **TMS** – Y = 0 at the *south* edge (bottom‑left) |
+| **MapLibre GL JS**, **Mapbox GL**, **Leaflet**, **OpenLayers** (default) | **XYZ** – Y = 0 at the *north* edge (top‑left) |
+
+When you run `gdal2tiles.py` without any extra options it writes the tiles using the TMS scheme. The URL pattern you gave MapLibre (`https://example.com/tiles/{z}/{x}/{y}.png`) is interpreted as XYZ, so MapLibre asks for the *same* Y index that the TMS tiles consider the *opposite* row. The tiles therefore appear vertically flipped.
+
+> **Bottom line:** the tile matrix set you produced is “TMS”, but MapLibre is reading it as “XYZ”.
+
+---
+
+## 2. Two ways to make them line up
+
+### A. Regenerate the tiles in XYZ order (recommended)
+
+```bash
+gdal2tiles.py --xyz -z 0-14 -w none path/to/input.tif /path/to/output/tiles
+```
+
+* `--xyz` tells GDAL to write the tiles with Y = 0 at the north edge (the same convention MapLibre uses).  
+* `-w none` skips the HTML preview that GDAL creates (optional).  
+* `-z` limits the zoom levels you need.
+
+After that, keep the same URL template:
+
+```js
+{
+  id: 'my-raster',
+  type: 'raster',
+  source: 'my-raster-source',
+  paint: {}
+},
+{
+  id: 'my-raster-source',
+  type: 'raster',
+  tiles: ['https://example.com/tiles/{z}/{x}/{y}.png'],
+  tileSize: 256,
+  // no need for a scheme property – XYZ is the default
+}
+```
+
+### B. Keep the TMS tiles and tell MapLibre to treat them as TMS
+
+If you cannot (or do not want to) rebuild the tiles, just add the `scheme` property to the source definition:
+
+```js
+{
+  id: 'my-raster-source',
+  type: 'raster',
+  tiles: ['https://example.com/tiles/{z}/{x}/{y}.png'],
+  tileSize: 256,
+  scheme: 'tms'   // <‑‑ this flips the Y index for you
+}
+```
+
+MapLibre will automatically convert the XYZ request it makes into the TMS Y index (`y = (2^z - 1) - y_xyz`). The imagery will then appear in the correct orientation.
+
+> **Note:** The `scheme` property is part of the **MapLibre Style Specification** (v8+). It works for raster, vector, and geojson sources alike.
+
+---
+
+## 3. Quick sanity‑check checklist
+
+| ✅ | Check |
+|---|-------|
+| **Projection** | Tiles must be in Web Mercator (EPSG:3857). `gdal2tiles.py` does this automatically if the source GeoTIFF is in EPSG:4326 or EPSG:3857. |
+| **Tile size** | 256 × 256 (or 512 if you set `tileSize: 512`). |
+| **Zoom range** | Make sure the `minzoom`/`maxzoom` in your style matches the zoom levels you generated (`-z` flag). |
+| **CORS** | Already OK – you said you get 200s and no CORS errors. |
+| **URL pattern** | `{z}/{x}/{y}.png` (or `{z}/{x}/{-y-1}.png` if you want to keep the XYZ URL but feed TMS tiles without using `scheme`). |
+| **Cache busting** | If you change the tile set, purge any CDN or browser cache, otherwise you’ll keep seeing the old (flipped) tiles. |
+
+---
+
+## 4. Example: Full MapLibre style snippet
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""my-raster"": {
+      ""type"": ""raster"",
+      ""tiles"": [
+        ""https://example.com/tiles/{z}/{x}/{y}.png""
+      ],
+      ""tileSize"": 256,
+      ""scheme"": ""tms""   // <-- remove this line if you regenerated with --xyz
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""my-raster-layer"",
+      ""type"": ""raster"",
+      ""source"": ""my-raster""
+    }
+  ]
+}
+```
+
+---
+
+## 5. Why the `--xyz` flag exists
+
+`gdal2tiles.py` was originally written for the **TMS** tiling scheme (used by early Google Maps, OpenStreetMap’s “Tile Map Service” spec, etc.). As the XYZ convention became dominant, the `--xyz` switch was added (since GDAL 2.2). It simply flips the Y index while writing the files, so the on‑disk layout matches what modern web‑maps expect.
+
+---
+
+## 6. TL;DR code you can copy‑paste
+
+```bash
+# 1️⃣ Regenerate (preferred)
+gdal2tiles.py --xyz -z 0-12 -w none my.tif ./tiles
+
+# 2️⃣ Or keep existing tiles and tell MapLibre:
+#    (add ""scheme"":""tms"" to the source definition)
+```
+
+That’s it – once the scheme matches, the north‑south orientation will be correct and your raster will line up with the basemap. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+implicit — setFeatureState silently does nothing without a feature id,skills/maplibre-source-wiring/SKILL.md,false,"I have a GeoJSON source of parcel polygons and I want to highlight one on hover using map.setFeatureState(). Each feature has a `parcel_id` in its properties. I call setFeatureState with that value and nothing happens — no error in the console, the paint expression never picks it up, and reading the state back comes up empty. What am I missing?
+","Thinking: We need to answer: user has GeoJSON source of parcel polygons, wants to highlight on hover using map.setFeatureState(). Each feature has a parcel_id property. They call setFeatureState with that value and nothing happens. No error, paint expression never picks it up, reading state back empty. What are they missing? Likely need to use feature.id, not a property. setFeatureState works with feature IDs, not arbitrary property values. Must ensure source features have an 'id' property (or set 'generateId' true). For GeoJSON source, you can set `generateId: true` when adding source, then each feature gets a unique numeric id. Or you can assign an `id` property to each feature (top-level property, not inside properties). Then use that id in setFeatureState. Also need to use `source-layer` only for vector tiles, not for GeoJSON. For GeoJSON, you just use source name. Also need to ensure the layer's filter includes the feature. But main issue: using parcel_id property instead of feature id. So answer: need to set feature.id, not property, and call setFeatureState with that id. Also ensure you use map.getSource('source-id').setData if needed. Provide code example.
+
+Explain that setFeatureState works only on features that have an id. For GeoJSON, you can add `generateId: true` when adding source, or manually assign `id` to each feature. Then on hover, get the feature from queryRenderedFeatures, get its id, then setFeatureState({source: 'parcels', id: feature.id}, {hover: true}); and reset previous. Also ensure paint expression uses ['case', ['boolean', ['feature-state', 'hover'], false], 'highlight-color', 'default-color'].
+
+Also mention that you cannot use property values directly; you must use feature.id. Also note that you need to use map.on('mousemove', ...) and map.on('mouseleave') to clear state.
+
+Thus answer: missing feature id. Provide steps.
+
+`setFeatureState()` does **not** look at the properties of a feature – it only works on a feature that has an **`id`** (the feature‑level `id`, not a property inside `properties`).  
+If the feature you are trying to highlight has only a `parcel_id` property, Mapbox GL JS has nothing to attach the state to, so the call succeeds silently, the paint expression never sees the state, and `getFeatureState()` returns `{}`.
+
+### What you need to do
+
+1. **Give every feature an `id`.**  
+   *Either* let Mapbox generate one for you, *or* set it yourself.
+
+   ```js
+   // 1️⃣ Let Mapbox generate numeric ids (simplest)
+   map.addSource('parcels', {
+     type: 'geojson',
+     data: parcelsGeojson,
+     generateId: true          // <‑‑ this adds a unique numeric id to each feature
+   });
+   ```
+
+   ```js
+   // 2️⃣ Or assign your own id (e.g. the parcel_id) when you build the GeoJSON
+   const parcelsGeojson = {
+     type: 'FeatureCollection',
+     features: rawParcels.map(p => ({
+       type: 'Feature',
+       id: p.parcel_id,          // <-- top‑level id, NOT inside properties
+       properties: { ...p },
+       geometry: p.geometry
+     }))
+   };
+   map.addSource('parcels', {
+     type: 'geojson',
+     data: parcelsGeojson
+   });
+   ```
+
+2. **Use that `id` when you call `setFeatureState`.**  
+   The typical hover pattern looks like this:
+
+   ```js
+   let hoveredId = null;
+
+   map.on('mousemove', 'parcel-fill', (e) => {
+     if (!e.features.length) return;
+
+     const feature = e.features[0];
+     const id = feature.id;               // <-- the id we just ensured exists
+
+     // If we moved to a new feature, clear the old state first
+     if (hoveredId !== null && hoveredId !== id) {
+       map.setFeatureState(
+         { source: 'parcels', id: hoveredId },
+         { hover: false }
+       );
+     }
+
+     // Set hover state on the new feature
+     map.setFeatureState(
+       { source: 'parcels', id },
+       { hover: true }
+     );
+
+     hoveredId = id;
+   });
+
+   // When the mouse leaves the layer, clear the state
+   map.on('mouseleave', 'parcel-fill', () => {
+     if (hoveredId !== null) {
+       map.setFeatureState(
+         { source: 'parcels', id: hoveredId },
+         { hover: false }
+       );
+       hoveredId = null;
+     }
+   });
+   ```
+
+3. **Reference the state in your paint expression.**  
+   For a polygon fill layer you could do:
+
+   ```js
+   map.addLayer({
+     id: 'parcel-fill',
+     type: 'fill',
+     source: 'parcels',
+     paint: {
+       'fill-color': [
+         'case',
+         ['boolean', ['feature-state', 'hover'], false],
+         '#ffcc00',          // highlighted colour
+         '#888888'           // default colour
+       ],
+       'fill-opacity': 0.6
+     }
+   });
+   ```
+
+### Quick checklist of common pitfalls
+
+| Pitfall | Why it fails | Fix |
+|---------|--------------|-----|
+| Using `parcel_id` (or any other property) as the identifier in `setFeatureState` | `setFeatureState` expects the **feature id**, not a property value | Add an `id` to each feature (or `generateId: true`) and pass that id |
+| Forgetting `generateId` when adding a GeoJSON source | Features have no id → state can’t be attached | Add `generateId: true` or manually set `id` |
+| Using `source-layer` in the `setFeatureState` call for a GeoJSON source | `source-layer` only applies to vector tile sources | Omit `source-layer` (just `{source: 'parcels', id: …}`) |
+| Not clearing the previous hover state | The old feature stays “hovered” and you see no change when moving | Keep track of the previous `hoveredId` and reset it as shown above |
+| Paint expression checks the wrong key (`['feature-state', 'selected']` vs `'hover'`) | State never matches the expression | Ensure the key you set (`hover`) matches the one you read in the expression |
+
+### TL;DR
+
+- **`setFeatureState` works on feature **ids**, not on arbitrary properties.**
+- Add an `id` to each parcel feature (`generateId: true` is the easiest way for a GeoJSON source).
+- Use that `id` in `setFeatureState`/`getFeatureState`.
+- Then your paint expression (`['feature-state', 'hover']`) will react as expected.
+
+Once the features have proper ids, the hover highlight will work instantly. Happy mapping! 🚀",FAIL,0.40,,"The output correctly explains that `setFeatureState` requires a feature `id`, which is a top-level property of a GeoJSON feature, not a value within the `properties` object. It correctly identifies that the user's `parcel_id` is a property and thus not directly usable by `setFeatureState` without further configuration. The output suggests using `generateId: true` or manually assigning an `id` as valid solutions. However, it fails to mention `promoteId: 'parcel_id'` as a direct fix when the desired ID is already a property, which is explicitly requested in the rubric. While the other points about what *not* to attribute the issue to are implicitly handled by focusing on the correct cause, the omission of `promoteId` is a direct miss.",
