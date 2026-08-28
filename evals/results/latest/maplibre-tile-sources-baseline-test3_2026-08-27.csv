@@ -1,0 +1,269 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,false,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","Thinking: The user wants to know best pipeline to merge OSM data with custom polygons (delivery zones) and produce a single vector tileset containing roads, water, labels, and custom polygons, so map only hits one source. Need to suggest tools: OSM data extraction (planet, extracts), use osm2pgsql, imposm3, or osmium to import into PostGIS. Then load custom polygons into PostGIS. Use tippecanoe or tilemaker or t-rex (TileServer GL) to generate vector tiles. Or use OpenMapTiles pipeline (Docker) and add custom layers via SQL in the schema. Or use Planetiler (Java) for custom pipelines. Or use Tilemaker with custom config. Or use Tegola. Provide steps: 1) Get OSM data (Geofabrik, BBBike). 2) Set up PostgreSQL/PostGIS. 3) Import OSM using osm2pgsql with style (osm2pgsql style file) or imposm3 for flexible schema. 4) Load custom polygons (delivery zones) as a separate table, ensure SRID matches (4326). 5) Create a vector tile schema: either use OpenMapTiles schema and add custom tables, or define your own using SQL functions. 6) Use a tile generation tool: tippecanoe (for static MBTiles) or t-rex (dynamic). For dynamic serving, use t-rex or tegola. For static MBTiles, tippecanoe can combine multiple layers from PostGIS via ogr2ogr or pgsql2shp? Actually tippecanoe reads GeoJSON/NDJSON; you can export from PostGIS to GeoJSON via ogr2ogr or pgsql2geojson. Or use tilemaker which reads OSM PBF directly and can add custom layers via Lua scripts. But merging OSM and custom polygons: easiest is to import both into PostGIS and use t-rex to generate vector tiles on the fly, with a config that defines layers (roads, water, labels, delivery_zones). Or pre-generate MBTiles with tippecanoe: export OSM data to GeoJSON using osmium export or ogr2ogr, then combine with custom polygons, then tippecanoe.
+
+Provide pipeline options:
+
+Option A: OpenMapTiles + custom layer: Use OSM data via OSM2pgsql into PG, run openmaptiles-tools Docker to generate tiles, add custom SQL view for delivery zones, modify layer config.
+
+Option B: Planetiler: Java pipeline that reads OSM PBF, merges with PostGIS custom data, outputs MBTiles.
+
+Option C: Tilemaker + custom Lua: Use tilemaker to generate vector tiles from OSM PBF, then add custom polygons via Lua script that reads from a GeoJSON file.
+
+Explain pros/cons: static vs dynamic, update frequency, size, performance.
+
+Give step-by-step commands, Docker compose, sample config files, SQL for custom view, tippecanoe command.
+
+Also mention labeling: use OpenMapTiles labeling or generate separate label layer from OSM name tags.
+
+Provide suggestions for handling projection (Web Mercator EPSG:3857), tile format (MVT), zoom levels.
+
+Also mention CI/CD: use GitHub Actions to rebuild tiles on OSM updates.
+
+Provide final answer with pipeline diagram.
+
+Let's craft answer.
+
+Below is a **complete, production‑ready pipeline** that lets you:
+
+* Pull the latest OpenStreetMap data you need (roads, water, place‑names, etc.).
+* Join it with **your own delivery‑zone polygons** (or any other private data).
+* Emit **one vector‑tile source** (MVT/MBTiles or on‑the‑fly tiles) that you can point a single `source` at in Mapbox‑GL/MapLibre.
+
+The pipeline is modular, works on a single machine or in Docker/Kubernetes, and can be run **once to produce a static MBTiles file** or **continuously to serve tiles from PostGIS**. Choose the flavour that matches your update cadence and hosting model.
+
+---
+
+## 1. High‑level architecture
+
+```
++-------------------+      +-------------------+      +-------------------+
+|  OSM planet /     |      |  Your delivery   |      |  Tile generation  |
+|  regional .pbf   | ---> |  zone polygons   | ---> |  (Tippecanoe /   |
+|  (Geofabrik,      |      |  (GeoJSON/SQL)   |      |   t-rex / Tegola) |
+|   BBBike, etc.)   |      +-------------------+      +-------------------+
+          |                                   |
+          v                                   v
+   +-------------------+               +-------------------+
+   |  PostgreSQL +     |               |  PostGIS (optional)|
+   |  PostGIS          |               |  (if you want    |
+   |  (osm2pgsql /    |               |   on‑the‑fly)    |
+   |   imposm3)        |               +-------------------+
+   +-------------------+
+          |
+          v
+   +-------------------+
+   |  Vector‑tile engine|
+   |  (t-rex, Tegola,   |
+   |   TileServer GL)   |
+   +-------------------+
+          |
+          v
+   +-------------------+
+   |  MBTiles (static) |
+   |  or HTTP tile URL |
+   +-------------------+
+```
+
+* **OSM → PostGIS** – Import the OSM extract you care about (country, state, city…) with a tool that gives you a clean, queryable schema.
+* **Delivery zones → PostGIS** – Load your private polygons into the same database (same SRID, same tile‑generation view).
+* **Tile engine** – Either (a) **pre‑render** an MBTiles file with **Tippecanoe** (static, CDN‑friendly) or (b) **serve on‑the‑fly** with **t‑rex** / **Tegola** (dynamic, easy to keep fresh).
+
+Both approaches end up with **one vector‑tile source** that you can reference in your client code.
+
+---
+
+## 2. Choose your “import” tool
+
+| Tool | Why you might pick it | Quick start |
+|------|----------------------|-------------|
+| **osm2pgsql** | Mature, fast, works with the classic “osm2pgsql style” (hstore) → easy to add custom columns. | `osm2pgsql -d osm -U postgres -H localhost -P 5432 --create --slim -C 2000 --hstore your‑region.osm.pbf` |
+| **imposm3** | Schema‑first, you write a **mapping.json** that defines exactly which tags become which tables/columns. Great for custom layers. | `imposm3 import -connection postgis://user:pass@localhost/osm -mapping mapping.json -read your‑region.osm.pbf -write -optimize` |
+| **Planetiler** (Java) | Full pipeline in code – you can read OSM *and* any PostGIS table in the same pass, then output MBTiles directly. | See the “Planetiler” section below. |
+
+**Most people start with `osm2pgsql`** because it’s a single command, gives you a ready‑made `planet_osm_*` schema, and you can later add a view for your custom polygons.
+
+---
+
+## 3. Load your delivery‑zone polygons
+
+Assume you have a GeoJSON (or Shapefile, GPX, etc.) called `delivery_zones.geojson`.
+
+```bash
+# 1️⃣ Create a table
+psql -d osm -c ""
+CREATE TABLE delivery_zones (
+    id serial PRIMARY KEY,
+    name text,
+    zone_type text,
+    geom geometry(MultiPolygon, 4326)
+);""
+
+# 2️⃣ Import (ogr2ogr works with PostGIS directly)
+ogr2ogr -f ""PostgreSQL"" PG:""dbname=osm user=postgres"" \
+        -nln delivery_zones -nlt MULTIPOLYGON -lco GEOMETRY_NAME=geom \
+        -lco FID=id -lco PRECISION=NO \
+        delivery_zones.geojson
+```
+
+*Make sure the SRID of `geom` is `4326` (WGS‑84). The tile generators will re‑project on the fly to Web‑Mercator (EPSG:3857).*
+
+If you already have the polygons in a PostGIS database elsewhere, just `INSERT … SELECT …` into the same DB.
+
+---
+
+## 4. Build a **single** vector‑tile view
+
+All tile engines work off a **SQL view** (or a set of views) that returns:
+
+| column | type | meaning |
+|--------|------|---------|
+| `id`   | `bigint` | unique feature id (must be stable) |
+| `geom` | `geometry` (Web‑Mercator) | geometry to be tiled |
+| `layer`| `text` | name of the MVT layer (e.g., `roads`, `water`, `labels`, `delivery_zones`) |
+| `tags` | `jsonb` | all properties you want to expose |
+
+Below is a **single view** that merges the four layers you asked for. Adjust the column names to match your `osm2pgsql` schema (the example uses the default `planet_osm_*` tables).
+
+```sql
+-- 1️⃣ Re‑project everything to EPSG:3857 (the tile coordinate system)
+CREATE OR REPLACE VIEW public.vector_tiles AS
+SELECT
+    -- Roads -------------------------------------------------
+    osm.way_id   AS id,
+    ST_Transform(osm.way, 3857) AS geom,
+    'roads'      AS layer,
+    jsonb_build_object(
+        'highway', osm.highway,
+        'name',    osm.name,
+        'ref',     osm.ref,
+        'oneway',  osm.oneway,
+        'lanes',   osm.lanes
+    ) AS tags
+FROM planet_osm_line AS osm
+WHERE osm.highway IS NOT NULL
+
+UNION ALL
+
+-- Water (rivers, lakes, coastlines) -------------------------
+SELECT
+    water.osm_id AS id,
+    ST_Transform(water.way, 3857) AS geom,
+    'water'      AS layer,
+    jsonb_build_object(
+        'waterway', water.waterway,
+        'natural',  water.natural,
+        'name',     water.name
+    ) AS tags
+FROM planet_osm_line AS water
+WHERE water.waterway IS NOT NULL
+   OR water.natural IN ('water', 'coastline')
+
+UNION ALL
+
+-- Labels (places, POIs) ------------------------------------
+SELECT
+    p.osm_id   AS id,
+    ST_Transform(p.way, 3857) AS geom,
+    'labels'   AS layer,
+    jsonb_build_object(
+        'place',   p.place,
+        'name',    p.name,
+        'amenity', p.amenity,
+        'shop',    p.shop,
+        'tourism', p.tourism,
+        'addr:housenumber', p.""addr:housenumber"",
+        'addr:street',      p.""addr:street""
+    ) AS tags
+FROM planet_osm_point AS p
+WHERE p.place IS NOT NULL
+   OR p.amenity IS NOT NULL
+   OR p.shop IS NOT NULL
+   OR p.tourism IS NOT NULL
+
+UNION ALL
+
+-- Delivery zones (your private polygons) -------------------
+SELECT
+    dz.id      AS id,
+    ST_Transform(dz.geom, 3857) AS geom,
+    'delivery_zones' AS layer,
+    jsonb_build_object(
+        'name',      dz.name,
+        'zone_type', dz.zone_type
+    ) AS tags
+FROM delivery_zones AS dz;
+```
+
+**Why a single view?**  
+*Tile engines like **t‑rex**, **Tegola**, or **TileServer‑GL** can read a view that already contains a `layer` column, so they automatically split features into separate MVT layers without you writing multiple SQL files.*
+
+---
+
+## 5. Tile‑generation options
+
+### 5A. **Static MBTiles** – Tippecanoe (fast, CDN‑ready)
+
+If you want a single `.mbtiles` file you can host on S3, Cloudflare, or any static web server:
+
+1. **Export the view to GeoJSON/NDJSON** (Tippecanoe reads line‑delimited GeoJSON).
+
+```bash
+# Export each layer separately (helps with attribute filtering)
+psql -d osm -c ""\copy (
+    SELECT jsonb_build_object(
+        'type','Feature',
+        'id', id,
+        'geometry', ST_AsGeoJSON(geom)::json,
+        'properties', tags
+    )
+    FROM vector_tiles
+    WHERE layer = 'roads'
+) TO STDOUT"" > roads.ndjson
+
+psql -d osm -c ""\copy (
+    SELECT jsonb_build_object(
+        'type','Feature',
+        'id', id,
+        'geometry', ST_AsGeoJSON(geom)::json,
+        'properties', tags
+    )
+    FROM vector_tiles
+    WHERE layer = 'water'
+) TO STDOUT"" > water.ndjson
+
+# repeat for labels & delivery_zones …
+```
+
+2. **Run Tippecanoe** – you can feed all layers at once; Tippecanoe will keep the `layer` name you set in the `properties` object.
+
+```bash
+tippecanoe \
+  --output combined.mbtiles \
+  --layer roads          roads.ndjson \
+  --layer water          water.ndjson \
+  --layer labels         labels.ndjson \
+  --layer delivery_zones delivery_zones.ndjson \
+  --drop-densest-as-needed \
+  --maximum-zoom=14 \
+  --minimum-zoom=5 \
+  --force
+```
+
+*Tippecanoe automatically compresses to MVT, builds overzoom levels, and writes a single MBTiles file.*
+
+**Pros**
+
+* Tiny, immutable artifact – perfect for CDNs.
+* No DB at runtime → cheap hosting (static site, Netlify, Vercel).
+
+**Cons**
+
+* To update OSM or your zones you must rebuild the MBTiles.
+* Large extracts (country‑wide) can become > 5 GB; you may need to split by region.
+
+---
+
+### 5B. **Dynamic tiles from PostGIS** – t‑rex (fast, low‑memory)
+
+If you need **frequent updates",FAIL,0.00,,"The output incorrectly suggests merging application-specific data (delivery zones) directly into the OpenStreetMap vector tileset. This goes against the standard practice of keeping basemap data separate from application data. The basemap provides context, while application data is served as a distinct source. Merging them implies regenerating the entire tileset whenever the application data changes, which is inefficient and undesirable. The standard pattern involves using a hosted basemap style URL or vector source and serving the delivery zones as a separate GeoJSON or vector source. The output should have pushed back on this request, explaining the standard pattern and its benefits, and only considering the merge exception in very specific cases like offline or air-gapped deployments.",
