@@ -1,0 +1,112 @@
+name: Release watch
+
+## Reads the releases of the repositories in .github/release-watch/watch.yml and
+## files an issue when one of them removed, renamed, or deprecated something a
+## skill still mentions. Triggered by:
+#   - schedule: weekly, a few hours after the eval drift check.
+#   - workflow_dispatch: a maintainer catching up on a release the same day.
+#       repo     – limit to one watch-list entry. Blank = the whole list.
+#       tag      – examine exactly this release, ignoring the watermark.
+#       dry-run  – print what it would file and write nothing.
+#
+# Needs no third-party secrets and makes no model calls: GITHUB_TOKEN is the
+# whole credential surface. It files issues for a human to read. It never opens
+# a pull request, never edits a skill file, and never closes an issue.
+#
+# See CONTRIBUTING.md -> "Release watch" for the matching rules and how to run
+# it locally.
+
+on:
+  schedule:
+    - cron: '43 13 * * 0' # Sunday 13:43 UTC: after the eval drift check, off-:00 so GitHub doesn't drop it
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Limit to one watch-list repo, e.g. maplibre/maplibre-gl-js (blank = all)'
+        required: false
+        default: ''
+      tag:
+        description: 'Examine exactly this release tag, ignoring the watermark'
+        required: false
+        default: ''
+      dry-run:
+        description: 'Print what would be filed and write nothing'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write # files the reports
+      contents: write # commits the advanced watermark
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Inputs go through env rather than into the command line, so a dispatch
+      # value is data to the shell, never part of it.
+      - name: Run the release watch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set --
+          if [ -n "$INPUT_REPO" ]; then set -- "$@" --repo "$INPUT_REPO"; fi
+          if [ -n "$INPUT_TAG" ]; then set -- "$@" --tag "$INPUT_TAG"; fi
+          if [ "$INPUT_DRY_RUN" = "true" ]; then set -- "$@" --dry-run; fi
+          node scripts/release-watch.js "$@"
+
+      # The watermark is what makes a rerun idempotent and a missed week catch
+      # up. Committed only on the scheduled run: a dispatch is a maintainer
+      # looking at one release, and should not move the shared watermark.
+      - name: Commit the watermark
+        if: github.event_name == 'schedule'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/release-watch/state.json
+          git diff --staged --quiet || git commit -m "chore(release-watch): advance the watermark"
+          git push
+
+      # The watch failing is not the same as a skill being stale — it means the
+      # check did not run. Say so, rather than letting a silent week look clean.
+      - name: Open issue on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().slice(0, 10);
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Release watch failed — ${date}`,
+              body: [
+                `The weekly release watch did not complete, so no upstream releases were checked against the skills this week.`,
+                ``,
+                `[Workflow run](${run})`,
+                ``,
+                `Common causes, in order:`,
+                `1. **A watch-list repo moved or went private** — the run log names the repo it could not read. Fix or disable its entry in \`.github/release-watch/watch.yml\`.`,
+                `2. **A rejected \`git push\`** on the watermark commit — \`main\` moved during the run; re-running is enough.`,
+                `3. **Rate limiting** — re-run.`,
+                ``,
+                `The watermark only advances on a successful run, so a re-run picks up everything the failed one would have seen.`,
+              ].join('\n'),
+              labels: ['release-watch']
+            })
