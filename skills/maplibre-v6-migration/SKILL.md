@@ -1,6 +1,7 @@
 ---
 name: maplibre-v6-migration
 description: Upgrading a MapLibre GL JS app from v5 to v6 — the ESM-only build, the removed default export, CommonJS require() breakage, the styleimagemissing/setMissingStyleImageResolver change, the removal of the internal map.transform, the MapDataEvent → MapSourceDataEvent/MapStyleDataEvent split, and the bundler-only setWorkerUrl() requirement. Use when a v5 app breaks after upgrading to v6, or before pinning a v6 install.
+status: verified
 ---
 
 # MapLibre GL JS v5 → v6 Migration
