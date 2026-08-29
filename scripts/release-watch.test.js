@@ -75,6 +75,34 @@ describe('breakingNotes', () => {
     assert.equal(notes.length, 1);
   });
 
+  // planetiler v0.9.0 marks its breaking bullets this way, under an ordinary
+  // "Bug Fixes and Improvements" heading.
+  it('picks up a [breaking]-prefixed bullet', () => {
+    const notes = breakingNotes(
+      '### Bug Fixes and Improvements\n\n  * [breaking] fix: typo in `water_lines_labels` for shortbread tiles spec by @CommanderStorm in https://example.invalid/1215'
+    );
+    assert.equal(notes.length, 1);
+    assert.deepEqual(
+      extractTerms(notes[0].text).map((t) => t.value),
+      ['water_lines_labels']
+    );
+  });
+
+  // MapLibre Native ios-v6.29.0 names what went with a bare verb right before
+  // the code span, with no "has been" to match on. A verb that is not directly
+  // before the span ("never removed from the image manager") is not enough.
+  it('picks up a removal verb directly before a code span', () => {
+    const body = [
+      '- core: rename `mbgl` namespace to `mln` ([#4487](https://example.invalid/4487)).',
+      '- Removed `waitForCompletion`, the second parameter of `GeoJSONSource.setData`',
+      '- Fix a leak: images of a replaced sprite were never removed from the image manager'
+    ].join('\n');
+    const notes = breakingNotes(body);
+    assert.equal(notes.length, 2);
+    assert.match(notes[0].text, /mbgl/);
+    assert.match(notes[1].text, /waitForCompletion/);
+  });
+
   it('leaves ordinary notes alone', () => {
     assert.deepEqual(
       breakingNotes('### Added\n\n- Add `--tile-format=mlt`'),
@@ -245,6 +273,28 @@ describe('issueBody', () => {
   it('says the matches are unverified, not defects', () => {
     assert.match(body, /string matches, not verified defects/);
   });
+
+  it('points an overflowing report at the local dry run, not a rerun', () => {
+    const many = Array.from({ length: 70 }, (_, i) => ({
+      note: 'n',
+      heading: '',
+      term: 't',
+      kind: 'identifier',
+      path: 'skills/x/SKILL.md',
+      line: i + 1,
+      text: ''
+    }));
+    const long = issueBody({
+      repo: 'maplibre/martin',
+      tag: 'martin-v1.14.0',
+      url: 'https://example.invalid',
+      publishedAt: '2026-08-18T14:06:17Z',
+      hits: many,
+      runUrl: ''
+    });
+    assert.match(long, /10 further match\(es\) not listed/);
+    assert.match(long, /--repo maplibre\/martin --tag martin-v1\.14\.0/);
+  });
 });
 
 describe('parseWatchList', () => {
@@ -266,6 +316,21 @@ describe('parseWatchList', () => {
     assert.equal(entries[0].why, 'Martin endpoints and flags.');
     assert.equal(entries[1].enabled, false);
     assert.equal(entries[1].note, 'publishes no releases');
+  });
+
+  it('reads a quoted value Prettier folded onto several lines', () => {
+    const folded = [
+      'watch:',
+      '  - repo: maplibre/martin',
+      '    why:',
+      "      'Martin endpoints",
+      "      and flags.'",
+      '    enabled: false',
+      ''
+    ].join('\n');
+    const [entry] = parseWatchList(folded);
+    assert.equal(entry.why, 'Martin endpoints and flags.');
+    assert.equal(entry.enabled, false);
   });
 
   it('ignores an entry with no repo', () => {

@@ -26,8 +26,18 @@ const BREAKING_HEADING_WORDS = [
   'migration'
 ];
 
-/** Per-bullet markers that make a single note breaking wherever it sits. */
-const BREAKING_MARKERS = ['⚠', '💥', 'BREAKING CHANGE', 'BREAKING:'];
+/**
+ * Per-bullet markers that make a single note breaking wherever it sits. GL JS
+ * and the style spec use the warning emoji; planetiler prefixes the bullet with
+ * `[breaking]`. The word forms are compared lowercased.
+ */
+const BREAKING_MARKERS = [
+  '⚠',
+  '💥',
+  'breaking change',
+  'breaking:',
+  '[breaking]'
+];
 
 /**
  * Fixed phrases that make a note breaking on their own. A fixed list, not a
@@ -54,7 +64,21 @@ const REMOVAL_PHRASES = [
   'have been renamed',
   'renamed to',
   'replaced by',
-  'must switch to'
+  'must switch to',
+  // A removal verb directly before a code span is how a note names what went:
+  // "Remove `waitForCompletion`", "rename `mbgl` namespace to `mln`".
+  'remove `',
+  'removed `',
+  'removes `',
+  'rename `',
+  'renamed `',
+  'renames `',
+  'drop `',
+  'dropped `',
+  'drops `',
+  'deprecate `',
+  'deprecated `',
+  'deprecates `'
 ];
 
 /**
@@ -86,8 +110,7 @@ const GENERIC_IDENTIFIERS = new Set([
   'null',
   'true',
   'false',
-  'default',
-  'null'
+  'default'
 ]);
 
 const MIN_IDENTIFIER_LENGTH = 5;
@@ -102,7 +125,7 @@ const MIN_IDENTIFIER_LENGTH = 5;
  */
 const MIN_BARE_WORD_LENGTH = 12;
 
-/** Hits per issue. Past this the report stops being readable; the rest wait for the next run. */
+/** Hits per issue. Past this the report stops being readable; a local dry run prints them all. */
 export const MAX_HITS = 60;
 
 function headingLevel(line) {
@@ -178,9 +201,8 @@ export function splitNotes(body) {
 
 export function isBreakingNote(note) {
   if (note.inBreakingSection) return true;
-  if (BREAKING_MARKERS.some((marker) => note.text.includes(marker)))
-    return true;
   const lowered = note.text.toLowerCase();
+  if (BREAKING_MARKERS.some((marker) => lowered.includes(marker))) return true;
   return REMOVAL_PHRASES.some((phrase) => lowered.includes(phrase));
 }
 
@@ -333,7 +355,7 @@ export function issueBody({ repo, tag, url, publishedAt, hits, runUrl }) {
 
   if (hits.length > shown.length) {
     out.push(
-      `_${hits.length - shown.length} further match(es) not listed; rerun the workflow after these are triaged._`,
+      `_${hits.length - shown.length} further match(es) not listed. For the full list run \`node scripts/release-watch.js --dry-run --repo ${repo} --tag ${tag}\` locally._`,
       ''
     );
   }
@@ -356,13 +378,16 @@ export function issueBody({ repo, tag, url, publishedAt, hits, runUrl }) {
 /**
  * The watch list's YAML, in the restricted subset `.github/release-watch/watch.yml`
  * is written in: a `watch:` key holding a list of entries, each a flat map of
- * single-line scalars. Deliberately not a general YAML parser — this repository
- * takes no runtime dependencies, and the file it reads is one we control.
+ * scalars. A quoted value may continue onto following indented lines, which is
+ * how Prettier folds a long one. Deliberately not a general YAML parser — this
+ * repository takes no runtime dependencies, and the file it reads is one we
+ * control.
  */
 export function parseWatchList(source) {
   const entries = [];
   let inWatch = false;
   let current = null;
+  let lastKey = null;
 
   for (const raw of String(source ?? '').split(/\r?\n/)) {
     const line = raw.replace(/\s+$/, '');
@@ -376,31 +401,42 @@ export function parseWatchList(source) {
     if (/^\S/.test(line)) break; // a new top-level key ends the list
 
     const item = /^\s*-\s*(.*)$/.exec(line);
+    const text = item ? item[1] : line.trim();
     if (item) {
       current = {};
       entries.push(current);
-      if (item[1]) assign(current, item[1]);
-      continue;
+      lastKey = null;
     }
-    if (current) assign(current, line.trim());
+    if (!current || !text) continue;
+
+    const pair = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(text);
+    if (pair) {
+      lastKey = pair[1];
+      current[lastKey] = pair[2].trim();
+    } else if (lastKey) {
+      current[lastKey] = `${current[lastKey]} ${text}`.trim();
+    }
   }
 
-  return entries.filter((entry) => entry.repo);
+  return entries
+    .map((entry) =>
+      Object.fromEntries(
+        Object.entries(entry).map(([key, value]) => [key, scalar(value)])
+      )
+    )
+    .filter((entry) => entry.repo);
 }
 
-function assign(target, text) {
-  const match = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(text);
-  if (!match) return;
-  let value = match[2].trim();
+function scalar(value) {
   if (
     (value.startsWith("'") && value.endsWith("'")) ||
     (value.startsWith('"') && value.endsWith('"'))
   ) {
     value = value.slice(1, -1);
   }
-  if (value === 'true') target[match[1]] = true;
-  else if (value === 'false') target[match[1]] = false;
-  else target[match[1]] = value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
 }
 
 /**
