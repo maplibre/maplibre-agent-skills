@@ -150,6 +150,8 @@ Use this skill when:
 - Lists without context or prioritization
 - Vague guidance ("might want to", "could consider")
 
+**Budget a skill in tokens, not kilobytes.** A skill's cost to the consumer is what it takes out of the model's context window every time it loads, and a diff's byte count understates that: English prose runs roughly 3.5–4 characters per token, so a 24KB `SKILL.md` is on the order of 6K tokens before the user's own question, code, or tool output is added. That is comfortable in a hosted model's window and not comfortable everywhere: Ollama, for instance, picks its default context length from available VRAM (4K, 32K, or 256K; `OLLAMA_CONTEXT_LENGTH` overrides it), and when a conversation does not fit it silently drops the oldest messages to make room, keeping the system prompt, and logs that at debug level. A 6K-token skill in a 4K window leaves nothing for the question. This is a second reason to cut content the model already gets right: every section that does not change an answer is spending someone's window.
+
 **Reference:** Include links to primary sources wherever possible. See [Attribution and References](#attribution-and-references) for a curated list.
 
 ### 4. Process skills
