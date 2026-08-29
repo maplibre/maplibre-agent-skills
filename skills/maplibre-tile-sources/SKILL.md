@@ -207,7 +207,7 @@ Common schemas:
 
 - **OpenMapTiles** — the most widely adopted schema, based on OpenStreetMap data. Rich and detailed, with source-layers like `transportation`, `water`, `landuse`, `poi`. The largest ecosystem of community styles targets this schema.
 - **Shortbread** — an open standard designed to be minimal and interoperable, not tied to any single vendor. Simpler structure than OpenMapTiles; a clean foundation if you're building styles from scratch.
-- **Protomaps** — purpose-built for the Protomaps PMTiles basemap ecosystem. Flat, simple structure with source-layers like `land`, `water`, `roads`, `places`; optimized for serverless delivery.
+- **Protomaps** — purpose-built for the Protomaps PMTiles basemap ecosystem. Flat, simple structure with source-layers like `earth`, `water`, `roads`, `places`; optimized for serverless delivery. Published layer list: [docs.protomaps.com/basemaps/layers](https://docs.protomaps.com/basemaps/layers).
 
 If you use a provider's pre-built style URL, the schema is already matched.
 
@@ -258,7 +258,7 @@ When no TileJSON endpoint exists — for example, a raw raster tile service that
 
 ### TileJSON and custom styles
 
-For vector sources, the TileJSON `vector_layers` field lists each available `source-layer`, its attribute fields, and its zoom range. This is the authoritative reference when building a custom style: your layer definitions must reference `source-layer` names exactly as they appear here.
+**Find the real names in the TileJSON.** For vector sources, the TileJSON `vector_layers` field lists each available `source-layer`, its attribute fields, and its zoom range. This is the authoritative reference when it is present — TileJSON 3.0 requires it for vector tilesets, but 2.x documents predate it and providers are inconsistent about supplying it. Its absence does not mean there is no schema: identify the schema by name (below) and work from its published layer list. If you use a provider's pre-built style URL, the schema is already matched for you; the mismatch only appears when you write your own layers.
 
 When generating tiles with Planetiler or tippecanoe, the output embeds TileJSON metadata in the MBTiles or PMTiles file. Tile servers like Martin read this metadata and expose it as a TileJSON endpoint automatically.
 
