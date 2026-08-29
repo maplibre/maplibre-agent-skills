@@ -279,18 +279,19 @@ Hosted providers handle CORS for you. For self-hosted servers or static storage,
 
 1. **GeoJSON performance thresholds** (file size / feature count ranges) — community rules of thumb aggregated from Stack Overflow, Reddit, Medium, and Cesium Community Forum discussions. ⚑ _not authoritative or canonical_
 2. **PMTiles format and HTTP range request protocol** — [docs.protomaps.com/pmtiles/](https://docs.protomaps.com/pmtiles/)
-3. **Protomaps** (pre-built PMTiles basemaps) — [protomaps.com](https://protomaps.com)
+3. **Protomaps** (pre-built PMTiles basemaps) — [protomaps.com](https://protomaps.com); basemap layers: [docs.protomaps.com/basemaps/layers](https://docs.protomaps.com/basemaps/layers)
 4. **Planetiler** (generate vector tiles from OSM) — [GitHub](https://github.com/onthegomap/planetiler)
 5. **tippecanoe** (generate vector tiles from GeoJSON) — [github.com/felt/tippecanoe](https://github.com/felt/tippecanoe)
 6. **Martin tile server** — [maplibre.org/martin/](https://maplibre.org/martin/)
 7. **MapLibre Tile (MLT) specification** — [maplibre.org/maplibre-tile-spec/](https://maplibre.org/maplibre-tile-spec/)
 8. **OpenMapTiles schema** — [OpenMapTiles.org](https://openmaptiles.org/schema/)
 9. **Shortbread tile schema** — [shortbread-tiles.org](https://shortbread-tiles.org/)
-10. **Leaflet** — [leaflet.js](https://leafletjs.com/)
-11. **MapLibre GL Leaflet** — [github.com/maplibre/maplibre-gl-leaflet](https://github.com/maplibre/maplibre-gl-leaflet)
-12. **Cloud-native geospatial formats**: FlatGeobuf ([flatgeobuf.org](https://flatgeobuf.org/)), GeoParquet ([GeoParquet](https://geoparquet.org/)), Cloud-Optimized GeoTIFF ([COG website](https://cogeo.org/))
-13. **awesome-maplibre** — [github.com/maplibre/awesome-maplibre](https://github.com/maplibre/awesome-maplibre)
-14. **switch2osm.org** — Community guide to switching from Google Maps to OSM-based tile hosting, including provider list, self-hosting stack, hardware requirements, and ODbL licensing guidance — [switch2osm.org](https://switch2osm.org)
+10. **TileJSON specification** — [github.com/mapbox/tilejson-spec](https://github.com/mapbox/tilejson-spec); version 3.0 (Aug 2021) made `vector_layers` required for vector tilesets
+11. **Leaflet** — [leaflet.js](https://leafletjs.com/)
+12. **MapLibre GL Leaflet** — [github.com/maplibre/maplibre-gl-leaflet](https://github.com/maplibre/maplibre-gl-leaflet)
+13. **Cloud-native geospatial formats**: FlatGeobuf ([flatgeobuf.org](https://flatgeobuf.org/)), GeoParquet ([GeoParquet](https://geoparquet.org/)), Cloud-Optimized GeoTIFF ([COG website](https://cogeo.org/))
+14. **awesome-maplibre** — [github.com/maplibre/awesome-maplibre](https://github.com/maplibre/awesome-maplibre)
+15. **switch2osm.org** — Community guide to switching from Google Maps to OSM-based tile hosting, including provider list, self-hosting stack, hardware requirements, and ODbL licensing guidance — [switch2osm.org](https://switch2osm.org)
 
 ---
 
