@@ -16,3 +16,5 @@ Baseline run: 2026-07-03. With-skill run: re-verified 2026-07-04 after two fixes
 **Result: baseline 4 FAIL + 1 correct negative / with-skill 6/6 PASS — launch bar cleared.**
 
 A seventh test (raster-dem terrain with PMTiles) was dropped: it passed at baseline (the model already knows this pattern), so it wasn't testing a real gap under this repo's "target demonstrated gaps only" rule.
+
+A probe of "PMTiles is a container, not a source type" (there is no `pmtiles` type in the style spec; the source `type` is the type of the tiles inside the archive) was run at baseline on 2026-08-28 against `groq:openai/gpt-oss-120b` with the `google:gemini-2.5-flash-lite` judge, in two phrasings — one naming the question outright, one asking only for the source and layer JSON for imagery held in a `.pmtiles` file. Both PASSED: the model writes `type: 'raster'` with a `pmtiles://` URL and never invents a `pmtiles` source type. No gap, so no test and no content were added; recorded so it isn't rediscovered.
