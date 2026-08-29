@@ -15,6 +15,9 @@
  *   node scripts/release-watch.js --dry-run
  *   node scripts/release-watch.js --dry-run --repo maplibre/maplibre-gl-js --tag v6.0.0
  *
+ * Exit status is 1 when any watched repository could not be read, so a
+ * scheduled run does not report a clean week it did not fully check.
+ *
  * Flags:
  *   --dry-run          print the issues that would be filed; no writes at all
  *   --repo <o/n>       limit the run to one watch-list entry
@@ -87,6 +90,34 @@ async function api(path, auth) {
   return res.json();
 }
 
+const PER_PAGE = 100;
+const MAX_PAGES = 10;
+
+/**
+ * The releases of `repo`, newest first, read page by page until one at or
+ * before the watermark shows up — so a long gap is caught up in full rather
+ * than cut off at the first page. With no watermark yet, one page is enough:
+ * the entry is new, and its first run only sets where to start.
+ */
+async function releasesSince(repo, watermark, auth) {
+  const since = watermark?.published_at
+    ? Date.parse(watermark.published_at)
+    : 0;
+  const releases = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const batch = await api(
+      `/repos/${repo}/releases?per_page=${PER_PAGE}&page=${page}`,
+      auth
+    );
+    releases.push(...batch);
+    const reachedWatermark = batch.some(
+      (r) => r.published_at && Date.parse(r.published_at) <= since
+    );
+    if (batch.length < PER_PAGE || reachedWatermark || !since) break;
+  }
+  return releases;
+}
+
 /** Every skill file the watch reads: SKILL.md, and AGENTS.md where a skill has one. */
 function loadSkillFiles(dir) {
   const files = [];
@@ -104,44 +135,44 @@ function loadSkillFiles(dir) {
 
 /**
  * Markers of issues already filed. Read from the label rather than the search
- * index: search tokenizes an HTML comment unpredictably, a label listing does not.
+ * index: search tokenizes an HTML comment unpredictably, a label listing does
+ * not. A label nobody has created yet lists as empty, not as an error.
  */
 async function existingMarkers(repo, auth) {
   const markers = new Set();
-  try {
+  for (let page = 1; page <= MAX_PAGES; page++) {
     const issues = await api(
-      `/repos/${repo}/issues?state=all&labels=release-watch&per_page=100`,
+      `/repos/${repo}/issues?state=all&labels=release-watch&per_page=${PER_PAGE}&page=${page}`,
       auth
     );
     for (const issue of issues) {
       const found = /<!-- release-watch: [^>]+ -->/.exec(issue.body ?? '');
       if (found) markers.add(found[0]);
     }
-  } catch (error) {
-    // A repo with the label not yet created answers 404 here; that just means
-    // nothing has been filed yet.
-    if (!/ 404 /.test(String(error.message))) throw error;
+    if (issues.length < PER_PAGE) break;
   }
   return markers;
 }
 
-function createIssue(repo, title, body) {
-  for (const label of LABELS) {
-    execFileSync(
-      'gh',
-      [
-        'label',
-        'create',
-        label,
-        '--repo',
-        repo,
-        '--force',
-        '--color',
-        'ededed'
-      ],
-      { stdio: 'ignore' }
-    );
+/**
+ * Creates a label only if it is missing. `gh label create --force` would also
+ * reset the color and description of a label a maintainer has since adjusted.
+ */
+async function ensureLabel(repo, label, auth) {
+  try {
+    await api(`/repos/${repo}/labels/${encodeURIComponent(label)}`, auth);
+    return;
+  } catch (error) {
+    if (!/ 404 /.test(String(error.message))) throw error;
   }
+  execFileSync(
+    'gh',
+    ['label', 'create', label, '--repo', repo, '--color', 'ededed'],
+    { stdio: 'inherit' }
+  );
+}
+
+function createIssue(repo, title, body) {
   execFileSync(
     'gh',
     [
@@ -176,6 +207,7 @@ const skillFiles = loadSkillFiles(args.skillsDir);
 const filed = args.dryRun ? new Set() : await existingMarkers(selfRepo, auth);
 
 const summary = [];
+const unreadable = [];
 let issuesFiled = 0;
 
 for (const entry of watchList) {
@@ -187,26 +219,31 @@ for (const entry of watchList) {
     continue;
   }
 
-  let releases;
-  try {
-    releases = await api(`/repos/${entry.repo}/releases?per_page=50`, auth);
-  } catch (error) {
-    summary.push(`- ${entry.repo}: could not be read (${error.message})`);
-    continue;
-  }
+  const watermark = args.since
+    ? { published_at: args.since }
+    : state[entry.repo];
 
   let candidates;
-  if (args.tag) {
-    candidates = releases.filter((r) => r.tag_name === args.tag);
-    if (candidates.length === 0) {
-      summary.push(`- ${entry.repo}: no release tagged ${args.tag}`);
-      continue;
+  try {
+    if (args.tag) {
+      candidates = [
+        await api(
+          `/repos/${entry.repo}/releases/tags/${encodeURIComponent(args.tag)}`,
+          auth
+        )
+      ];
+    } else {
+      candidates = selectReleases(
+        await releasesSince(entry.repo, watermark, auth),
+        watermark
+      );
     }
-  } else {
-    const watermark = args.since
-      ? { published_at: args.since }
-      : state[entry.repo];
-    candidates = selectReleases(releases, watermark);
+  } catch (error) {
+    // Nothing advances for this repo: the next run reads the same releases
+    // again. The run fails at the end so the week does not pass for clean.
+    summary.push(`- ${entry.repo}: could not be read (${error.message})`);
+    unreadable.push(entry.repo);
+    continue;
   }
 
   if (candidates.length === 0) {
@@ -246,6 +283,7 @@ for (const entry of watchList) {
       console.log(`\n=== would file: ${title}\n`);
       console.log(body);
     } else {
+      for (const label of LABELS) await ensureLabel(selfRepo, label, auth);
       createIssue(selfRepo, title, body);
       filed.add(marker);
       issuesFiled++;
@@ -274,3 +312,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
   writeFileSync(process.env.GITHUB_STEP_SUMMARY, report, { flag: 'a' });
 }
 if (!args.dryRun) console.log(`Issues filed: ${issuesFiled}`);
+if (unreadable.length > 0) {
+  console.error(`Could not read releases for: ${unreadable.join(', ')}`);
+  process.exit(1);
+}
