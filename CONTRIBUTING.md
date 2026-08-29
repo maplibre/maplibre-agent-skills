@@ -238,6 +238,36 @@ On merge, automation reads these fields and inserts the entry under `[Unreleased
 
 Releases are cut by a maintainer via the Release workflow (`workflow_dispatch`), which bumps the version, moves `[Unreleased]` entries into a dated section, regenerates the README skills table, and opens a release PR. Merging that PR tags `vX.Y.Z` and publishes the GitHub Release. Opening the PR needs "Allow GitHub Actions to create and approve pull requests" enabled under Settings → Actions → General → Workflow permissions; without it the workflow pushes the `release/vX.Y.Z` branch and stops, and the PR can be opened by hand. A PR opened by the workflow does not trigger `check.yml` on its own (GitHub does not run workflows for events caused by `GITHUB_TOKEN`); close and reopen it to run the checks. The README skills table is regenerated at the same time: rows are sorted by name, a row is added for each new skill (its "Use when" text seeded from the `Use when` clause of the skill's `description`), and rows for removed skills are dropped. Existing "Use when" text is preserved, so edit it in place in `README.md` whenever it can be improved; there is no need to touch the table when adding a skill.
 
+### Release watch
+
+Skills go stale when an upstream project removes something they still recommend. MapLibre GL JS v6 stopped publishing the UMD bundle, and a skill kept pointing at `dist/maplibre-gl.js` for two weeks before a user reported it. The Release watch workflow (`.github/workflows/release-watch.yml`) is the check for that: weekly, plus `workflow_dispatch` for a maintainer catching up on a release the same day.
+
+It reports two plain facts — what a release note says, and what our files contain. It never asserts that a model gets something wrong; only a baseline eval can establish that. It files an issue for a human to read, and by design it never opens a pull request, never edits a skill file, and never closes an issue. It needs no API keys and makes no model calls.
+
+**The watch list** is `.github/release-watch/watch.yml`: explicit and committed, each entry naming a repository and which skills' claims depend on it. It is not derived from the MapLibre organization, because skills make claims about ecosystem projects outside it. If a project has no skill surface, it does not belong on the list. `.github/release-watch/state.json` is the watermark — the last release read per repository — so a rerun files nothing twice and a missed week catches up instead of skipping.
+
+**What it flags.** For each release newer than the watermark (drafts and prereleases skipped, which is how per-commit test builds stay out), it reads the notes that announce a removal, rename, or deprecation:
+
+- every note under a heading whose text mentions breaking, removed, removal, deprecation, incompatibility, or migration;
+- any note marked ⚠️, 💥, or `BREAKING CHANGE` wherever it sits — GL JS marks its breaking changes this way, under an ordinary "Features and improvements" heading, so a heading-only reader would have missed the v6 case entirely;
+- any note containing one of a fixed list of phrases (`no longer published`, `has been removed`, `is deprecated`, `renamed to`, and so on — see `scripts/lib/release-watch.js`).
+
+From those notes it takes only what the author put in backticks, on the reasoning that a code span is a name marked machine-readable while prose matches far too much. A span containing spaces is a snippet matched verbatim (`import maplibregl from 'maplibre-gl'`); a span without spaces is an identifier matched on word boundaries (`maplibre-gl.js`, `--tile-format=mlt`). Identifiers that are short bare words are dropped, since a rename note names its surrounding types as context and matching those floods the report with lines that are still correct.
+
+Every match is then reported as `file:line` beside the release note that contradicts it, in one issue per release labeled `release-watch` and `needs-triage`. A release with no matches files nothing — an issue per release either way would bury the ones that matter — but it is listed in the workflow run summary as read. The matches are string matches, not verified defects: some are content to correct, and some are mentions that are still accurate in context.
+
+**Running it yourself.** `--dry-run` prints the issues it would file and writes nothing. To reproduce the v6 case against the content as it stood before the fix in [#59](https://github.com/maplibre/maplibre-agent-skills/pull/59):
+
+```bash
+rm -rf /tmp/release-watch-pre59 && mkdir -p /tmp/release-watch-pre59
+git archive 23e583e^ skills | tar -x -C /tmp/release-watch-pre59
+node scripts/release-watch.js --dry-run --repo maplibre/maplibre-gl-js --tag v6.0.0 --skills-dir /tmp/release-watch-pre59/skills
+```
+
+It flags `maplibre-mapbox-migration/SKILL.md:64` on `maplibre-gl.js` and both that skill and `maplibre-pmtiles-patterns/SKILL.md:53` on `import maplibregl from 'maplibre-gl'` — the two examples #59 corrected. Run the same command with no `--skills-dir` and those matches are gone from current content; what is left in both files is the replacement form, which that release note also quotes. That is the one known false positive, and it is why the issue calls its output matches rather than defects.
+
+This is a Class A check only: content of ours that a release contradicts. It says nothing about features a pre-cutoff model would not know (which needs a baseline eval) or content a newer model already gets right (which needs committed baseline probes). Keeping those apart is what keeps the output from reading as an undifferentiated stream of findings.
+
 ## Note on AI usage
 
 Please take a moment to review [MapLibre's AI Policy](https://github.com/maplibre/maplibre/blob/main/AI_POLICY.md). tl;dr: do not let AI speak for you, verify all generated content before requesting a review, and disclose AI usage in pull requests.
