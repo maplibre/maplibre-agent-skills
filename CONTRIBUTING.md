@@ -240,17 +240,17 @@ Releases are cut by a maintainer via the Release workflow (`workflow_dispatch`),
 
 ### Release watch
 
-Skills go stale when an upstream project removes something they still recommend. MapLibre GL JS v6 stopped publishing the UMD bundle, and a skill kept pointing at `dist/maplibre-gl.js` for two weeks before a user reported it. The Release watch workflow (`.github/workflows/release-watch.yml`) is the check for that: weekly, plus `workflow_dispatch` for a maintainer catching up on a release the same day.
+Skills go stale when an upstream project removes something they still recommend. MapLibre GL JS v6.0.0 (2026-07-22) stopped publishing the UMD bundle, and a skill kept pointing at `dist/maplibre-gl.js` for over three weeks, until the v6 fallout tracking issue ([maplibre-gl-js#8168](https://github.com/maplibre/maplibre-gl-js/issues/8168)) listed this repository among the places to fix. The Release watch workflow (`.github/workflows/release-watch.yml`) is the check for that: weekly, plus `workflow_dispatch` for a maintainer catching up on a release the same day.
 
 It reports two plain facts — what a release note says, and what our files contain. It never asserts that a model gets something wrong; only a baseline eval can establish that. It files an issue for a human to read, and by design it never opens a pull request, never edits a skill file, and never closes an issue. It needs no API keys and makes no model calls.
 
 **The watch list** is `.github/release-watch/watch.yml`: explicit and committed, each entry naming a repository and which skills' claims depend on it. It is not derived from the MapLibre organization, because skills make claims about ecosystem projects outside it. If a project has no skill surface, it does not belong on the list. `.github/release-watch/state.json` is the watermark — the last release read per repository — so a rerun files nothing twice and a missed week catches up instead of skipping.
 
-**What it flags.** For each release newer than the watermark (drafts and prereleases skipped, which is how per-commit test builds stay out), it reads the notes that announce a removal, rename, or deprecation:
+**What it flags.** For each release newer than the watermark (drafts and prereleases skipped, which is how tippecanoe's per-commit test builds stay out), it reads the notes that announce a removal, rename, or deprecation:
 
 - every note under a heading whose text mentions breaking, removed, removal, deprecation, incompatibility, or migration;
-- any note marked ⚠️, 💥, or `BREAKING CHANGE` wherever it sits — GL JS marks its breaking changes this way, under an ordinary "Features and improvements" heading, so a heading-only reader would have missed the v6 case entirely;
-- any note containing one of a fixed list of phrases (`no longer published`, `has been removed`, `is deprecated`, `renamed to`, and so on — see `scripts/lib/release-watch.js`).
+- any note marked ⚠️, 💥, `BREAKING CHANGE`, or `[breaking]` wherever it sits — GL JS marks its breaking changes with the warning emoji under an ordinary "Features and improvements" heading, and Planetiler prefixes bullets with `[breaking]`, so a heading-only reader would have missed the v6 case entirely;
+- any note containing one of a fixed list of phrases (`no longer published`, `has been removed`, `is deprecated`, `renamed to`, and so on), or a removal verb (remove, rename, drop, deprecate) directly before a code span — see `scripts/lib/release-watch.js`.
 
 From those notes it takes only what the author put in backticks, on the reasoning that a code span is a name marked machine-readable while prose matches far too much. A span containing spaces is a snippet matched verbatim (`import maplibregl from 'maplibre-gl'`); a span without spaces is an identifier matched on word boundaries (`maplibre-gl.js`, `--tile-format=mlt`). Identifiers that are short bare words are dropped, since a rename note names its surrounding types as context and matching those floods the report with lines that are still correct.
 
@@ -264,7 +264,11 @@ git archive 23e583e^ skills | tar -x -C /tmp/release-watch-pre59
 node scripts/release-watch.js --dry-run --repo maplibre/maplibre-gl-js --tag v6.0.0 --skills-dir /tmp/release-watch-pre59/skills
 ```
 
-It flags `maplibre-mapbox-migration/SKILL.md:64` on `maplibre-gl.js` and both that skill and `maplibre-pmtiles-patterns/SKILL.md:53` on `import maplibregl from 'maplibre-gl'` — the two examples #59 corrected. Run the same command with no `--skills-dir` and those matches are gone from current content; what is left in both files is the replacement form, which that release note also quotes. That is the one known false positive, and it is why the issue calls its output matches rather than defects.
+Among its hits are `maplibre-mapbox-migration/SKILL.md:64` on `maplibre-gl.js` and `maplibre-mapbox-migration/SKILL.md:58` plus `maplibre-pmtiles-patterns/SKILL.md:53` on `import maplibregl from 'maplibre-gl'` — the examples #59 corrected. Run the same command with no `--skills-dir` and those three are gone from current content; what remains in both files is the replacement forms, which that release note also quotes.
+
+The rest of that report shows the two kinds of noise to expect. Most of its roughly forty matches land in `maplibre-v6-migration`, which documents the removed names on purpose — a migration skill matches its own release by design. And a ⚠️ on a v6 bug fix about `line-color` matches ordinary style examples, because the marker is read as breaking no matter what the note says. Both are quick for a maintainer to dismiss, and they are why the issue calls its output matches rather than defects.
+
+If a watched repository cannot be read (moved, private, rate-limited), that repository's watermark stays put, the rest of the list is still checked, and the run fails at the end so the failure issue is opened rather than a clean-looking week going by; the next run reads the same releases again, and the marker in each filed issue keeps a rerun from filing twice. A release edited after it was published is not re-read: the watermark is its `published_at`, which an edit does not change.
 
 This is a Class A check only: content of ours that a release contradicts. It says nothing about features a pre-cutoff model would not know (which needs a baseline eval) or content a newer model already gets right (which needs committed baseline probes). Keeping those apart is what keeps the output from reading as an undifferentiated stream of findings.
 
