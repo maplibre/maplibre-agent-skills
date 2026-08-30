@@ -150,6 +150,8 @@ Use this skill when:
 - Lists without context or prioritization
 - Vague guidance ("might want to", "could consider")
 
+**Budget:** Every line of a skill competes with everything else in the agent's context, so say only what changes an answer, and spend the space on gotchas and failure modes rather than general advice — see [Best practices for skill creators](https://agentskills.io/skill-creation/best-practices).
+
 **Reference:** Include links to primary sources wherever possible. See [Attribution and References](#attribution-and-references) for a curated list.
 
 ### 4. Process skills
