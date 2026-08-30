@@ -225,7 +225,7 @@ These sources were used when creating this skill. You may want to involve contri
 
 1. **MapLibre official migration guide** — [maplibre.org/maplibre-gl-js/docs/guides/mapbox-migration-guide/](https://maplibre.org/maplibre-gl-js/docs/guides/mapbox-migration-guide/) — Primary step-by-step reference (package, namespace, CSS, CDN).
 2. **MapLibre GL JS documentation** — [maplibre.org/maplibre-gl-js/docs/](https://maplibre.org/maplibre-gl-js/docs/) — API and concepts.
-3. **MapLibre Style Specification — `sky`** — [maplibre.org/maplibre-style-spec/sky/](https://maplibre.org/maplibre-style-spec/sky/) and [`Map.setSky`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/) — the atmosphere properties that replace Mapbox's `fog`.
+3. **MapLibre Style Specification — `sky`** — [maplibre.org/maplibre-style-spec/sky/](https://maplibre.org/maplibre-style-spec/sky/) and [`Map.setSky`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#setsky) — the atmosphere properties that replace Mapbox's `fog`.
 4. **MapLibre GL JS GitHub** — [github.com/maplibre/maplibre-gl-js](https://github.com/maplibre/maplibre-gl-js) — README, releases, and fork history.
 5. **mapbox-agent-skills** — The `mapbox-maplibre-migration` skill (Mapbox repo) covers the reverse direction (MapLibre → Mapbox). Topic structure and comparison elements were adapted for this Mapbox → MapLibre skill. Copyright (c) Mapbox, Inc. for adapted portions.
 6. **This repo’s skills** — [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md), [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md); maplibre-open-search-patterns and maplibre-geospatial-operations not yet in repo — for tile source and service alternatives after migration.
