@@ -39,14 +39,14 @@ All four read the same `raster-dem` source; one source can serve all of them.
 ## Hillshade, and the harshness fix that is not stacking
 
 Every `hillshade-*` property is a **paint** property.[1] The defaults that matter: `hillshade-exaggeration`
-`0.5`, `hillshade-illumination-direction` `335`, `hillshade-illumination-anchor` `viewport` (the light
-rotates with the map unless you set `map`), `hillshade-shadow-color` `#000000`, `hillshade-highlight-color`
-`#FFFFFF`.
+`0.5`, `hillshade-illumination-direction` `335`, `hillshade-illumination-anchor` `viewport` (the light is
+fixed to the top of the screen, so it does not turn with the map's bearing unless you set `map`),
+`hillshade-shadow-color` `#000000`, `hillshade-highlight-color` `#FFFFFF`.
 
 Harsh output usually comes from the shading **method**, not the colors. `hillshade-method` (GL JS 5.5)
 takes `standard` (the default), `basic`, `combined`, `igor`, and `multidirectional`.[1] `multidirectional`
-simulates several light directions in one pass and `igor` is the low-contrast cartographic method; both
-soften terrain on a single layer.
+lights the surface from several independent directions in one pass and `igor` minimizes the effect on the
+map features drawn beneath it; both soften terrain on a single layer.
 
 ```json
 {
@@ -71,8 +71,8 @@ alpha, and use warm highlights with cool shadows over imagery.
 ## Color-relief: coloring by height
 
 `color-relief` (GL JS 5.6) colors a `raster-dem` source directly, client-side; there is no pre-rendering
-step and no `raster` layer involved. Its paint properties are `color-relief-color` and
-`color-relief-opacity` (default `1`).[1] The ramp is an `interpolate` expression over `["elevation"]`,
+step and no `raster` layer involved. Its paint properties are `color-relief-color`,
+`color-relief-opacity` (default `1`), and, from GL JS 5.20, `resampling`.[1] The ramp is an `interpolate` expression over `["elevation"]`,
 which returns meters above the DEM's vertical datum and **is only valid inside
 `color-relief-color`**.[2]
 
