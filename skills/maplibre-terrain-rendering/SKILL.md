@@ -1,7 +1,7 @@
 ---
 name: maplibre-terrain-rendering
 description: Drawing elevation in MapLibre GL JS once a raster-dem source works — hillshade and `hillshade-method`, the `color-relief` layer and the `["elevation"]` expression, runtime contours with `maplibre-contour`, and 3D terrain with its camera and sky. Use when relief looks harsh, flat, or absent, or when the layer type or property for an elevation effect is unclear.
-status: provisional
+status: verified
 ---
 
 # MapLibre Terrain Rendering
