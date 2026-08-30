@@ -175,6 +175,33 @@ Most of your map code does not change:
 
 So after swapping the package, namespace, token, and style (and any plugins/APIs), the rest of your logic can stay as is.
 
+### 9. Translate Mapbox v2-only APIs, Do Not Look for Them
+
+Mapbox GL JS v2 methods that arrived after the fork are not in MapLibre under their Mapbox names, and no MapLibre release adds them. Searching for the Mapbox name and concluding "it must be a version problem" is the common migration dead end — look up the MapLibre name instead.
+
+| Mapbox GL JS v2                                                                  | MapLibre GL JS                                                                                                       | Notes                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `map.setFog({...})`, root-level `fog` in the style                               | `map.setSky({...})` / `map.getSky()`, root-level [`sky`](https://maplibre.org/maplibre-style-spec/sky/) in the style | MapLibre has **no `setFog` method in any version**. Atmosphere lives in `sky`, whose properties include `sky-color`, `horizon-color`, `fog-color`, `fog-ground-blend`, `horizon-fog-blend`, `sky-horizon-blend` and `atmosphere-blend`. The style spec marks `sky` experimental. |
+| `map.getFreeCameraOptions()` / `map.setFreeCameraOptions()`, `FreeCameraOptions` | no equivalent                                                                                                        | Drive the camera with `jumpTo`, `easeTo` and `flyTo` (`center`, `zoom`, `pitch`, `bearing`).                                                                                                                                                                                     |
+
+```javascript
+// Mapbox GL JS v2
+map.setFog({ 'horizon-blend': 0.3, color: '#ffffff' });
+
+// MapLibre GL JS — the same idea, different property names
+map.setSky({
+  'sky-color': '#199EF3',
+  'horizon-color': '#ffffff',
+  'fog-color': '#0000ff',
+  'fog-ground-blend': 0.5,
+  'horizon-fog-blend': 0.5,
+  'sky-horizon-blend': 0.5,
+  'atmosphere-blend': 1.0
+});
+```
+
+Verify any other v2 method against the [Map API reference](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/) before assuming an upgrade will restore it.
+
 ## Checklist
 
 - [ ] Uninstall `mapbox-gl`, install `maplibre-gl`
@@ -184,6 +211,7 @@ So after swapping the package, namespace, token, and style (and any plugins/APIs
 - [ ] Set `style` to a non-Mapbox URL (hosted or your own style)
 - [ ] Replace incompatible Mapbox plugins with MapLibre or open alternatives
 - [ ] Replace Mapbox Geocoding/Directions with Nominatim, OSRM, or other open alternatives
+- [ ] Replace Mapbox v2-only APIs (`setFog` → `setSky`, free camera → `flyTo`/`easeTo`)
 - [ ] Test map load, controls, and any API-driven features
 
 ## Related Skills
@@ -197,9 +225,10 @@ These sources were used when creating this skill. You may want to involve contri
 
 1. **MapLibre official migration guide** — [maplibre.org/maplibre-gl-js/docs/guides/mapbox-migration-guide/](https://maplibre.org/maplibre-gl-js/docs/guides/mapbox-migration-guide/) — Primary step-by-step reference (package, namespace, CSS, CDN).
 2. **MapLibre GL JS documentation** — [maplibre.org/maplibre-gl-js/docs/](https://maplibre.org/maplibre-gl-js/docs/) — API and concepts.
-3. **MapLibre GL JS GitHub** — [github.com/maplibre/maplibre-gl-js](https://github.com/maplibre/maplibre-gl-js) — README, releases, and fork history.
-4. **mapbox-agent-skills** — The `mapbox-maplibre-migration` skill (Mapbox repo) covers the reverse direction (MapLibre → Mapbox). Topic structure and comparison elements were adapted for this Mapbox → MapLibre skill. Copyright (c) Mapbox, Inc. for adapted portions.
-5. **This repo’s skills** — [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md), [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md); maplibre-open-search-patterns and maplibre-geospatial-operations not yet in repo — for tile source and service alternatives after migration.
+3. **MapLibre Style Specification — `sky`** — [maplibre.org/maplibre-style-spec/sky/](https://maplibre.org/maplibre-style-spec/sky/) and [`Map.setSky`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/) — the atmosphere properties that replace Mapbox's `fog`.
+4. **MapLibre GL JS GitHub** — [github.com/maplibre/maplibre-gl-js](https://github.com/maplibre/maplibre-gl-js) — README, releases, and fork history.
+5. **mapbox-agent-skills** — The `mapbox-maplibre-migration` skill (Mapbox repo) covers the reverse direction (MapLibre → Mapbox). Topic structure and comparison elements were adapted for this Mapbox → MapLibre skill. Copyright (c) Mapbox, Inc. for adapted portions.
+6. **This repo’s skills** — [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md), [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md); maplibre-open-search-patterns and maplibre-geospatial-operations not yet in repo — for tile source and service alternatives after migration.
 
 ---
 
