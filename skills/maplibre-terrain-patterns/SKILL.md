@@ -1,7 +1,7 @@
 ---
 name: maplibre-terrain-patterns
 description: Terrain and hillshade in MapLibre GL JS — raster-dem sources, Terrarium vs. Mapbox RGB encoding, hillshade layer configuration (single and multi-pass), 3D terrain, dynamic contour lines, and self-hosting DEM tiles. Use when adding elevation context, hillshade, or 3D terrain to a map.
-status: verified
+status: provisional
 ---
 
 # MapLibre Terrain Patterns
