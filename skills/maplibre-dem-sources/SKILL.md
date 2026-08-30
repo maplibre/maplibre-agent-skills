@@ -43,8 +43,9 @@ to meters.[1] Nothing about an endpoint's name, its subject, or its file extensi
 - **A GeoTIFF DEM is not a `raster-dem` source either.** MapLibre reads tiled, RGB-packed PNG/WebP, not
   float rasters; a GeoTIFF has to be converted first (below).
 
-If the tileset publishes TileJSON, its `encoding` field — when present — is the authoritative statement of
-which packing it uses.[1]
+If the tileset publishes TileJSON, its `encoding` field — when present — is the provider's own statement of
+which packing it uses, and GL JS reads it (along with `tileSize`) from the TileJSON when the source does
+not set one; a value set on the source wins.[11]
 
 ## `encoding` defaults to `"mapbox"`, and the wrong one fails silently
 
@@ -97,8 +98,9 @@ only under `encoding: "custom"` and have been available in GL JS since 3.4.0.[1]
 
 Both are keyless. Mapterhorn also publishes TileJSON at `https://tiles.mapterhorn.com/tilejson.json`,
 which is what MapLibre's own 3D terrain example points `url` at — preferring `url` over a hand-written
-`tiles` template gets the zoom range and attribution without stating them.[7], [10] Mapterhorn documents
-the migration from the AWS tiles as a three-line diff: same Terrarium encoding, new URL, `tileSize` 256 to 512.[7]
+`tiles` template gets the `encoding`, `tileSize`, zoom range, and attribution without stating them.[7],
+[10], [11] Mapterhorn documents the migration from the AWS tiles as a diff of two properties: same
+Terrarium encoding, new URL, `tileSize` 256 to 512.[7]
 
 Commercial providers (MapTiler, Stadia Maps, and others) serve elevation tiles behind an API key. Take the
 encoding from the provider's own documentation rather than assuming it; a hosted product is as likely to be
@@ -111,7 +113,8 @@ MapLibre consumes elevation tiles; it does not produce them. The pipeline is out
 1. Get a DEM as a float raster (GeoTIFF) — a national LiDAR product, Copernicus DEM, or SRTM.
 2. Reproject to Web Mercator (EPSG:3857) and build a tile pyramid, with GDAL.
 3. Pack each tile's elevation into RGB with the formula for the encoding you intend to declare — Mapbox's
-   `rio-rgbify` writes Terrain-RGB, and the Tilezen formats document specifies Terrarium.[4], [8]
+   `rio-rgbify` writes Terrain-RGB with `-b -10000 -i 0.1`, and the Tilezen formats document specifies
+   Terrarium.[4], [8]
 4. Serve the pyramid as PNG or WebP over HTTPS with CORS, or bundle it into a single PMTiles archive.[9]
 
 Whichever you write, the number you declare in `encoding` must be the number you packed. Round-trip one
@@ -135,6 +138,7 @@ pixel by hand against the formula in the table above before generating a contine
 8. **`rio-rgbify`** — writes Terrain-RGB tiles from a DEM — <https://github.com/mapbox/rio-rgbify>
 9. **PMTiles** — <https://docs.protomaps.com/pmtiles/>
 10. **3D Terrain example (GL JS)** — the Mapterhorn TileJSON source it ships with — <https://maplibre.org/maplibre-gl-js/docs/examples/3d-terrain/>
+11. **GL JS TileJSON loader** — the TileJSON fields a source picks up (`tiles`, `minzoom`, `maxzoom`, `attribution`, `bounds`, `scheme`, `tileSize`, `encoding`), explicit source options taking precedence — <https://github.com/maplibre/maplibre-gl-js/blob/main/src/source/load_tilejson.ts>
 
 ---
 
