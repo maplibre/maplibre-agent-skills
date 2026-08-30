@@ -24,7 +24,8 @@ evidence for tests 1–3: `evals/results/latest/maplibre-terrain-patterns-baseli
 ## What changed in the carried tests
 
 The prompts are unchanged. Two assertions were added from what the baseline answers actually said, per the
-tripwire pattern in `evals/prompts/maplibre-tile-sources.yaml`:
+tripwire pattern already used in `evals/prompts/maplibre-fonts-glyphs.yaml` and
+`evals/prompts/maplibre-cartography.yaml`:
 
 - **Test 2** gains `not-icontains: marchingsquares` — the library the baseline answer built its DIY
   pipeline around — beside the existing `icontains: maplibre-contour`.
