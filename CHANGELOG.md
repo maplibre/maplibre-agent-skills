@@ -4,7 +4,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ## [Unreleased]
 
-<!-- bump: minor -->
+## [0.2.0] - 2026-08-30
 
 ### Added
 
