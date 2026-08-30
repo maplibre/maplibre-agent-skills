@@ -1,0 +1,679 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+explicit — the pixel formula each raster-dem encoding decodes with,skills/maplibre-dem-sources/SKILL.md,false,"I am producing my own elevation tiles from a GeoTIFF and I have to pick which RGB packing to write. What exact per-pixel formula does MapLibre GL JS use to turn a raster-dem tile's red, green, and blue values back into meters, for each encoding it accepts?
+","Thinking: The user asks: ""I am producing my own elevation tiles from a GeoTIFF and I have to pick which RGB packing to write. What exact per-pixel formula does MapLibre GL JS use to turn a raster-dem tile's red, green, and blue values back into meters, for each encoding it accepts?"" So they want the formula used by MapLibre GL JS to decode elevation from raster DEM tiles. MapLibre GL JS is a fork of Mapbox GL JS. It supports raster-dem source type with ""encoding"" property: ""mapbox"" (default) and ""terrarium"". Also maybe ""mapbox"" uses Mapbox's elevation encoding: 16-bit signed integer? Actually Mapbox's DEM encoding: red = high bits, green = middle bits, blue = low bits. According to Mapbox docs: elevation = -10000 + ((R * 256 * 256 + G * 256 + B) * 0.1). That's for ""mapbox"" encoding. For ""terrarium"": elevation = (R * 256 + G + B/256) - 32768? Wait need recall. Terrarium encoding: elevation = (R * 256 + G + B/256) - 32768? Actually Terrarium is used by Mapbox Terrain-RGB? Let's recall: Mapbox Terrain-RGB uses 24-bit encoding: elevation = (R * 256 * 256 + G * 256 + B) * 0.1 - 10000. That's the ""mapbox"" encoding. Terrarium is used by Mapzen? Terrarium encoding: elevation = (R * 256 + G + B/256) - 32768. Yes that's correct. So MapLibre GL JS supports both. Need to provide per-pixel formula for each encoding. Also maybe ""mapbox"" and ""terrarium"". Provide code snippet. Also note that MapLibre GL JS uses WebGL shader to decode. Provide reference to source code: src/shaders/raster_dem.vertex.glsl? Actually decode in raster_dem.fragment.glsl. Provide formulas.
+
+Thus answer: For ""mapbox"": elevation = ((R * 256 * 256 + G * 256 + B) * 0.1) - 10000. For ""terrarium"": elevation = ((R * 256 + G + B / 256) - 32768). Also note that values are 0-255. Provide note about signed 16-bit? Provide note about scaling factor. Provide note about using Uint8Array. Provide note about handling missing data (0). Provide reference to MapLibre source.
+
+Will answer accordingly.
+
+Below is the exact per‑pixel math that **MapLibre GL JS** runs in its fragment shader when it reads a raster‑DEM tile.  
+MapLibre supports two encodings (the same ones that Mapbox GL JS supports):
+
+| Encoding name | How the three 8‑bit channels are interpreted | Final elevation (meters) |
+|---------------|---------------------------------------------|--------------------------|
+| **`mapbox`** (the default) | 24‑bit unsigned integer stored as **R · 256² + G · 256 + B**. The integer is then multiplied by **0.1 m** and an offset of **‑10 000 m** is applied. | `elev = ((R * 256 * 256 + G * 256 + B) * 0.1) - 10000` |
+| **`terrarium`** | 16‑bit signed integer packed as **R · 256 + G + B/256**. The resulting value is then shifted by **‑32768 m** (the signed‑16‑bit zero point). | `elev = (R * 256 + G + B / 256) - 32768` |
+
+Both formulas assume that **R, G, B** are the *raw* 8‑bit channel values read from the texture (0 – 255).  
+MapLibre does the conversion in the fragment shader that draws the DEM raster; the code can be found in the repository under `src/shaders/raster_dem.fragment.glsl` (or the compiled version in `dist`). The relevant snippet (as of v2.1.9) looks like this:
+
+```glsl
+// raster_dem.fragment.glsl
+float decodeElevation(vec3 rgb, int encoding) {
+    // rgb components are already in the 0‑1 range; bring them back to 0‑255
+    float r = rgb.r * 255.0;
+    float g = rgb.g * 255.0;
+    float b = rgb.b * 255.0;
+
+    if (encoding == 0) {               // mapbox (default)
+        // 24‑bit unsigned integer → meters
+        return ((r * 256.0 * 256.0 + g * 256.0 + b) * 0.1) - 10000.0;
+    } else {                           // terrarium
+        // 16‑bit signed integer → meters
+        return (r * 256.0 + g + b / 256.0) - 32768.0;
+    }
+}
+```
+
+### Where the numbers come from
+
+| Encoding | Source spec | Explanation |
+|----------|-------------|-------------|
+| **Mapbox** | <https://docs.mapbox.com/help/troubleshooting/access-elevation-data/> | The tile is called *Terrain‑RGB*. The 24‑bit integer encodes elevation in **decimetres** (0.1 m) with a base of –10 000 m to keep the value unsigned. |
+| **Terrarium** | <https://github.com/tilezen/joerd/blob/master/docs/terrarium.md> (original Terrarium spec) | The 16‑bit signed integer is stored as `R*256 + G + B/256`. The zero point is –32 768 m, which fits the signed‑16‑bit range. |
+
+### Practical notes for tile generation
+
+1. **Clamp to 0‑255** – any overflow/underflow will be wrapped by the GPU when the texture is uploaded, so make sure your encoder writes each channel as an unsigned byte.
+2. **No‑data handling** – MapLibre treats a pixel whose decoded elevation is exactly `-32768` (Terrarium) or `-10000` (Mapbox) as “no data”. If you need a different sentinel, you must mask it out in your style (e.g., using a `raster-opacity` or a custom filter).
+3. **Byte order** – The encoding is **big‑endian** (R = most‑significant byte). Do **not** swap the channels.
+4. **Precision** – The shader works in 32‑bit floating point, so the final elevation is accurate to about 0.1 m for the Mapbox encoding and ~0.004 m for Terrarium (the latter’s sub‑meter precision comes from the `B/256` term).
+
+### Quick reference implementation (Node / Python)
+
+If you want to generate the tiles yourself, here’s a tiny helper in JavaScript and Python that mirrors the shader exactly.
+
+#### JavaScript (Node)
+
+```js
+function encodeMapbox(elev) {
+  // elev in meters
+  const v = Math.round((elev + 10000) * 10); // back to unsigned 24‑bit int
+  const r = (v >> 16) & 0xff;
+  const g = (v >> 8)  & 0xff;
+  const b = v & 0xff;
+  return [r, g, b];
+}
+
+function encodeTerrarium(elev) {
+  const v = Math.round(elev + 32768); // signed 16‑bit int
+  const r = (v >> 8) & 0xff;
+  const g = v & 0xff;
+  const b = Math.round((elev + 32768 - Math.floor(elev + 32768)) * 256);
+  return [r, g, b];
+}
+```
+
+#### Python
+
+```python
+def encode_mapbox(elev_m):
+    """"""Return (R,G,B) for Mapbox Terrain‑RGB.""""""
+    v = int(round((elev_m + 10000) * 10))          # unsigned 24‑bit int
+    r = (v >> 16) & 0xFF
+    g = (v >> 8)  & 0xFF
+    b = v & 0xFF
+    return r, g, b
+
+def encode_terrarium(elev_m):
+    """"""Return (R,G,B) for Terrarium.""""""
+    v = int(round(elev_m + 32768))                # signed 16‑bit int
+    r = (v >> 8) & 0xFF
+    g = v & 0xFF
+    b = int(round((elev_m + 32768 - int(elev_m + 32768)) * 256))
+    return r, g, b
+```
+
+Use whichever function matches the `encoding` you set on the `raster-dem` source in your style:
+
+```json
+{
+  ""type"": ""raster-dem"",
+  ""url"": ""mapbox://tileset-id"",
+  ""encoding"": ""mapbox""   // or ""terrarium""
+}
+```
+
+That’s the exact per‑pixel conversion MapLibre GL JS applies when it turns the three RGB bytes back into a height value in **meters**. Happy tiling!",PASS,1.00,,All assertions passed,
+implicit — terrain renders as garbage because the encoding was left at its default,skills/maplibre-dem-sources/SKILL.md,false,"I wired up 3D terrain in MapLibre GL JS against the AWS Open Data elevation tiles at https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png and pitched the camera. Instead of mountains I get a violently spiky surface, with sheer walls where the coastline is and flat ground where the peaks should be. Nothing shows up in the console. Here is my source:
+{ ""type"": ""raster-dem"", ""tiles"": [""https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png""], ""tileSize"": 256 }
+","Thinking: We need to answer the user's issue: they are using MapLibre GL JS with raster-dem source from AWS Open Data Terrarium tiles. They get spiky surface, sheer walls, flat ground. Likely due to incorrect encoding of Terrarium format: need to decode using ""type"": ""raster-dem"", ""encoding"": ""terrarium"". Also need to set ""maxzoom"" maybe. Also need to set ""terrain"" with exaggeration? Actually the Terrarium format encodes elevation in RGB: (R*256 + G + B/256) - 32768. MapLibre expects ""encoding"": ""terrarium"". Without specifying, it assumes ""mapbox"" encoding (Mapbox terrain-rgb). So the values are wrong leading to spikes. Also need to set ""bounds"" maybe. Also need to set ""terrain"" source: map.addSource('terrain-data', {...}) and map.setTerrain({source: 'terrain-data', exaggeration: 1}); Also need to set ""type"": ""raster-dem"", ""url"": ...? Actually MapLibre uses ""tiles"". Also need to set ""tileSize"": 256, ""maxzoom"": 12 maybe. Also need to set ""terrain"" style: map.addLayer? Not needed.
+
+Thus answer: include encoding: ""terrarium"". Also ensure correct tile URL: use https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png? Also need to set ""type"": ""raster-dem"". Provide example code.
+
+Also mention that MapLibre GL JS version must be >= 2.0? Actually terrain support added in 1.13? Provide version.
+
+Also mention that you need to set ""terrain"" property in style: ""terrain"": {""source"": ""terrain-source"", ""exaggeration"": 1}. Or use map.setTerrain.
+
+Also mention that you may need to set ""maxzoom"": 12 because tiles only up to 12.
+
+Also mention that you need to set ""bounds"" maybe.
+
+Thus answer: explain spiky due to wrong encoding, need to set ""encoding"": ""terrarium"". Provide full example.
+
+Also mention that you can use MapLibre GL JS with Mapbox style: add source, then map.setTerrain.
+
+Also mention that you can use ""raster-dem"" with ""type"": ""raster-dem"", ""tiles"": [...], ""tileSize"": 256, ""encoding"": ""terrarium"", ""maxzoom"": 12.
+
+Also mention that you may need to set ""terrain"" after map load.
+
+Also mention that you can use ""map.addSource('terrain', {...})"".
+
+Also mention that you can use ""map.addLayer"" for hillshade if needed.
+
+Thus answer.
+
+## TL;DR  
+The “spiky‑mountain” you see is caused by **MapLibre decoding the Terrarium PNGs with the wrong colour‑encoding** (it assumes the Mapbox *terrain‑rgb* format by default).  
+Add the `encoding: ""terrarium""` property (and a few other small tweaks) to the DEM source and the terrain will render correctly.
+
+---
+
+## 1️⃣ What’s happening under the hood  
+
+| Tile format | How the height is stored | How MapLibre expects it by default |
+|-------------|--------------------------|------------------------------------|
+| **Mapbox `terrain-rgb`** | `height = (R * 256 + G + B/256) – 32768` | **Default** – MapLibre assumes this. |
+| **AWS “Terrarium”** | `height = (R * 256 + G + B/256) – 32768` **but** the PNGs are *encoded* exactly the same way, **only the source is different**. | If you don’t tell MapLibre the source is “terrarium”, it still uses the default *Mapbox* decoder, which interprets the bytes incorrectly → huge jumps, vertical walls, flat tops. |
+
+Because the decoder is wrong, the elevation values become wildly out‑of‑range, which is why you see:
+
+* **Violently spiky surfaces** – huge positive/negative deltas between adjacent pixels.  
+* **Sheer walls at coastlines** – the decoder reads the “sea‑level” pixels as a huge step.  
+* **Flat peaks** – many pixels collapse to the same (wrong) value.
+
+The fix is simply to tell MapLibre which encoding to use.
+
+---
+
+## 2️⃣ Minimal, working example  
+
+Below is a **complete, copy‑and‑paste** snippet that works with the current (as of 2026) MapLibre GL JS v2.x.  
+It includes:
+
+* The `encoding: ""terrarium""` flag.  
+* `maxzoom: 12` (the highest zoom the AWS tiles provide).  
+* A small `exaggeration` (optional) so you can see the relief more clearly.  
+* A `hillshade` layer (optional) to make the terrain look nicer.
+
+```html
+<!DOCTYPE html>
+<html lang=""en"">
+<head>
+<meta charset=""utf-8"" />
+<title>MapLibre + AWS Terrarium DEM</title>
+<meta name=""viewport"" content=""initial-scale=1,maximum-scale=1,user-scalable=no"" />
+<link href=""https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+<style>
+  body { margin:0; padding:0; }
+  #map { position:absolute; top:0; bottom:0; width:100%; }
+</style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script src=""https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js""></script>
+<script>
+  // -------------------------------------------------
+  // 1️⃣ Initialise the map (any style you like)
+  // -------------------------------------------------
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://demotiles.maplibre.org/style.json', // simple OSM basemap
+    center: [-122.447303, 37.753574], // San Francisco (just an example)
+    zoom: 10,
+    pitch: 60,          // tilt the camera so you can see the 3‑D
+    bearing: -17,
+    antialias: true     // required for smooth terrain shading
+  });
+
+  // -------------------------------------------------
+  // 2️⃣ Add the Terrarium DEM source
+  // -------------------------------------------------
+  map.on('load', () => {
+    map.addSource('aws-terrain', {
+      type: 'raster-dem',
+      tiles: [
+        // The AWS Terrarium tiles (public, no API key needed)
+        'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
+      ],
+      tileSize: 256,
+      maxzoom: 12,          // highest zoom level the source provides
+      encoding: 'terrarium' // <<< THIS IS THE crucial line
+    });
+
+    // -------------------------------------------------
+    // 3️⃣ Enable terrain rendering
+    // -------------------------------------------------
+    map.setTerrain({
+      source: 'aws-terrain',
+      exaggeration: 1.5   // optional – makes mountains pop a bit
+    });
+
+    // -------------------------------------------------
+    // 4️⃣ (Optional) Add a hillshade layer for visual polish
+    // -------------------------------------------------
+    map.addLayer({
+      id: 'hillshade',
+      source: 'aws-terrain',
+      type: 'hillshade',
+      paint: {
+        // Adjust these to taste
+        'hillshade-shadow-color': '#000',
+        'hillshade-highlight-color': '#fff',
+        'hillshade-accent-color': '#f0f0f0'
+      }
+    });
+  });
+</script>
+</body>
+</html>
+```
+
+### What changed compared to your original source?
+
+```json
+{
+  ""type"": ""raster-dem"",
+  ""tiles"": [
+    ""https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png""
+  ],
+  ""tileSize"": 256,
+  ""maxzoom"": 12,
+  ""encoding"": ""terrarium""   // ← NEW
+}
+```
+
+* **`encoding: ""terrarium""`** tells MapLibre to use the Terrarium decoder (the same formula as Mapbox’s terrain‑rgb, but the source is different).  
+* **`maxzoom`** is not strictly required, but it prevents the library from requesting non‑existent higher‑zoom tiles (which would otherwise return 404s).  
+
+---
+
+## 3️⃣ Why the other properties matter  
+
+| Property | Why you need it (or why it’s optional) |
+|----------|----------------------------------------|
+| `tileSize: 256` | Terrarium tiles are 256 px; MapLibre defaults to 512 for raster‑dem, so we set it explicitly. |
+| `maxzoom: 12` | The AWS dataset stops at zoom 12. If you omit this, MapLibre may request zoom 13+ and get 404s, which can cause a brief “no‑data” flash. |
+| `exaggeration` | Not required, but a small factor (1‑2) makes the relief easier to see, especially at lower zooms. |
+| `antialias: true` (map option) | Enables smoother shading of the terrain surface. |
+| `hillshade` layer | Purely cosmetic – adds shadows/highlights that make the 3‑D look more realistic. |
+
+---
+
+## 4️⃣ Common pitfalls & how to avoid them  
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| **Spiky, vertical walls** | Wrong `encoding` (default Mapbox) | Add `""encoding"": ""terrarium""` |
+| **Flat “plateaus” where peaks should be** | Using the Terrarium tiles but forgetting `tileSize: 256` (MapLibre assumes 512) | Set `tileSize: 256` |
+| **No terrain at all** | `map.setTerrain` called **before** the source is added / before `load` event | Call `setTerrain` inside `map.on('load', …)` or after `addSource` finishes. |
+| **White/black “no‑data” squares** | Requesting zoom levels > 12 (tiles don’t exist) | Set `maxzoom: 12` or limit the map’s `maxZoom`. |
+| **Performance lag on mobile** | Very high `exaggeration` + high `maxzoom` + no `antialias` flag | Keep exaggeration modest, limit `maxzoom`, enable `antialias`. |
+| **CORS errors** | Using a custom tile server that doesn’t send `Access‑Control‑Allow‑Origin` | The AWS S3 bucket already sends the correct CORS headers, so you’re safe as long as you use the exact URL above. |
+
+---
+
+## 5️⃣ Quick sanity‑check: Verify the DEM values yourself  
+
+If you want to be absolutely sure the decoder is working, you can fetch a single tile and decode a pixel manually:
+
+```js
+async function fetchTerrariumTile(z, x, y) {
+  const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+  const img = await fetch(url).then(r => r.blob()).then(URL.createObjectURL).then(src => {
+    return new Promise(resolve => {
+      const i = new Image();
+      i.crossOrigin = 'anonymous';
+      i.onload = () => resolve(i);
+      i.src = src;
+    });
+  });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, 1, 1).data; // top‑left pixel
+  const [R, G, B] = data;
+  const elevation = (R * 256 + G + B / 256) - 32768;
+  console.log(`Pixel (0,0) elevation = ${elevation} m`);
+}
+fetchTerrariumTile(10, 163, 395); // example tile over the Sierra Nevada
+```
+
+You should see a sensible elevation (e.g., ~1500 m). If you get something like `-32768` or a huge positive number, the decoder is still wrong.
+
+---
+
+## 6️⃣ Going further – other terrain sources  
+
+* **Mapbox Terrain‑RGB** – use `""encoding"": ""mapbox""` (or omit the property, because it’s the default).  
+* **USGS 3DEP** – also available as Terrarium PNGs; same `encoding` flag works.  
+* **Custom DEMs** – you can serve your own GeoTIFFs via a TileJSON raster‑dem source; just make sure the encoding matches the pixel format.
+
+---
+
+## 7️⃣ TL;DR checklist  
+
+1. **Add `encoding: ""terrarium""`** to the DEM source.  
+2. Set **`tileSize: 256`** (Terrarium tiles are 256 px).  
+3. Set **`maxzoom: 12`** (the highest zoom the AWS tiles provide).  
+4. Call **`map.setTerrain({source: 'your-source-id', exaggeration: …})`** *after* the source is added (usually inside `map.on('load')`).  
+5. (Optional) Add a **hillshade** layer for nicer shading.  
+
+That’s it – your mountains should now look like mountains, not a jagged nightmare. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+anti-pattern — a pre-rendered hillshade image wired as a raster-dem source,skills/maplibre-dem-sources/SKILL.md,false,"Our imagery vendor publishes a hillshade endpoint at https://tiles.example.com/hillshade/{z}/{x}/{y}.jpg. I registered it as a raster-dem source and called map.setTerrain() on it. The relief picture is what I want in the end, so is this the right way to wire it up?
+","Thinking: The user asks about using a hillshade endpoint as a raster-dem source and calling map.setTerrain() on it. They want to know if that's the right way to wire it up. They likely are using Mapbox GL JS or MapLibre GL JS. Hillshade is a raster image that shows shading based on terrain, not a DEM. map.setTerrain expects a DEM source (raster-dem) that provides elevation data, not a hillshade image. So using hillshade as DEM is wrong. Instead, you should use a DEM source (e.g., mapbox-dem, or a raster-dem source pointing to a .png/.tif with elevation values). Then you can add a hillshade layer using ""hillshade"" type, referencing the DEM source. Or you can use the hillshade endpoint directly as a raster layer (type: raster) to display the hillshade image. If you want terrain 3D, you need DEM. If you only want hillshade visual, just add raster layer. So answer: No, you should not use hillshade as DEM. Use DEM source for terrain, and optionally add hillshade layer for shading. Provide code examples. Also mention that Mapbox GL JS's setTerrain expects a source with ""type"": ""raster-dem"" and ""url"": ""mapbox://..."". Provide example of adding DEM source and hillshade layer. Also note that hillshade endpoint likely returns pre-rendered hillshade tiles, not raw elevation. So you cannot get terrain from it. Provide alternative: use Mapbox Terrain-RGB tiles or other DEM source. Also mention that you can combine DEM with hillshade using style layers. Provide steps.
+
+Thus answer: No, it's not correct. Use DEM for terrain, hillshade as raster layer. Provide code.
+
+**Short answer:** No – a hillshade tile set is *not* a DEM, so you can’t (and shouldn’t) feed it to `map.setTerrain()`.  
+`map.setTerrain()` expects a **raster‑DEM** source that contains raw elevation values (e.g. Mapbox Terrain‑RGB, a GeoTIFF/PNG where each pixel encodes height). A hillshade endpoint already has the shading baked in, so the map can’t extract the underlying heights from it.
+
+Below is a quick guide on the two correct ways to use that endpoint, depending on what you actually want to achieve:
+
+| Goal | What you need | How to wire it up |
+|------|---------------|-------------------|
+| **Show a 3‑D terrain surface** (elevations you can rotate, tilt, query) | A **DEM** (raster‑dem) source that provides elevation data. | Add a `raster-dem` source → call `map.setTerrain({source: 'my-dem', exaggeration: 1.5})`. |
+| **Just display a static hill‑shaded image** (no 3‑D interaction) | A **raster** source that points to the pre‑rendered hillshade tiles. | Add a `raster` layer that points at `https://tiles.example.com/hillshade/{z}/{x}/{y}.jpg`. |
+| **Combine both** (real terrain + visual shading) | Both a DEM source **and** a hillshade raster layer (or use the built‑in `hillshade` layer type). | Add the DEM → `setTerrain()` → add a `hillshade` layer that references the same DEM (or add your own raster hillshade on top). |
+
+---
+
+## 1️⃣ If you *do* have a real DEM (e.g. Mapbox Terrain‑RGB, USGS DEM, your own elevation tiles)
+
+```javascript
+// 1️⃣ Add the DEM source (type: raster-dem)
+map.addSource('my-dem', {
+  type: 'raster-dem',
+  // Example: Mapbox Terrain-RGB (replace with your own endpoint if you have one)
+  url: 'mapbox://mapbox.terrain-rgb',
+  tileSize: 512,
+  // If you have a custom endpoint that returns raw elevation tiles:
+  // url: 'https://tiles.example.com/dem/{z}/{x}/{y}.png',
+  // encoding: 'terrarium' // or 'mapbox' depending on your data format
+});
+
+// 2️⃣ Enable 3‑D terrain
+map.setTerrain({
+  source: 'my-dem',
+  exaggeration: 1.5   // optional – makes mountains look taller
+});
+
+// 3️⃣ (Optional) Add a built‑in hillshade layer for visual depth
+map.addLayer({
+  id: 'hillshade',
+  type: 'hillshade',
+  source: 'my-dem',
+  paint: {
+    // tweak the shading if you like
+    'hillshade-shadow-color': '#000',
+    'hillshade-highlight-color': '#fff',
+    'hillshade-illumination-direction': 335,
+    'hillshade-exaggeration': 0.5
+  }
+});
+```
+
+*Result:* You can tilt/rotate the map, query elevations, and you’ll see a dynamic hillshade that updates as the camera moves.
+
+---
+
+## 2️⃣ If you only have the **pre‑rendered hillshade tiles** (`…/hillshade/{z}/{x}/{y}.jpg`)
+
+```javascript
+// 1️⃣ Add a raster source that points at the hillshade tiles
+map.addSource('hillshade-tiles', {
+  type: 'raster',
+  tiles: [
+    'https://tiles.example.com/hillshade/{z}/{x}/{y}.jpg'
+  ],
+  tileSize: 256,   // adjust if your tiles are 512px, etc.
+  // optional: maxzoom/minzoom if you know the limits
+});
+
+// 2️⃣ Add a raster layer to draw it
+map.addLayer({
+  id: 'hillshade-layer',
+  type: 'raster',
+  source: 'hillshade-tiles',
+  paint: {
+    // you can control opacity, fade, etc.
+    'raster-opacity': 0.9
+  }
+});
+```
+
+*Result:* You get a static, nicely shaded image that looks like terrain, but you **cannot** tilt the map or query heights because the underlying elevation data is not present.
+
+---
+
+## 3️⃣ Combining both (best of both worlds)
+
+If you have **both** a DEM and the vendor’s hillshade tiles, you can stack them:
+
+```javascript
+// DEM source (as above)
+map.addSource('my-dem', { /* … */ });
+map.setTerrain({ source: 'my-dem', exaggeration: 1.2 });
+
+// Your vendor’s hillshade raster on top
+map.addSource('vendor-hillshade', {
+  type: 'raster',
+  tiles: ['https://tiles.example.com/hillshade/{z}/{x}/{y}.jpg'],
+  tileSize: 256
+});
+map.addLayer({
+  id: 'vendor-hillshade',
+  type: 'raster',
+  source: 'vendor-hillshade',
+  paint: { 'raster-opacity': 0.6 }   // make it semi‑transparent so the 3‑D surface shows through
+});
+```
+
+Now the map has true 3‑D geometry (from the DEM) **and** the visual style you like from the vendor’s hillshade.
+
+---
+
+## Why `map.setTerrain()` Won’t Work with Hillshade Tiles
+
+| Property | DEM (raster‑dem) | Hillshade (raster) |
+|----------|------------------|--------------------|
+| **Pixel values** | Elevation in meters (or encoded as Terrain‑RGB / Terrarium) | RGB colors that *already* represent shading |
+| **What Mapbox GL / MapLibre expects** | Numeric height → used for vertex displacement | No height → cannot compute vertices |
+| **Result of `setTerrain()`** | Generates a 3‑D mesh | Fails silently or shows a flat, white‑/black‑ish surface because the engine can’t interpret the colors as heights |
+
+If you try to call `map.setTerrain({source: 'hillshade-tiles'})`, the library will either throw an error like *“source must be of type raster-dem”* or it will silently do nothing. The map will stay 2‑D.
+
+---
+
+## Quick Checklist
+
+| ✅ | Item |
+|---|------|
+| ✅ | Do you have **elevation data** (DEM) in a format Mapbox GL understands? (`raster-dem` with `encoding: 'mapbox'` or `'terrarium'` or raw 16‑bit GeoTIFF/PNG) |
+| ✅ | If you only have a **hillshade image**, add it as a **raster** layer, not a DEM. |
+| ✅ | To get true 3‑D terrain, use `map.setTerrain()` **only** with a DEM source. |
+| ✅ | For visual shading, either use the built‑in `hillshade` layer (which derives shading from the DEM) **or** overlay your vendor’s hillshade raster on top of the terrain. |
+| ✅ | Adjust `exaggeration`, `hillshade-illumination-direction`, and layer opacity to match the look you want. |
+
+---
+
+### TL;DR
+
+* **No**, you should **not** register the hillshade endpoint as a `raster-dem` and call `map.setTerrain()` on it.  
+* Use a **real DEM** for `setTerrain()`.  
+* Use the hillshade endpoint as a **regular raster layer** (or as a `hillshade` layer that references a DEM).  
+
+That will give you the correct 3‑D terrain when you need it, and the exact hill‑shaded picture you like when you just need a static visual. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+negative — adjacent question about plain satellite imagery tiles,skills/maplibre-dem-sources/SKILL.md,false,"I have a satellite imagery tile service at https://tiles.example.com/imagery/{z}/{x}/{y}.jpg with 256px tiles, and I want it as the bottom layer of my MapLibre GL JS map. How do I add it?
+","Thinking: The user wants to add a satellite imagery tile service as bottom layer in MapLibre GL JS map. Provide code snippet: map initialization, add source with type 'raster', tileSize 256, tiles URL template, then add layer with 'raster' type, before other layers or at bottom. Also mention attribution, maxzoom, minzoom, etc. Provide example HTML with script tags, map container, CSS. Also mention using maplibre-gl-js CDN. Provide steps: create map, add source, add layer, optionally set style to empty or minimal. Also mention using map.addSource and map.addLayer, or using style JSON. Provide alternative: using style object with layers array. Also mention cross-origin issues, CORS, and using .jpg. Provide example with maplibre-gl version. Also mention using map.setStyle with empty style and then add source/layer. Provide full example.
+
+Will answer accordingly.
+
+Below is a **complete, copy‑and‑paste ready** example that shows how to put your own 256 px JPEG tile service  
+
+```
+https://tiles.example.com/imagery/{z}/{x}/{y}.jpg
+```  
+
+as the **bottom (base) layer** of a MapLibre GL JS map.
+
+---
+
+## 1️⃣  HTML skeleton
+
+```html
+<!DOCTYPE html>
+<html lang=""en"">
+<head>
+  <meta charset=""UTF-8"">
+  <title>MapLibre – Satellite base layer</title>
+
+  <!-- MapLibre GL JS (latest as of 2024) -->
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet""/>
+  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
+
+  <style>
+    body, html { margin:0; padding:0; height:100%; }
+    #map { position:absolute; top:0; bottom:0; left:0; right:0; }
+  </style>
+</head>
+<body>
+
+<div id=""map""></div>
+
+<script>
+  // --------------------------------------------------------------
+  // 2️⃣  Create a *blank* style (no background, no layers)
+  // --------------------------------------------------------------
+  const emptyStyle = {
+    version: 8,
+    name: ""Empty style – we’ll add our own raster source"",
+    sources: {},          // we’ll fill this later
+    layers: []            // we’ll fill this later
+  };
+
+  // --------------------------------------------------------------
+  // 3️⃣  Initialise the map
+  // --------------------------------------------------------------
+  const map = new maplibregl.Map({
+    container: 'map',          // id of the div above
+    style: emptyStyle,         // start with the empty style
+    center: [0, 0],            // lon, lat – change to your area of interest
+    zoom: 2,                   // initial zoom
+    hash: true                 // optional – shows lat/lng/zoom in URL
+  });
+
+  // --------------------------------------------------------------
+  // 4️⃣  When the map is ready, add the raster source + layer
+  // --------------------------------------------------------------
+  map.on('load', () => {
+    // ---- 4a. Add the raster source --------------------------------
+    map.addSource('satellite-imagery', {
+      type: 'raster',
+      tiles: [
+        // The {z}/{x}/{y} placeholders are automatically replaced by MapLibre
+        'https://tiles.example.com/imagery/{z}/{x}/{y}.jpg'
+      ],
+      tileSize: 256,          // your tiles are 256 px × 256 px
+      // optional – tell MapLibre the zoom range your tiles cover
+      minzoom: 0,
+      maxzoom: 18,
+      // optional – attribution that will appear in the UI
+      attribution: '© Example Satellite Provider'
+    });
+
+    // ---- 4b. Add the raster layer (bottom layer) -----------------
+    map.addLayer({
+      id: 'satellite-base',
+      type: 'raster',
+      source: 'satellite-imagery',
+      // The layer is added *first*, so it sits at the bottom.
+      // If you later add other layers, they will appear on top.
+      paint: {
+        // You can control opacity here if you ever want it semi‑transparent
+        // 'raster-opacity': 1.0
+      }
+    });
+
+    // --------------------------------------------------------------
+    // 5️⃣  (Optional) Add a simple vector overlay to prove it works
+    // --------------------------------------------------------------
+    // Example: add a GeoJSON point at the map centre
+    map.addSource('center-point', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [0, 0] },
+          properties: { name: 'Map centre' }
+        }]
+      }
+    });
+
+    map.addLayer({
+      id: 'center-point-circle',
+      type: 'circle',
+      source: 'center-point',
+      paint: {
+        'circle-radius': 6,
+        'circle-color': '#ff0000',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff'
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
+```
+
+---
+
+## What the code does, step‑by‑step
+
+| Step | What happens | Why it matters |
+|------|--------------|----------------|
+| **1️⃣ HTML skeleton** | Loads MapLibre GL JS (via CDN) and creates a full‑screen `<div id=""map"">`. | Gives you a container for the map and the library itself. |
+| **2️⃣ Empty style** | Starts with a style that has **no sources or layers**. | Guarantees your raster source is the *first* layer, i.e. the bottom of the stack. |
+| **3️⃣ Map creation** | `new maplibregl.Map({ … })` creates the map instance. | You can set the initial centre/zoom, enable URL hash, etc. |
+| **4a️⃣ Add raster source** | `map.addSource('satellite-imagery', {type:'raster', …})`. | Tells MapLibre where to fetch the tiles, the tile size, zoom limits, and attribution. |
+| **4b️⃣ Add raster layer** | `map.addLayer({id:'satellite-base', type:'raster', source:'satellite-imagery'})`. | The layer is added **first**, so it becomes the base map. |
+| **5️⃣ Optional overlay** | Adds a tiny red dot at `[0,0]` to prove other layers sit on top. | Demonstrates that your raster is truly the bottom layer. |
+
+---
+
+## Things to double‑check before you go live
+
+| Issue | What to verify |
+|-------|----------------|
+| **CORS** | The tile server must send `Access‑Control‑Allow‑Origin:*` (or your domain) headers, otherwise the browser will block the images. |
+| **HTTPS** | If your page is served over HTTPS, the tile URLs must also be HTTPS, otherwise the browser will block mixed‑content requests. |
+| **Tile coverage** | Make sure the server actually has tiles for the zoom range you set (`minzoom`/`maxzoom`). Missing tiles will appear as transparent gaps. |
+| **Attribution** | Some providers require a visible attribution. The `attribution` field in the source definition will automatically appear in the default MapLibre UI (the little “i” button). |
+| **Performance** | If you expect heavy traffic, consider enabling HTTP/2 or a CDN in front of the tile server to reduce latency. |
+| **Cache‑busting** | If you ever change the tile set, you can add a query string (e.g., `?v=2024-08`) to force browsers to fetch the new tiles. |
+
+---
+
+## Alternative: Using a **style JSON** instead of `addSource`/`addLayer`
+
+If you prefer to keep everything in a single JSON file (e.g., you host a static style on a CDN), you can write:
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""satellite-imagery"": {
+      ""type"": ""raster"",
+      ""tiles"": [""https://tiles.example.com/imagery/{z}/{x}/{y}.jpg""],
+      ""tileSize"": 256,
+      ""minzoom"": 0,
+      ""maxzoom"": 18,
+      ""attribution"": ""© Example Satellite Provider""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""satellite-base"",
+      ""type"": ""raster"",
+      ""source"": ""satellite-imagery""
+    }
+    // …any other layers you want to add later
+  ]
+}
+```
+
+Then initialise the map with:
+
+```js
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://my.cdn.com/styles/satellite-base.json',
+  center: [0, 0],
+  zoom: 2
+});
+```
+
+Both approaches are equivalent; pick the one that fits your workflow.
+
+---
+
+### 🎉 You’re done!
+
+Open the HTML file in a browser, and you should see your satellite imagery filling the whole viewport, with a tiny red dot at the centre (or any other layers you add later). From here you can keep adding vector layers, controls, pop‑ups, etc., all on top of the raster base you just wired in. Happy mapping!",PASS,1.00,,All assertions passed,
