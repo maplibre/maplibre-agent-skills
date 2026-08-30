@@ -1,9 +1,6 @@
 # Eval Results: maplibre-terrain-patterns
 
-> **Superseded.** This skill was decomposed into `maplibre-dem-sources` and
-> `maplibre-terrain-rendering` (#78). The measurements below stand as the evidence for that split — in
-> particular the with-skill request sizes against Groq's 8,000 TPM window — and the three baseline FAILs
-> are carried into `evals/results/maplibre-terrain-rendering.md`. Nothing here is re-run.
+> **Superseded.** This skill was replaced by `maplibre-terrain-rendering` (#78); the DEM-source half of the split was drafted, probed, and withdrawn because every one of its tests passed at baseline (`evals/results/maplibre-dem-sources.md`). The measurements below stand as the evidence for the split — in particular the with-skill request sizes against Groq's 8,000 TPM window — and the three baseline FAILs are carried into `evals/results/maplibre-terrain-rendering.md`. Nothing here is re-run.
 
 Canonical results table for this skill. Baseline is the same prompt with the skill omitted (`--var injectSkill=false`). See `evals/prompts/maplibre-terrain-patterns.yaml`.
 

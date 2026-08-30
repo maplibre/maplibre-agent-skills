@@ -22,6 +22,12 @@ Test 4 was written as a prediction rather than a measurement: the retired skill 
 
 The four failing baseline completions run 11,082–11,694 characters, inside the ≈11,900-character zone where Groq stops this model mid-sentence, and tests 2, 3, and 4 do end mid-sentence. None of the four failures is a truncation artifact: test 2 never names `maplibre-contour` anywhere in 11.4K characters and builds a DIY pipeline instead, and tests 1, 3, and 4 fail on what they affirmatively assert (`raster-color`, an invented hillshade parameter set, `type: "sky"`), not on what the cut removed.
 
+## Test 5 passes both ways, and both passes are loose
+
+The negative's rubric grades the shape of the answer — a `raster` source and layer inserted beneath the data and label layers, no `raster-dem`, `hillshade`, `color-relief`, or `setTerrain` — without requiring the MapLibre API. The baseline answered in Leaflet (`L.tileLayer`) and passed. The with-skill answer gets the shape right in MapLibre and says outright that the elevation layer types do not apply, then appends two optional sections anyway: a `hillshade` layer from a DEM "if you also have the DEM tiles", and `setTerrain` plus `setSky` "if you later enable" terrain. The rubric forbids saying the task _needs_ those, so the judge passed it. That is mild over-application the test did not catch; tightening the rubric to forbid offering them as extras (the same tightening test 3 received) would need a fresh with-skill run and is left as is here.
+
+One ungraded slip in the with-skill explicit answer: a code comment lists `raster-dem` encodings as `'terrarium' | 'mapbox' | 'raw'`. The style specification's third value is `custom`; the skill does not mention encodings, so this is a model fact, not a skill fact.
+
 ## What changed in the carried tests
 
 The prompts are unchanged. Two assertions were added from what the baseline answers actually said, per the tripwire pattern already used in `evals/prompts/maplibre-fonts-glyphs.yaml` and `evals/prompts/maplibre-cartography.yaml`:
