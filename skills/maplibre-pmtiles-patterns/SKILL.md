@@ -1,7 +1,7 @@
 ---
 name: maplibre-pmtiles-patterns
 description: Serverless vector and raster tiles with PMTiles for MapLibre GL JS — single-file format, HTTP range requests, hosting on S3/R2/GitHub Pages, generating with Planetiler or tippecanoe, and the pmtiles protocol. Use when you need no tile server or want to host tiles from static storage.
-status: provisional
+status: verified
 ---
 
 # MapLibre PMTiles Patterns
