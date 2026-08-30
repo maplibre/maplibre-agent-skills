@@ -157,7 +157,7 @@ When building a style from scratch, follow this ordering bottom to top:
 
 1. `background`
 2. Raster imagery (if using satellite/aerial source)
-3. Hillshade layers (if any — see [maplibre-terrain-patterns](../maplibre-terrain-patterns/SKILL.md) for configuration)
+3. Hillshade layers (if any — see [maplibre-terrain-rendering](../maplibre-terrain-rendering/SKILL.md) for configuration)
 4. Terrain fill (water, land, parks — polygon layers)
 5. Line layers (roads, boundaries, rivers)
 6. Your data polygon and line layers
@@ -181,7 +181,7 @@ MapLibre styles are rendered in the browser as a WebGL canvas. Accessibility con
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
 - [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — Sprites and source configuration.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serving imagery (raster) and terrain sources from PMTiles files.
-- [**maplibre-terrain-patterns**](../maplibre-terrain-patterns/SKILL.md) — Hillshade configuration, multi-pass techniques, 3D terrain, DEM sources.
+- [**maplibre-terrain-rendering**](../maplibre-terrain-rendering/SKILL.md) — Hillshade, color-relief, contours, and 3D terrain configuration.
 
 ## References
 
