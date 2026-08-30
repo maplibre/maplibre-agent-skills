@@ -7,7 +7,7 @@ Canonical results table for this skill. Baseline is the same prompt with the ski
 `evals/prompts/maplibre-terrain-patterns.yaml`, where all three failed at baseline on 2026-08-28; their
 baseline column below repeats that measurement and names the file it came from. The with-skill half of
 that config could not run on Groq's on-demand tier (8,310–8,602-token requests against an 8,000 TPM
-window). This `SKILL.md` is ≈10.3K characters, ≈2.6K tokens injected, which is what the split is for.
+window). This `SKILL.md` is ≈10.4K characters, ≈2.6K tokens injected, which is what the split is for.
 `status: provisional` until the pinned run lands.
 
 Model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`. Baseline

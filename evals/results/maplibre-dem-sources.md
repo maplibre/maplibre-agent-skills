@@ -6,7 +6,7 @@ Canonical results table for this skill. Baseline is the same prompt with the ski
 **Not yet run.** This skill and `maplibre-terrain-rendering` split `maplibre-terrain-patterns`, whose
 with-skill half could not run on Groq's on-demand tier (8,310–8,602-token requests against an 8,000 TPM
 window, `evals/results/maplibre-terrain-patterns.md`). The split exists to bring each prompt back inside
-that window: this `SKILL.md` is ≈10.9K characters, ≈2.7K tokens injected. `status: provisional` until the
+that window: this `SKILL.md` is ≈11.4K characters, ≈2.8K tokens injected. `status: provisional` until the
 pinned run lands.
 
 Model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`.
