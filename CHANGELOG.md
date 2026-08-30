@@ -4,19 +4,18 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ## [Unreleased]
 
-<!-- bump: minor -->
-
-### Added
-
-- `maplibre-tile-sources`: rewritten against a revised eval rubric; `maplibre-source-wiring`: added; `maplibre-running-evals`: added; links and cross-references modified across the whole collection ([#69](https://github.com/maplibre/maplibre-agent-skills/pull/69))
-
 ## [0.2.0] - 2026-08-30
 
 ### Added
 
+- `maplibre-source-wiring` skill, split out of `maplibre-tile-sources` so that "the source is configured but nothing draws" routes to a focused skill; `maplibre-tile-sources` narrowed to choosing and identifying a source, and cross-references updated across the collection ([#69](https://github.com/maplibre/maplibre-agent-skills/pull/69))
 - `maplibre-v6-migration` skill, for upgrading a v5 app to v6's ESM-only build and other breaking changes ([#53](https://github.com/maplibre/maplibre-agent-skills/pull/53))
 - `maplibre-skill-authoring` process skill, for turning a research session into a new skill or a failure report ([#57](https://github.com/maplibre/maplibre-agent-skills/pull/57))
 - `maplibre-fonts-glyphs` skill, extracted from `maplibre-cartography` and `maplibre-tile-sources` ([#56](https://github.com/maplibre/maplibre-agent-skills/pull/56))
+
+### Changed
+
+- `maplibre-v6-migration`: add the missing `status` field ([#77](https://github.com/maplibre/maplibre-agent-skills/pull/77))
 
 ### Fixed
 
