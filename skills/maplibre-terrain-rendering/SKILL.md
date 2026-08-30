@@ -21,9 +21,9 @@ These are symptoms as you would observe them, before you know the cause:
 - Terrain is enabled and the map has become slow
 
 **Not this skill.** Elevation values that are wrong, spiky, or inverted, choosing an elevation tileset,
-`encoding`, and generating DEM tiles — [maplibre-dem-sources](../maplibre-dem-sources/SKILL.md). Where
-hillshade sits among the other layers of a style —
-[maplibre-cartography](../maplibre-cartography/SKILL.md).
+`encoding`, and generating DEM tiles — the style specification's `raster-dem` source page,
+<https://maplibre.org/maplibre-style-spec/sources/#raster-dem>. Where hillshade sits among the other layers
+of a style — [maplibre-cartography](../maplibre-cartography/SKILL.md).
 
 ## Which one you want
 
@@ -183,7 +183,6 @@ need.
 
 ## Related Skills
 
-- [**maplibre-dem-sources**](../maplibre-dem-sources/SKILL.md) — The `raster-dem` source, `encoding`, `tileSize`, and where elevation tiles come from.
 - [**maplibre-cartography**](../maplibre-cartography/SKILL.md) — Where a hillshade layer belongs in the layer order, and palettes that survive over relief.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serving DEM and imagery tiles from a single PMTiles file.
 
