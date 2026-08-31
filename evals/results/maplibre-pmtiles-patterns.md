@@ -2,7 +2,7 @@
 
 Canonical results table for this skill. Baseline is the same prompt with the skill omitted (`--var injectSkill=false`). See `evals/prompts/maplibre-pmtiles-patterns.yaml`.
 
-Run: 2026-08-30 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`. Raw CSVs under [`latest/`](latest/), matching `maplibre-pmtiles-patterns-*_2026-08-30`. Rubrics revised in #79 after the 2026-08-28 run passed three tests at baseline on invented code; the 2026-08-28 CSVs are kept alongside.
+Run: 2026-08-30 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`. Raw CSVs under [`latest/`](latest/), matching `maplibre-pmtiles-patterns-*_2026-08-30`. The 2026-08-28 CSVs are kept alongside.
 
 | #   | Test                                           | Type         | Baseline (no skill)                                                                                                             | With skill                                                                                                        |
 | --- | ---------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -15,23 +15,13 @@ Run: 2026-08-30 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-
 
 **Result: 5 FAIL / 1 PASS at baseline, 6 PASS with the skill. Every non-negative test fails at baseline and passes with the skill; the negative holds in both directions. `status: verified` is set.**
 
-What carried each baseline FAIL: test 1 failed the rubric and the `pmtiles.get(` tripwire both; test 2 failed the rubric; test 3 failed only its `not-icontains: map.addProtocol` tripwire, and test 4 only its `icontains: pmtiles verify` — the judge passed both rubrics, on an answer that says `map.addProtocol()` exists (against an explicit must-not) and on one that never names `pmtiles show` (against an explicit must). Test 6 failed its new `not-icontains: set-metadata` tripwire. The tripwires are doing the work the rubric text alone did not.
+## What the rubrics guard against
 
-## What the tightened rubrics changed
+Three tests once passed at baseline on invented code because their rubrics scored the concept, not the code. Each now names the real API beside a tripwire for the invented one, and the tripwires are doing work the rubric text alone did not (tests 3 and 4 fail at baseline on their tripwire alone; the judge passed both rubrics):
 
-Three tests passed at baseline on 2026-08-28 because the rubrics scored the concept and not the code. Each now names the specific invented thing the completion produced, next to the real name (the #52 tripwire technique):
-
-- **Test 1** — required `protocol.tile` and the `Protocol` class from the `pmtiles` package, tripwire `not-icontains: pmtiles.get(`. The baseline still hand-rolls `(request) => pmtiles.get(request)` and still writes host-less `pmtiles://…` URLs; it now fails for it. Verified against [`js/src/adapters.ts`](https://github.com/protomaps/PMTiles/blob/main/js/src/adapters.ts): `class Protocol` exposes `tile = v3compat(this.tilev4)`.
-- **Test 3** — required the v4 handler shape (`async (params, abortController)` resolving to an object with a `data` property) registered on the module, tripwire `not-icontains: map.addProtocol`. The baseline describes the Promise change correctly and then asserts `map.addProtocol()` still exists in MapLibre GL JS v4; the judge passed the rubric anyway, and the tripwire is what fails it. Verified against [`src/source/protocol_crud.ts`](https://github.com/maplibre/maplibre-gl-js/blob/main/src/source/protocol_crud.ts): `addProtocol` is a module-level function whose `loadFn` returns `{data: buffer}`.
-- **Test 6** — redesigned; see below.
-
-## Test 6: why it was redesigned, and what it shows now
-
-As written for 2026-08-28 and again for the first 2026-08-30 pass, this test passed at baseline on answers that contradicted its own rubric. The 2026-08-30 pre-revision baseline attributed the blank tiles to the loader not understanding the templated URL — the exact claim the rubric forbids — never named the default `maxzoom: 22`, and offered `pmtiles inspect` and `pmtiles set-metadata` as the fix. The judge waved all of that through, so the test measured judge leniency rather than a gap in the model.
-
-The redesign in #79 does two things. It turns the two invented CLI subcommands into deterministic tripwires (`not-icontains: pmtiles inspect`, `not-icontains: set-metadata`, alongside the existing `pmtiles info` and `tileset:` tripwires), so an answer that invents a way to patch the archive's metadata fails regardless of how the rubric is judged. And it adds the one positive the old rubric was missing: the answer must state that with the archive's own `maxzoom` supplied, MapLibre **overzooms** the deepest stored tiles past that zoom instead of requesting tiles the archive does not have. That is the behaviour the skill's paragraph actually claims, so it is the thing the test should be discriminating on. go-pmtiles has no `info` and no `inspect` or `set-metadata`: `main.go` declares `show`, `tile`, `cluster`, `edit`, `extract`, `merge`, `convert`, `verify`, `serve`, `upload`, `version`.
-
-The redesigned test now discriminates. At baseline the model reaches for `pmtiles set-metadata my-archive.pmtiles maxzoom 14` and `pmtiles info`, and recommends rebuilding the archive with `tippecanoe --maximum-zoom` — a fix that would be unnecessary if the answer understood overzoom — and it fails. With the skill the answer says MapLibre "falls back to its default `maxzoom: 22`" when the header is never read, and that switching to `url: 'pmtiles://…'` makes MapLibre "**over-zoom** (reuse the highest-available tiles) instead of requesting non-existent ones". Test 6 is now gap evidence rather than a judge artefact, which is what moves this skill's `status:` to `verified`.
+- **Test 1** — `protocol.tile` and the `Protocol` class from `pmtiles`; tripwire `not-icontains: pmtiles.get(`. Verified against [`js/src/adapters.ts`](https://github.com/protomaps/PMTiles/blob/main/js/src/adapters.ts).
+- **Test 3** — the v4 handler shape (`async (params, abortController)` resolving to `{data}`) on the module-level `maplibregl.addProtocol`; tripwire `not-icontains: map.addProtocol`. Verified against [`src/source/protocol_crud.ts`](https://github.com/maplibre/maplibre-gl-js/blob/main/src/source/protocol_crud.ts).
+- **Test 6** — the answer must say that with the archive's own `maxzoom` supplied MapLibre **overzooms** the deepest stored tiles, and must not patch the archive's metadata; tripwires `not-icontains` for `pmtiles inspect`, `set-metadata`, `pmtiles info`, and `tileset:`. go-pmtiles has none of those subcommands (`main.go` declares `show`, `tile`, `cluster`, `edit`, `extract`, `merge`, `convert`, `verify`, `serve`, `upload`, `version`).
 
 ## Truncation
 

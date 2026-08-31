@@ -2,7 +2,7 @@
 
 Canonical results table for this skill. Baseline is the same prompt with the skill omitted (`--var injectSkill=false`). See `evals/prompts/maplibre-mapbox-migration.yaml`.
 
-Run: 2026-08-30 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`. Raw CSVs under [`latest/`](latest/), matching `maplibre-mapbox-migration-*_2026-08-30`. Test 3's rubric and test 5's rubric were revised in #79, and the skill gained the Mapbox-v2-API mapping test 3 asks for; the 2026-08-28 CSVs are kept alongside. The full-transcript Cerebras-era doc is [`example-mapbox-migration.md`](example-mapbox-migration.md).
+Run: 2026-08-30 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`. Raw CSVs under [`latest/`](latest/), matching `maplibre-mapbox-migration-*_2026-08-30`; the 2026-08-28 CSVs are kept alongside. The full-transcript Cerebras-era doc is [`example-mapbox-migration.md`](example-mapbox-migration.md).
 
 | #   | Test                                                 | Type         | Baseline (no skill)                                                                                                            | With skill                                                                                                                                                                                                      |
 | --- | ---------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -14,26 +14,12 @@ Run: 2026-08-30 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-
 
 **Result: 4 FAIL / 1 PASS at baseline, 5 PASS with the skill. Every non-negative test fails at baseline and passes with the skill; the negative holds in both directions. `status: verified` is set.**
 
-What carried each baseline FAIL: tests 2, 3 and 4 failed their rubric. Test 1 failed only its `icontains: gl-style-validate`; the judge passed a rubric that requires `@maplibre/maplibre-style-spec` and `gl-style-validate` by name on an answer that has neither.
+## What the rubrics guard against
 
-## Test 3: the invented API the old rubric let through
+- **Test 3** — a fog API that does not exist. Answers on both sides once invented `map.setFog()` and `map.setFreeCameraOptions()` for MapLibre and the judge accepted them. The rubric now requires the real replacements by name — the root-level `sky` block and `map.setSky()` (`icontains: setSky`), and `calculateCameraOptionsFromCameraLngLatAltRotation` with `jumpTo`/`easeTo`/`flyTo` for the free camera — and forbids each invented claim. Checked against [`src/ui/map.ts`](https://github.com/maplibre/maplibre-gl-js/blob/main/src/ui/map.ts) and the [`sky`](https://maplibre.org/maplibre-style-spec/sky/) spec. A `not-icontains: setFreeCameraOptions` tripwire would fail correct answers, which have to name the method in order to say it is absent, so the must-not is carried by the rubric. The skill's step 9 is the two-row mapping this test asks for.
+- **Test 5** — the negative must score the positive. "Does not bring up library migration" failed an answer that stayed on Mapbox GL JS v2 and merely noted a token-free geocoder also works with MapLibre. The rubric now asks for a geocoder that works with the app as it stands and forbids only recommending a library switch.
 
-On 2026-08-28 this test passed at baseline _and_ with the skill on answers that invented a MapLibre fog API — a "v2-compatible branch" of MapLibre that "reintroduces" `map.setFog()`, and `map.setFreeCameraOptions()` alongside it. Neither exists. Checked against primary sources:
-
-- [`src/ui/map.ts`](https://github.com/maplibre/maplibre-gl-js/blob/main/src/ui/map.ts) declares `setSky(sky: SkySpecification, …)` and `getSky()`; a GitHub code search for `setFog` and for `setFreeCameraOptions` across `maplibre/maplibre-gl-js` returns zero hits, and neither appears on the [Map API reference](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/).
-- The style spec has no root-level `fog`. Atmosphere is the root-level [`sky`](https://maplibre.org/maplibre-style-spec/sky/) property, whose keys are `sky-color`, `horizon-color`, `fog-color`, `fog-ground-blend`, `horizon-fog-blend`, `sky-horizon-blend` and `atmosphere-blend` (`src/reference/v8.json` in maplibre-style-spec).
-
-The rubric now requires the `sky` mapping and `setSky` by name (`icontains: setSky`), requires the answer to state that `setFreeCameraOptions` and `getFreeCameraOptions` are absent and to name a MapLibre replacement for camera control, and forbids the invented claims item by item. The baseline fails it: the recorded baseline answer says MapLibre GL JS v2 includes `map.setFog()` with the same API as Mapbox, claims v2 terrain exaggeration and a `sky` layer, and recommends installing `maplibre-gl@2` to recover Mapbox v2 features.
-
-A `not-icontains: setFreeCameraOptions` tripwire was tried and dropped: a correct answer names the Mapbox free-camera methods in order to say MapLibre never had them, so it failed a with-skill run the rubric passed. The must-not is instead paired with the positive requirement above — an answer must name those methods _as absent_ and give the substitute — which the invented answer cannot satisfy.
-
-Because the gap was open at baseline **and** with the skill, the skill gained one section — step 9, a two-row table mapping `setFog` → `setSky` / the `sky` block and the free camera → `calculateCameraOptionsFromCameraLngLatAltRotation` + `jumpTo`/`easeTo`/`flyTo`, with the `setSky` example adapted from the style spec's own `sky` example (`atmosphere-blend` flattened to `1.0`, as in the `Map.setSky` JSDoc) — and one checklist line. That is the only content change.
-
-The 2026-08-30 with-skill answer now does what step 9 says: it prints "**No `setFog` method**", states there is "**No `FreeCameraOptions` class** and no `getFreeCameraOptions` / `setFreeCameraOptions` methods", and maps the free camera to `calculateCameraOptionsFromCameraLngLatAltRotation` fed to `jumpTo`/`easeTo`/`flyTo`. It still adds unchecked material outside the rubric — it calls `sky` experimental in v5 and stable in v6, and names `calculateCameraOptionsFromTo` as an "older" helper — so the pass is a pass on the rubric's terms, not a certified-clean answer.
-
-## Test 5: what the old rubric was actually scoring
-
-The 2026-08-28 rubric ("does NOT bring up library migration") failed a with-skill answer that stayed on Mapbox GL JS v2 throughout and merely noted, in passing, that a token-free geocoder control also works with MapLibre. The rubric now asks for the positive — at least one concrete geocoder option that works with the app as it stands — and forbids only the recommendation to replace the library. The 2026-08-30 answer passes both ways: it recommends `MapboxGeocoder` for the app as it stands and mentions `maplibre-gl-geocoder` only as an adjacent option.
+Passes are on the rubric's terms: the test 3 with-skill answer still adds unchecked claims outside them (`sky` "experimental in v5", `calculateCameraOptionsFromTo` as an "older" helper).
 
 ## Truncation
 
