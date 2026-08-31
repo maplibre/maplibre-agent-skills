@@ -13,12 +13,13 @@ type or API, and most of the wrong answers here are Mapbox GL JS properties that
 
 These are symptoms as you would observe them, before you know the cause:
 
-- Hillshade renders, but it is harsh: black-and-white ridges, blown-out slopes, chalky valleys
-- You want the map colored by height and are not sure whether MapLibre can do it client-side
-- You want contour lines and do not want to pre-generate a contour tileset
-- 3D terrain is on and the map still looks flat, or the area above the horizon is blank page background
-- A property you found for sky, terrain coloring, or shading does nothing and raises no error
-- Terrain is enabled and the map has become slow
+- **Harsh hillshade contrast:** black-and-white ridges, blown-out slopes, chalky valleys — or several hillshade layers stacked to soften them (one layer with `hillshade-method: "multidirectional"`).
+- **Dynamic elevation coloring:** the map needs coloring by height, client-side, with no pre-rendered tiles (a `color-relief` layer over `["elevation"]`, not `raster-color` on a `raster` layer).
+- **Runtime contour lines:** contour lines straight from a `raster-dem` source, with no pre-generated contour tileset (`maplibre-contour`, not a hand-rolled marching-squares pipeline).
+- **Flat 3D terrain:** `map.setTerrain()` is on and nothing extrudes (the camera is at `pitch: 0`, and raising `exaggeration` will not fix it).
+- **Blank horizon:** pitching the camera shows empty page background above the terrain (no root-level `sky` object or `map.setSky()`; there is no `type: "sky"` layer in MapLibre).
+- **Silent property failures:** a hillshade, sky, or terrain-coloring property does nothing and raises no error (a Mapbox GL JS property MapLibre never had).
+- **Terrain lag or frame drops:** stutter when panning or tilting with terrain on (stacked hillshade passes, dense draped layers).
 
 **Not this skill.** Elevation values that are wrong, spiky, or inverted, choosing an elevation tileset,
 `encoding`, and generating DEM tiles — the style specification's `raster-dem` source page,

@@ -32,7 +32,7 @@ One ungraded slip in the with-skill explicit answer: a code comment lists `raste
 
 The prompts are unchanged. Two assertions were added from what the baseline answers actually said, per the tripwire pattern already used in `evals/prompts/maplibre-fonts-glyphs.yaml` and `evals/prompts/maplibre-cartography.yaml`:
 
-- **Test 2** gains `not-icontains: marchingsquares` — the library the baseline answer built its DIY pipeline around — beside the existing `icontains: maplibre-contour`.
+- **Test 2** gains `not-icontains` tripwires for `marchingsquares`, `marching-squares`, and `marching squares` — the DIY pipeline the baseline answer builds, in every spelling it uses — beside the existing `icontains: maplibre-contour`.
 - **Test 3** gains `not-icontains: hillshade-ambient-occlusion-intensity`, a property the baseline answer put in a tuning table and MapLibre's style specification does not define. The skill does not mention it, so the tripwire cannot contradict the rubric beside it.
 
 Test 3's rubric is also tightened to forbid endorsing a stack of hillshade layers **as an optional extra**, not only as the primary answer. Run 3 of the old config failed on exactly that: the answer led with `hillshade-method: "multidirectional"` and then offered stacking anyway, because the retired skill's own text offered it. The replacement section does not, and the 2026-08-30 with-skill answer does not either.
