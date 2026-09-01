@@ -305,7 +305,7 @@ This is a gap because: the tile-sources skill mentions Martin as a self-hosted o
 > - **Config format:** YAML only — not TOML, not JSON; common source of AI-hallucinated wrong answers
 > - **Config vs. CLI args:** `--config` and CLI connection parameters are mutually exclusive with no runtime warning
 > - **`DATABASE_URL` env var:** Silently overrides config file when set — commonly auto-set by PaaS platforms (DigitalOcean, Railway, Render)
-> - **Reverse proxy setup:** TileJSON `tiles` field reflects internal host by default — must configure `public_urls` or proxy headers for the correct external URL
+> - **Reverse proxy setup:** TileJSON `tiles` field reflects internal host by default — must configure `base_path` or proxy headers for the correct external URL
 > - **CORS:** Configuring CORS in Martin vs. at the proxy layer
 > - **No built-in authentication:** Martin is intentionally auth-free — JWT/bearer token security must be layered at the proxy or CDN
 > - **Font and sprite serving:** File naming conventions and directory structure
