@@ -4,8 +4,8 @@ This folder contains the second demand-mining run for the MapLibre Agent Skills 
 
 ## Contents
 
-- [2026-Q2-strategy.md](./2026-Q2-strategy.md) — research strategy and dual-lens methodology
-- [2026-Q2-data-mining-report.md](./2026-Q2-data-mining-report.md) — full report with findings and output
+- [Q2 Strategy](./2026-Q2-strategy.md) — research strategy and dual-lens methodology
+- [Q2 Report](./2026-Q2-data-mining-report.md) — full report with findings and output
 
 ## Purpose
 
