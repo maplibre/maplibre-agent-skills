@@ -517,10 +517,6 @@ See the consolidated [Q2 2026 mining](../q2/README.md) for the full handoff to t
 
 - [x] Unarchived `store-locator-patterns` ([#14](https://github.com/maplibre/maplibre-agent-skills/issues/14)) — confirmed demand + AI failure (Thread 4)
 - [x] Filed `maplibre-ecosystem-overview` ([#26](https://github.com/maplibre/maplibre-agent-skills/issues/26)) — under evaluation (Thread 4)
-- [ ] Re-run full mining suite — compare keyword volumes to Q1 baseline to identify growing topics
-- [ ] Search `maplibre-gl` SO tag sorted by newest to catch emerging questions
-- [ ] Check `maplibre-tile-spec` again — MLT adoption may have grown
-- [ ] Run evals baseline for existing 3 skills (see `evals/` directory)
 
 ## Related doc
 

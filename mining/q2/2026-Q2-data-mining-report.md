@@ -485,65 +485,7 @@ Note: SO tags are inconsistently applied. `maplibre-gl-js`, `maplibre`, and `map
 | GH issue (gl-js) | (behavioral)                                                          | Set up MapLibre with Vite/Webpack                      | Guide   | Worker configuration, bundler setup          | No signal (volume: 436 issues)                                                  |
 | GH issue (gl-js) | (volume)                                                              | Use TypeScript with MapLibre                           | Guide   | TypeScript typing, module import             | No signal (volume: 1,149 issues)                                                |
 
-### 11.2 Open mining output — to be filled during Q2 run
-
-_Add rows here as individual GitHub issues, SO questions, and Slack threads are reviewed._
-
-| Source | Link | Developer intent | Surface | API / concept | AI failure |
-| ------ | ---- | ---------------- | ------- | ------------- | ---------- |
-|        |      |                  |         |               |            |
-
----
-
-## 12. Slack Query Plan
-
-> **⚠️ Manual step — Slack data to be added by researcher.**
-
-### 12.1 AI-mention searches (re-runs)
-
-| Search string    | Q2 threads | Notable threads |
-| ---------------- | ---------- | --------------- |
-| `ChatGPT`        |            |                 |
-| `Claude`         |            |                 |
-| `Copilot`        |            |                 |
-| `Gemini`         |            |                 |
-| `asked AI`       |            |                 |
-| `AI said`        |            |                 |
-| `language model` |            |                 |
-
-### 12.2 New Slack searches **[NEW]**
-
-| Search string | Rationale                                 | Q2 threads | Notable threads |
-| ------------- | ----------------------------------------- | ---------- | --------------- |
-| `example`     | Requests for examples not yet existing    |            |                 |
-| `"how do I"`  | Intent-rich threads that don't mention AI |            |                 |
-
-### 12.3 Slack mining output
-
-| Source | Link | Developer intent           | Surface | API / concept | AI failure |
-| ------ | ---- | -------------------------- | ------- | ------------- | ---------- |
-| Slack  | —    | _(manual — add rows here)_ |         |               |            |
-
----
-
-## 13. Expected Outputs
-
-### 13.1 For the example taxonomy (#7576)
-
-- [ ] Ranked list of developer intent clusters (grounded in Q2 volume)
-- [ ] Validated gap list (extends Section 4 with Slack + full issue-level review)
-- [ ] Validation confirmation and consolidation signals
-- [ ] Example rewrite signals
-- [ ] Proposed taxonomy — topic group names + tag vocabulary in developer-goal language
-
-### 13.2 For the skills backlog and evals
-
-- [ ] Updated priority ranking (Section 10 above, to be revised after Slack)
-- [ ] New AI-mention threads (individual review of Claude: 163 + ChatGPT: 44 + language model: 69 + AI said: 17 org-wide)
-- [ ] Eval prompt candidates (each AI failure thread → explicit prompt + implicit prompt + negative control)
-- [ ] Q2 skill candidates (Section 10.2 above, to be confirmed after Slack)
-
----
+The working-draft checklist sections from the original Q2 plan have been omitted from this archive copy.
 
 ## 14. Appendix: Methodology Authorship
 

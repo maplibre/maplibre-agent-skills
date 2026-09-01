@@ -362,33 +362,6 @@ The React-related rows are noted here because they remain high-priority for the 
 
 ---
 
-## Q2 checklist
+## Q2 work plan (historical)
 
-**Prerequisite (before external mining):**
-
-- [ ] Check `maplibre-react-native` docs (`maplibre.org/maplibre-react-native/`) for v11 API coverage gaps relevant to #9 and #20
-
-**Mining run:**
-
-- [ ] Re-run all Q1 GitHub keyword searches with volume comparison
-- [ ] Run new keyword searches: `example`, `feature-state`, `MLT`, `React Native`, `globe`, `migration`, `TypeScript`, `accessibility`
-- [ ] Re-run GitHub AI-mention searches across all repos, including framework and community repos
-- [ ] Run SO top-voted re-run + SO newest sort
-- [ ] Re-run Slack AI-mention search; add `example` and `how do I` passes
-- [ ] Search `maplibre-react-native` repo for AI-mention threads and v11 migration questions
-- [ ] Record all results with three-field format (intent / API concept / AI failure)
-
-**Outputs:**
-
-- [ ] Clustered developer intent list with volume ranks
-- [ ] Validated gap list (extend preliminary list above with mining evidence)
-- [ ] Proposed taxonomy: categories + tags, based on what emerges from clustering
-- [ ] Updated Q1 priority rankings with Q2 volumes
-- [ ] New AI failure threads logged; eval prompt candidates noted
-- [ ] Q2 skill candidates identified
-
-**Handoff:**
-
-- [ ] Taxonomy proposal posted to #7576 for evaluation and implementation
-- [ ] Gap list posted to #7574 as input to curation pass
-- [ ] Skills priority ranking updated in `README.md` (parallel to this strategy doc)
+The Q2 run was planned to verify React Native v11 coverage, rerun the Q1 search set with additional queries, record each result with intent/surface/AI-failure fields, and produce the taxonomy, gap, and backlog outputs that now live in the archived report and README.
