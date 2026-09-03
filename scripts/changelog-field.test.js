@@ -35,6 +35,16 @@ describe('parseChangelogField', () => {
     assert.equal(result.errors.length, 0);
   });
 
+  it('strips comments that only form after a first pass', () => {
+    // Removing the inner comment leaves "<!--\nBump: major\n-->", which a
+    // single pass would then read as the Bump field.
+    const body =
+      '<!<!-- a -->--\nBump: major\n-->\nBump: patch\nCategory: Internal\nEntry: x';
+    const result = parseChangelogField(body);
+    assert.equal(result.bump, 'patch');
+    assert.equal(result.errors.length, 0);
+  });
+
   it('returns none with no entry or category required', () => {
     const body = 'Bump: none\nSome other text';
     const result = parseChangelogField(body);

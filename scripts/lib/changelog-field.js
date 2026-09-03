@@ -3,6 +3,18 @@ const VALID_CATEGORIES = ['Added', 'Changed', 'Fixed', 'Removed', 'Internal'];
 const CATEGORY_SET = new Set(VALID_CATEGORIES.map((c) => c.toLowerCase()));
 const BUMP_ORDER = { patch: 1, minor: 2, major: 3 };
 
+// Repeat until nothing changes: a single pass over "<!<!-- a -->--" leaves
+// "<!--" behind (CodeQL js/incomplete-multi-character-sanitization).
+function stripHtmlComments(text) {
+  let stripped = text;
+  let previous;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<!--[\s\S]*?-->/g, '');
+  } while (stripped !== previous);
+  return stripped;
+}
+
 function parseLine(text, key) {
   for (const line of text.split('\n')) {
     const cleaned = line.replace(/\*\*/g, '').trim();
@@ -17,7 +29,7 @@ function parseChangelogField(body) {
     return { errors: ['PR body is empty.'] };
   }
 
-  const stripped = body.replace(/<!--[\s\S]*?-->/g, '');
+  const stripped = stripHtmlComments(body);
   const errors = [];
 
   const bumpRaw = parseLine(stripped, 'Bump');
