@@ -91,7 +91,7 @@ describe('classifyEval', () => {
     );
     assert.equal(result.verdict, 'error');
     assert.deepEqual(result.counts, { pass: 2, fail: 0, error: 1 });
-    assert.deepEqual(result.signatures, ['generator-queue-timeout']);
+    assert.deepEqual(result.signatures, ['queue-timeout']);
     assert.equal(result.errors.length, 1);
     assert.equal(result.errors[0].description, 'implicit');
     assert.equal(result.errors[0].message, QUEUE_TIMEOUT);
@@ -107,7 +107,7 @@ describe('classifyEval', () => {
     );
     assert.equal(result.verdict, 'error');
     assert.deepEqual(result.counts, { pass: 1, fail: 1, error: 1 });
-    assert.deepEqual(result.signatures, ['grader-rate-limit']);
+    assert.deepEqual(result.signatures, ['rate-limit-exhausted']);
   });
 
   it('reads the max-duration rows the time bound writes', () => {
@@ -149,11 +149,11 @@ describe('classifyEval', () => {
 
 describe('signatureOf', () => {
   it('names the grader rate limit', () => {
-    assert.equal(signatureOf(GRADER_RATE_LIMIT), 'grader-rate-limit');
+    assert.equal(signatureOf(GRADER_RATE_LIMIT), 'rate-limit-exhausted');
   });
 
   it('names the generator queue timeout', () => {
-    assert.equal(signatureOf(QUEUE_TIMEOUT), 'generator-queue-timeout');
+    assert.equal(signatureOf(QUEUE_TIMEOUT), 'queue-timeout');
   });
 
   it('names the time bound', () => {
@@ -161,13 +161,10 @@ describe('signatureOf', () => {
   });
 
   it('names a generator rate limit from a 429 or its text', () => {
-    assert.equal(
-      signatureOf('API error: 429 Too Many Requests'),
-      'generator-rate-limit'
-    );
+    assert.equal(signatureOf('API error: 429 Too Many Requests'), 'rate-limit');
     assert.equal(
       signatureOf('Rate limit exceeded, please retry'),
-      'generator-rate-limit'
+      'rate-limit'
     );
   });
 
@@ -287,7 +284,7 @@ describe('headlineFor', () => {
       {
         skill: 'maplibre-cartography',
         verdict: 'error',
-        signatures: ['grader-rate-limit']
+        signatures: ['rate-limit-exhausted']
       },
       { skill: 'maplibre-fonts-glyphs', verdict: 'pass', signatures: [] }
     ]);
@@ -325,8 +322,21 @@ describe('headlineFor', () => {
       ]
     };
     assert.equal(
-      headlineFor({ summary: partial, evalResult: 'cancelled' }),
+      headlineFor({ summary: partial, evalResult: 'failure' }),
       'cut off by the time bound'
+    );
+  });
+
+  it('says cancelled when the job itself was stopped mid-run', () => {
+    const partial = {
+      ...PASSING,
+      configs: [
+        { skill: 'maplibre-cartography', verdict: 'pass', signatures: [] }
+      ]
+    };
+    assert.equal(
+      headlineFor({ summary: partial, evalResult: 'cancelled' }),
+      'cancelled before finishing'
     );
   });
 
@@ -336,7 +346,7 @@ describe('headlineFor', () => {
       {
         skill: 'maplibre-fonts-glyphs',
         verdict: 'error',
-        signatures: ['generator-queue-timeout']
+        signatures: ['queue-timeout']
       }
     ]);
     assert.equal(headlineFor({ summary, evalResult: 'failure' }), 'mixed');
@@ -344,7 +354,7 @@ describe('headlineFor', () => {
 
   it('calls an all-pass record with a non-success job infrastructure', () => {
     assert.equal(
-      headlineFor({ summary: PASSING, evalResult: 'cancelled' }),
+      headlineFor({ summary: PASSING, evalResult: 'failure' }),
       'infrastructure'
     );
   });
@@ -357,7 +367,7 @@ describe('classificationBlock', () => {
       {
         skill: 'maplibre-fonts-glyphs',
         verdict: 'error',
-        signatures: ['generator-queue-timeout'],
+        signatures: ['queue-timeout'],
         tokenUsage: { total: 12000 }
       }
     ]);
@@ -370,7 +380,7 @@ describe('classificationBlock', () => {
     assert.match(block, /\| maplibre-cartography \| pass \|/);
     assert.match(
       block,
-      /\| maplibre-fonts-glyphs \| error \| generator-queue-timeout \|/
+      /\| maplibre-fonts-glyphs \| error \| queue-timeout \|/
     );
     assert.match(block, /2 of 2 planned configs recorded/);
     assert.match(block, /12,000/);

@@ -60,18 +60,20 @@ export function runName(date, baseline) {
 
 /**
  * Names the cause behind an ERROR row, so the issue can say what happened
- * instead of listing what to rule out. Order matters: the judge's rate-limit
- * message contains the generator's phrase too, so it is matched first.
+ * instead of listing what to rule out. The names carry no provider: promptfoo
+ * raises RateLimitExhaustedError for the generator and the judge alike, and the
+ * row's message still names which one. Order matters: that message contains
+ * the bare "Rate limit exceeded" phrase too, so it is matched first.
  */
 export function signatureOf(message) {
   const text = String(message ?? '');
   if (/Evaluation exceeded max duration/.test(text)) return 'max-duration';
-  if (/RateLimitExhaustedError/.test(text)) return 'grader-rate-limit';
+  if (/RateLimitExhaustedError/.test(text)) return 'rate-limit-exhausted';
   if (/timed out after \d+ms in queue/.test(text)) {
-    return 'generator-queue-timeout';
+    return 'queue-timeout';
   }
   if (/\b429\b/.test(text) || /Rate limit exceeded/.test(text)) {
-    return 'generator-rate-limit';
+    return 'rate-limit';
   }
   return 'other';
 }
@@ -177,6 +179,9 @@ export function headlineFor({ summary, evalResult }) {
 
   if (failed && errored) return 'mixed';
   if (failed) return 'graded failure';
+  // The job itself was stopped — the backstop, or a person — so what the
+  // per-config bound did is beside the point.
+  if (evalResult === 'cancelled') return 'cancelled before finishing';
   if (cutOff) return 'cut off by the time bound';
   // Everything recorded either passed or errored, and the job still did not
   // succeed: whatever went wrong was not a graded verdict on skill content.

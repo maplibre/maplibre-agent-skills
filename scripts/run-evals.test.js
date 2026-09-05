@@ -160,7 +160,7 @@ describe('verdictFor', () => {
       sidecarText: sidecar([row(0), row(2, 'Rate limit exceeded')])
     });
     assert.equal(result.verdict, 'error');
-    assert.deepEqual(result.signatures, ['generator-rate-limit']);
+    assert.deepEqual(result.signatures, ['rate-limit']);
   });
 
   it('calls a missing or unreadable sidecar an error, never a pass', () => {

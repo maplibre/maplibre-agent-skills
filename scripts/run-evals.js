@@ -44,6 +44,7 @@ import {
   appendFileSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -298,16 +299,17 @@ export async function runEvals({
       log(
         `${skill}: running with a ${Math.round(bound.boundMs / 60000)}-minute bound.`
       );
+      // A sidecar left by an earlier run must not stand in for one the child
+      // never wrote.
+      const sidecarPath = join(workDir, `${name}-${skill}.json`);
+      rmSync(sidecarPath, { force: true });
       const outcome = await spawn(command, args, {
         env: childEnv({ boundMs: bound.boundMs, env }),
         killAfterMs: bound.boundMs + KILL_GRACE_MS
       });
       let sidecarText = null;
       try {
-        sidecarText = readFileSync(
-          join(workDir, `${name}-${skill}.json`),
-          'utf8'
-        );
+        sidecarText = readFileSync(sidecarPath, 'utf8');
       } catch {
         sidecarText = null;
       }
