@@ -166,5 +166,7 @@ context with its secrets regardless of whose ref it checks out.
 harness (`evals/prompts/lib/`) as a reason to look closer — `--ignore-scripts` blocks
 a malicious lifecycle script, not a modified `eval:graded` command.
 
+**Three verdicts, and only two of them move a status.** `scripts/run-evals.js` runs one `npm run eval:graded` per config and records `pass`, `fail`, or `error` for each. `error` means the run reached no graded verdict — a provider or judge failure, a config the per-config time bound cut off, or one the run budget never reached — and `scripts/sync-skill-status.js` leaves those skills' `status:` fields exactly as they were, in either direction, so a rate-limited Sunday cannot demote a skill. A skill whose config produced no line at all is reported with a `::warning::` and makes the run partial. The two bounds are `EVAL_CONFIG_MINUTES` and `EVAL_BUDGET_MINUTES` on the "Run evals" step in `eval.yml`; the run's verdict artifact holds `verdicts.txt`, a `summary.json` with per-config counts, error signatures, and token usage, and one JSON sidecar per config, which is where the error text behind an ERROR row survives — the CSV's ERROR rows carry an empty output and an empty grader reason.
+
 `npm run lint:model-pins` fails on any provider id that drifts from the [Setup](#setup)
 pins (the generator in `providers.yaml`, the judge in the `eval:graded` script).
