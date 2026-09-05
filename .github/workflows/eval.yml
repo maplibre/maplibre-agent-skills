@@ -10,6 +10,12 @@ name: Eval
 #
 # Runs in this repo's own Actions context with its secrets regardless of ref —
 # see evals/README.md → CI before dispatching against an unreviewed ref.
+#
+# Each config runs under a per-config time bound inside a run budget
+# (EVAL_CONFIG_MINUTES, EVAL_BUDGET_MINUTES below) and reports one of three
+# verdicts: pass, fail, or error. `error` means no graded verdict — a provider
+# or judge failure, a config the bound cut off, or one the budget never
+# reached — and never moves a skill's `status:` field.
 
 on:
   schedule:
@@ -36,6 +42,11 @@ permissions:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    # A backstop under GitHub's 360-minute default, not the working bound: a job
+    # GitHub kills writes no outputs at all, which is how the 2026-08-30 run
+    # spent six hours and left no evidence. The per-config bound below is what
+    # should end a bad run.
+    timeout-minutes: 300
     # Checks out inputs.ref, arbitrary on dispatch, so it holds the API secrets
     # but no write token. Repo writes are in the publish job.
     permissions:
@@ -55,57 +66,29 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Select eval configs
-        id: configs
-        run: |
-          if [ -n "${{ inputs.configs }}" ]; then
-            CONFIGS="${{ inputs.configs }}"
-          else
-            # Every skill with an eval config. Globbing rather than a hardcoded list:
-            # a new skill is covered the moment its config lands.
-            CONFIGS=$(find evals/prompts -maxdepth 1 -name '*.yaml' ! -name 'TEMPLATE.yaml' | sort | xargs)
-          fi
-          if [ -z "$CONFIGS" ]; then
-            echo "No eval configs found." >&2
-            exit 1
-          fi
-          echo "configs=$CONFIGS" >> $GITHUB_OUTPUT
-          echo "Evaluating: $CONFIGS"
-
+      # Every skill with an eval config. Globbing rather than a hardcoded list:
+      # a new skill is covered the moment its config lands.
+      #
+      # One promptfoo invocation per config — never combine them. Promptfoo
+      # merges the defaultTest blocks of combined configs (last one wins),
+      # which would inject a single skill's SKILL.md into every test.
+      #
+      # The runner sets PROMPTFOO_MAX_EVAL_TIME_MS per child, so a config that
+      # overruns finalizes with ERROR rows and still writes both outputs. The
+      # two bounds live here rather than only in the script so they are visible
+      # and tunable in YAML; healthy configs took 5 to 10 minutes on 2026-08-30.
       - name: Run evals
         id: run
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PROMPTFOO_DISABLE_TELEMETRY: '1'
-        run: |
-          if [ "${{ inputs.baseline }}" = "true" ]; then
-            BASELINE_FLAG="--var injectSkill=false"
-            NAME="baseline-$(date +%Y-%m-%d)"
-          else
-            BASELINE_FLAG=""
-            NAME="$(date +%Y-%m-%d)"
-          fi
-          echo "name=$NAME" >> $GITHUB_OUTPUT
-
-          # One promptfoo invocation per config — never combine them. Promptfoo
-          # merges the defaultTest blocks of combined configs (last one wins),
-          # which would inject a single skill's SKILL.md into every test.
-          mkdir -p evals/results
-          FAIL=0
-          : > /tmp/skill-verdicts.txt
-          for config in ${{ steps.configs.outputs.configs }}; do
-            skill=$(basename "$config" .yaml)
-            if npm run eval:graded -- \
-              --config "$config" $BASELINE_FLAG \
-              --output "evals/results/${NAME}-${skill}.csv"; then
-              echo "${skill}:pass" >> /tmp/skill-verdicts.txt
-            else
-              echo "${skill}:fail" >> /tmp/skill-verdicts.txt
-              FAIL=1
-            fi
-          done
-          exit $FAIL
+          INPUT_CONFIGS: ${{ inputs.configs }}
+          INPUT_BASELINE: ${{ inputs.baseline }}
+          EVAL_WORK_DIR: ${{ runner.temp }}/eval
+          EVAL_CONFIG_MINUTES: 30
+          EVAL_BUDGET_MINUTES: 240
+        run: node scripts/run-evals.js
 
       - name: Upload results
         if: always()
@@ -119,7 +102,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: eval-verdicts-${{ github.run_id }}
-          path: /tmp/skill-verdicts.txt
+          path: ${{ runner.temp }}/eval
           if-no-files-found: ignore
 
   # Repo writes, scheduled runs only: checks out the default branch, never a
@@ -134,7 +117,12 @@ jobs:
     env:
       name: ${{ needs.eval.outputs.name }}
     steps:
+      # The branch tip, not the trigger SHA a scheduled run checks out by
+      # default: main moves while the eval job runs, and a push from the trigger
+      # SHA is then rejected as non-fast-forward.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -151,9 +139,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: eval-verdicts-${{ github.run_id }}
-          path: /tmp
+          path: ${{ runner.temp }}/eval
 
       - name: Commit results
+        id: commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
@@ -161,6 +150,7 @@ jobs:
           # the scheduled run's dated CSVs are the exception, hence -f.
           git add -f evals/results/${{ env.name }}-*.csv
           git diff --staged --quiet || git commit -m "chore: eval results ${{ env.name }}"
+          git pull --rebase
           git push
 
       # Flips status: provisional -> verified on pass, status: verified -> provisional
@@ -169,15 +159,31 @@ jobs:
       # scripts/sync-skill-status.js.
       - name: Sync skill status from drift check
         id: sync
-        run: node scripts/sync-skill-status.js /tmp/skill-verdicts.txt
+        run: node scripts/sync-skill-status.js "$RUNNER_TEMP/eval/verdicts.txt"
 
       - name: Commit status changes
+        id: status_commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add skills/*/SKILL.md
           git diff --staged --quiet || git commit -m "chore: sync skill status from ${{ env.name }} drift check"
+          git pull --rebase
           git push
+
+      # Reads the run's own record and says what this run was, so the issue
+      # below opens with a verdict instead of a checklist. always() because the
+      # runs worth classifying are exactly the ones where a step above failed.
+      - name: Classify the run
+        id: classify
+        if: always()
+        env:
+          EVAL_RESULT: ${{ needs.eval.result }}
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+          SYNC_OUTCOME: ${{ steps.sync.outcome }}
+          STATUS_COMMIT_OUTCOME: ${{ steps.status_commit.outcome }}
+          SYNC_PARTIAL: ${{ steps.sync.outputs.partial }}
+        run: node scripts/eval-issue.js
 
       # A status flip is expected-by-design behavior, not a failure — this is a
       # "review this" notice, separate from the eval-drift issue below which
@@ -245,18 +251,29 @@ jobs:
 
       # This run watches for drift — a provider silently updating a model behind a
       # pinned ID. So the issue asks a question; it does not assert a cause.
+      # The classification block above the questions reports what the run did,
+      # which is not the same as why. `!= 'success'` rather than `== 'failure'`
+      # so a cancelled job — a job-level timeout — opens an issue too.
       - name: Open issue on failure
-        if: always() && needs.eval.result == 'failure'
+        if: always() && needs.eval.result != 'success'
         uses: actions/github-script@v7
+        env:
+          HEADLINE: ${{ steps.classify.outputs.headline }}
+          CLASSIFICATION: ${{ steps.classify.outputs.classification }}
         with:
           script: |
             const date = new Date().toISOString().slice(0, 10);
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const headline = process.env.HEADLINE || 'investigate: infra, noise, or drift?';
             github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Eval drift check failed — ${date} (investigate: infra, noise, or drift?)`,
+              title: `Eval drift check: ${headline} — ${date}`,
               body: [
+                process.env.CLASSIFICATION || '',
+                ``,
+                `---`,
+                ``,
                 `The eval drift check failed. **This is not yet a regression** — triage it before treating it as one.`,
                 ``,
                 `[Workflow run](${run})`,
