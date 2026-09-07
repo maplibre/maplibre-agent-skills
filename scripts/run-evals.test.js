@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   boundFor,
   buildCommand,
   childEnv,
   dryRunLines,
   runEvals,
-  verdictFor
+  spawnEval,
+  verdictFor,
+  SIGKILL_AFTER_MS
 } from './run-evals.js';
 
 function workspace() {
@@ -42,6 +45,56 @@ function row(failureReason, error) {
     testIdx: 0,
     ...(error === undefined ? {} : { error })
   };
+}
+
+/**
+ * A grandchild that outlives its parent shell, the way promptfoo outlives the
+ * `npm run` wrapper: it records its pid and then never exits on its own.
+ */
+function grandchildScript(dir, { ignoreSigterm = false } = {}) {
+  const path = join(dir, 'grandchild.cjs');
+  writeFileSync(
+    path,
+    [
+      ignoreSigterm ? "process.on('SIGTERM', () => {});" : '',
+      "require('node:fs').writeFileSync(process.argv[2], String(process.pid));",
+      'setInterval(() => {}, 1000);',
+      ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+  );
+  return path;
+}
+
+/** `sh -c '<node> script pidfile & wait'` — a wrapper with a child of its own. */
+function wrapperArgs(script, pidFile) {
+  return ['-c', `"${process.execPath}" "${script}" "${pidFile}" & wait`];
+}
+
+async function readPid(pidFile) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      const text = readFileSync(pidFile, 'utf8').trim();
+      if (text) return Number(text);
+    } catch {
+      // not written yet
+    }
+    await sleep(20);
+  }
+  throw new Error('the grandchild never wrote its pid');
+}
+
+async function gone(pid) {
+  for (let attempt = 0; attempt < 150; attempt++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await sleep(20);
+  }
+  return false;
 }
 
 describe('buildCommand', () => {
@@ -185,6 +238,60 @@ describe('verdictFor', () => {
     });
     assert.equal(result.verdict, 'error');
     assert.deepEqual(result.signatures, ['killed']);
+  });
+});
+
+describe('spawnEval', () => {
+  it('leaves a child that finishes on its own alone', async () => {
+    const result = await spawnEval(
+      process.execPath,
+      ['-e', 'process.exit(3)'],
+      {
+        env: process.env,
+        killAfterMs: 30000
+      }
+    );
+    assert.equal(result.killed, false);
+    assert.equal(result.exitCode, 3);
+    assert.equal(typeof result.durationMs, 'number');
+  });
+
+  it('kills the whole process group, not just the wrapper', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spawn-eval-group-'));
+    const pidFile = join(dir, 'pid');
+    const script = grandchildScript(dir);
+    const pending = spawnEval('sh', wrapperArgs(script, pidFile), {
+      env: process.env,
+      killAfterMs: 500,
+      sigkillAfterMs: 300
+    });
+    const pid = await readPid(pidFile);
+    const result = await pending;
+    assert.equal(result.killed, true);
+    assert.equal(await gone(pid), true, 'the grandchild outlived the kill');
+  });
+
+  it('escalates to SIGKILL when the group ignores SIGTERM', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spawn-eval-escalate-'));
+    const pidFile = join(dir, 'pid');
+    const script = grandchildScript(dir, { ignoreSigterm: true });
+    const pending = spawnEval('sh', wrapperArgs(script, pidFile), {
+      env: process.env,
+      killAfterMs: 500,
+      sigkillAfterMs: 300
+    });
+    const pid = await readPid(pidFile);
+    const result = await pending;
+    assert.equal(result.killed, true);
+    assert.equal(
+      await gone(pid),
+      true,
+      'the SIGTERM-deaf grandchild survived the escalation'
+    );
+  });
+
+  it('gives the group half a minute before the escalation by default', () => {
+    assert.equal(SIGKILL_AFTER_MS, 30000);
   });
 });
 

@@ -19,6 +19,15 @@
  * ERROR rows have an empty output and an empty grader reason, so the sidecar is
  * the only place the error text survives.
  *
+ * The hard kill that backs that bound goes to the child's process group, never
+ * to the child alone. `npm run` forwards no signals, so a SIGTERM to the wrapper
+ * ends the wrapper and leaves promptfoo running: in the 2026-09-06 run three
+ * killed configs kept spending the same Groq and Gemini keys for another two
+ * hours, which rate-limited every config that came after them. So the child is
+ * spawned `detached` (its own group), signalled as `-pid`, and the group is
+ * SIGKILLed if it has not emptied SIGKILL_AFTER_MS later — promptfoo's backoff
+ * sleeps do not honor SIGTERM promptly.
+ *
  * After every config it appends `skill:pass|fail|error` to `<work>/verdicts.txt`
  * and rewrites `<work>/summary.json`, so a run cut off halfway still hands the
  * publish job a record it can report.
@@ -69,6 +78,11 @@ const MIN_CONFIG_MS = 5 * 60000;
 // honor the abort — so a hard kill follows it. That kill loses the config's CSV,
 // which is why it sits well past the bound rather than on it.
 const KILL_GRACE_MS = 10 * 60000;
+
+// How long the process group gets to exit on SIGTERM before it is SIGKILLed:
+// promptfoo's backoff sleeps do not honor SIGTERM promptly, and a survivor keeps
+// spending the run's API keys.
+export const SIGKILL_AFTER_MS = 30 * 1000;
 
 export function parseArgs(argv) {
   const args = { baseline: false, dryRun: false, configs: [] };
@@ -180,25 +194,77 @@ export function verdictFor({
   }
 }
 
-function spawnEval(command, args, { env, killAfterMs }) {
+/**
+ * One `npm run eval:graded` child, killed as a process group when it overruns.
+ *
+ * `npm run` is a wrapper: it spawns a shell, which spawns promptfoo, and it
+ * forwards nothing it receives. Signalling the child alone therefore reaps the
+ * wrapper and orphans the promptfoo process holding the API keys — the whole
+ * 2026-09-06 failure. `detached: true` gives the child its own process group so
+ * `-pid` reaches every descendant, and the promise is not resolved while that
+ * group still has members: SIGKILL follows SIGTERM `sigkillAfterMs` later, and
+ * the next config starts only once the group is gone.
+ */
+export function spawnEval(
+  command,
+  args,
+  { env, killAfterMs, sigkillAfterMs = SIGKILL_AFTER_MS }
+) {
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = spawnChild(command, args, { stdio: 'inherit', env });
+    const child = spawnChild(command, args, {
+      stdio: 'inherit',
+      env,
+      detached: true
+    });
     let settled = false;
     let killed = false;
-    const timer = setTimeout(() => {
-      killed = true;
-      child.kill('SIGTERM');
-    }, killAfterMs);
-    const finish = (result) => {
-      if (settled) return;
+    let escalated = false;
+    let pending = null;
+    let escalation = null;
+
+    // Signal 0 asks whether the group still has members. ESRCH — an empty group,
+    // or a child that never started — is the answer, not an error.
+    const signalGroup = (signal) => {
+      if (child.pid === undefined) return false;
+      try {
+        process.kill(-child.pid, signal);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const finish = () => {
+      if (settled || pending === null) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ ...result, killed, durationMs: Date.now() - started });
+      clearTimeout(escalation);
+      resolve({ ...pending, killed, durationMs: Date.now() - started });
     };
-    child.on('close', (code) => finish({ exitCode: code }));
+
+    const timer = setTimeout(() => {
+      killed = true;
+      signalGroup('SIGTERM');
+      escalation = setTimeout(() => {
+        escalated = true;
+        signalGroup('SIGKILL');
+        finish();
+      }, sigkillAfterMs);
+    }, killAfterMs);
+
+    const settle = (result) => {
+      pending = result;
+      // The wrapper exits on SIGTERM long before promptfoo does. Hold the result
+      // until the escalation has emptied the group rather than letting the run
+      // move on while the old config still spends the run's quota.
+      if (killed && !escalated && signalGroup(0)) return;
+      finish();
+    };
+
+    child.on('close', (code) => settle({ exitCode: code }));
     child.on('error', (error) =>
-      finish({ exitCode: null, spawnError: error.message })
+      settle({ exitCode: null, spawnError: error.message })
     );
   });
 }
