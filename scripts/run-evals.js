@@ -21,12 +21,15 @@
  *
  * The hard kill that backs that bound goes to the child's process group, never
  * to the child alone. `npm run` forwards no signals, so a SIGTERM to the wrapper
- * ends the wrapper and leaves promptfoo running: in the 2026-09-06 run three
- * killed configs kept spending the same Groq and Gemini keys for another two
- * hours, which rate-limited every config that came after them. So the child is
- * spawned `detached` (its own group), signalled as `-pid`, and the group is
- * SIGKILLed if it has not emptied SIGKILL_AFTER_MS later — promptfoo's backoff
- * sleeps do not honor SIGTERM promptly.
+ * ends the wrapper and leaves promptfoo running: the three configs killed in the
+ * 2026-09-06 run outlived their kills by 2h40m (source-wiring), 36 minutes
+ * (terrain-rendering) and 13 minutes (tile-sources), all of them still spending
+ * the same Groq and Gemini keys, which rate-limited every config that came after
+ * them. So the child is spawned `detached` (its own group), signalled as `-pid`,
+ * and the group is SIGKILLed if it has not emptied SIGKILL_AFTER_MS later —
+ * promptfoo's backoff sleeps do not honor SIGTERM promptly. Because a detached
+ * child also survives a Ctrl-C on the runner, SIGINT, SIGTERM and SIGHUP on the
+ * parent SIGKILL the group before the runner exits.
  *
  * After every config it appends `skill:pass|fail|error` to `<work>/verdicts.txt`
  * and rewrites `<work>/summary.json`, so a run cut off halfway still hands the
@@ -56,7 +59,7 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { constants as osConstants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -83,6 +86,10 @@ const KILL_GRACE_MS = 10 * 60000;
 // promptfoo's backoff sleeps do not honor SIGTERM promptly, and a survivor keeps
 // spending the run's API keys.
 export const SIGKILL_AFTER_MS = 30 * 1000;
+
+// A human abort has to take the group with it: `detached` puts the child
+// outside the terminal's foreground group, so Ctrl-C alone would not reach it.
+const ABORT_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 export function parseArgs(argv) {
   const args = { baseline: false, dryRun: false, configs: [] };
@@ -224,6 +231,12 @@ export function verdictFor({
  * `-pid` reaches every descendant, and the promise is not resolved while that
  * group still has members: SIGKILL follows SIGTERM `sigkillAfterMs` later, and
  * the next config starts only once the group is gone.
+ *
+ * That same detachment takes the child out of the terminal's foreground group,
+ * so a Ctrl-C on the runner no longer reaches it: while a child is live the
+ * runner catches SIGINT, SIGTERM and SIGHUP, SIGKILLs the group — a human abort
+ * has no use for promptfoo's partial output, and SIGTERM would leave it asleep
+ * in backoff — and exits 128 + the signal number.
  */
 export function spawnEval(
   command,
@@ -255,11 +268,23 @@ export function spawnEval(
       }
     };
 
+    const unlisten = () =>
+      ABORT_SIGNALS.forEach((signal) => process.removeListener(signal, abort));
+    function abort(signal) {
+      signalGroup('SIGKILL');
+      unlisten();
+      process.exit(128 + (osConstants.signals[signal] ?? 0));
+    }
+    // No listener outlives its child: finish() takes these off again, so a
+    // runner aborted between configs dies of the signal as it always did.
+    ABORT_SIGNALS.forEach((signal) => process.on(signal, abort));
+
     const finish = () => {
       if (settled || pending === null) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(escalation);
+      unlisten();
       resolve({ ...pending, killed, durationMs: Date.now() - started });
     };
 

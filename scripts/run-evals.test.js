@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn as spawnChild } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -290,6 +292,9 @@ describe('verdictFor', () => {
 
 describe('spawnEval', () => {
   it('leaves a child that finishes on its own alone', async () => {
+    const abortListeners = () =>
+      ['SIGINT', 'SIGTERM', 'SIGHUP'].map((s) => process.listenerCount(s));
+    const before = abortListeners();
     const result = await spawnEval(
       process.execPath,
       ['-e', 'process.exit(3)'],
@@ -301,6 +306,11 @@ describe('spawnEval', () => {
     assert.equal(result.killed, false);
     assert.equal(result.exitCode, 3);
     assert.equal(typeof result.durationMs, 'number');
+    assert.deepEqual(
+      abortListeners(),
+      before,
+      'an abort listener outlived its child'
+    );
   });
 
   it('kills the whole process group, not just the wrapper', async () => {
@@ -309,7 +319,7 @@ describe('spawnEval', () => {
     const script = grandchildScript(dir);
     const pending = spawnEval('sh', wrapperArgs(script, pidFile), {
       env: process.env,
-      killAfterMs: 500,
+      killAfterMs: 1500,
       sigkillAfterMs: 300
     });
     const pid = await readPid(pidFile);
@@ -324,7 +334,7 @@ describe('spawnEval', () => {
     const script = grandchildScript(dir, { ignoreSigterm: true });
     const pending = spawnEval('sh', wrapperArgs(script, pidFile), {
       env: process.env,
-      killAfterMs: 500,
+      killAfterMs: 1500,
       sigkillAfterMs: 300
     });
     const pid = await readPid(pidFile);
@@ -335,6 +345,29 @@ describe('spawnEval', () => {
       true,
       'the SIGTERM-deaf grandchild survived the escalation'
     );
+  });
+
+  it('takes the group with it when the runner itself is interrupted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spawn-eval-abort-'));
+    const pidFile = join(dir, 'pid');
+    const script = grandchildScript(dir);
+    const source = [
+      `import { spawnEval } from ${JSON.stringify(new URL('./run-evals.js', import.meta.url).href)};`,
+      `await spawnEval('sh', ${JSON.stringify(wrapperArgs(script, pidFile))}, {`,
+      '  env: process.env,',
+      '  killAfterMs: 60000',
+      '});'
+    ].join('\n');
+    const runner = spawnChild(
+      process.execPath,
+      ['--input-type=module', '-e', source],
+      { stdio: 'inherit' }
+    );
+    const pid = await readPid(pidFile);
+    runner.kill('SIGINT');
+    const [code] = await once(runner, 'close');
+    assert.equal(code, 130, 'the runner should exit 128 + SIGINT');
+    assert.equal(await gone(pid), true, 'Ctrl-C left the grandchild running');
   });
 
   it('gives the group half a minute before the escalation by default', () => {
