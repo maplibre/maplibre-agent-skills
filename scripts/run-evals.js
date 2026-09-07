@@ -147,6 +147,12 @@ export function boundFor({ elapsedMs, budgetMs, capMs }) {
  * missing, unparseable, or not shaped like promptfoo's output is an `error` —
  * "no verdict" — and never a pass or a fail, so an unread run cannot move a
  * skill's status in either direction.
+ *
+ * A killed config is an `error` whatever its rows say, but promptfoo often has
+ * written its sidecar by then (its own PROMPTFOO_MAX_EVAL_TIME_MS timer fires
+ * before the hard kill), and that sidecar names why the config ran long. So the
+ * classified signatures are kept and `killed` is appended to them: the issue
+ * table then reads `rate-limit-exhausted, killed` rather than just `killed`.
  */
 export function verdictFor({
   exitCode = null,
@@ -154,15 +160,15 @@ export function verdictFor({
   sidecarText = null
 }) {
   const base = { counts: null, total: 0, errors: [], tokenUsage: null };
-  if (killed) {
-    return {
-      ...base,
-      verdict: 'error',
-      signatures: ['killed'],
-      reason: 'killed after the hard timeout; promptfoo wrote no output'
-    };
-  }
+  const killedBlind = (why) => ({
+    ...base,
+    verdict: 'error',
+    signatures: ['killed'],
+    reason: `killed after the hard timeout; ${why}`
+  });
+
   if (sidecarText === null || sidecarText === undefined) {
+    if (killed) return killedBlind('promptfoo wrote no output');
     return {
       ...base,
       verdict: 'error',
@@ -174,6 +180,10 @@ export function verdictFor({
   try {
     sidecar = JSON.parse(sidecarText);
   } catch (error) {
+    if (killed)
+      return killedBlind(
+        `the JSON output could not be parsed: ${error.message}`
+      );
     return {
       ...base,
       verdict: 'error',
@@ -183,8 +193,18 @@ export function verdictFor({
   }
   try {
     const classified = classifyEval(sidecar);
-    return { ...classified, reason: null };
+    if (!killed) return { ...classified, reason: null };
+    return {
+      ...classified,
+      verdict: 'error',
+      signatures: classified.signatures.includes('killed')
+        ? classified.signatures
+        : [...classified.signatures, 'killed'],
+      reason: 'killed after the hard timeout; promptfoo had written output'
+    };
   } catch (error) {
+    if (killed)
+      return killedBlind(`unreadable promptfoo output: ${error.message}`);
     return {
       ...base,
       verdict: 'error',

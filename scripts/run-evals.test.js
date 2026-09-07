@@ -238,6 +238,53 @@ describe('verdictFor', () => {
     });
     assert.equal(result.verdict, 'error');
     assert.deepEqual(result.signatures, ['killed']);
+    assert.match(result.reason, /wrote no output/);
+  });
+
+  it('keeps the signatures a killed config had already written', () => {
+    const result = verdictFor({
+      exitCode: null,
+      killed: true,
+      sidecarText: sidecar([
+        row(0),
+        row(2, 'RateLimitExhaustedError: judge gave up'),
+        row(2, 'Provider timed out after 300000ms in queue')
+      ])
+    });
+    assert.equal(result.verdict, 'error');
+    assert.deepEqual(result.signatures, [
+      'rate-limit-exhausted',
+      'queue-timeout',
+      'killed'
+    ]);
+    assert.deepEqual(result.counts, { pass: 1, fail: 0, error: 2 });
+    assert.match(result.reason, /killed after the hard timeout/);
+  });
+
+  it('never grades a killed config, however its rows read', () => {
+    const passing = verdictFor({
+      exitCode: null,
+      killed: true,
+      sidecarText: sidecar([row(0), row(0)])
+    });
+    assert.equal(passing.verdict, 'error');
+    assert.deepEqual(passing.signatures, ['killed']);
+
+    const failing = verdictFor({
+      exitCode: null,
+      killed: true,
+      sidecarText: sidecar([row(0), row(1)])
+    });
+    assert.equal(failing.verdict, 'error');
+    assert.deepEqual(failing.signatures, ['killed']);
+
+    const garbage = verdictFor({
+      exitCode: null,
+      killed: true,
+      sidecarText: '{ not json'
+    });
+    assert.equal(garbage.verdict, 'error');
+    assert.deepEqual(garbage.signatures, ['killed']);
   });
 });
 
