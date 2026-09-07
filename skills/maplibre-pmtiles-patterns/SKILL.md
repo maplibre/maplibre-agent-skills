@@ -1,7 +1,7 @@
 ---
 name: maplibre-pmtiles-patterns
 description: Serverless vector and raster tiles with PMTiles for MapLibre GL JS — single-file format, HTTP range requests, hosting on S3/R2/GitHub Pages, generating with Planetiler or tippecanoe, and the pmtiles protocol. Use when you need no tile server or want to host tiles from static storage.
-status: provisional
+status: verified
 ---
 
 # MapLibre PMTiles Patterns
@@ -91,11 +91,36 @@ const map = new maplibregl.Map({
 // map.on('remove', () => maplibregl.removeProtocol('pmtiles'));
 ```
 
+**`addProtocol` changed in MapLibre GL JS 4.0.0.** The v3 `(params, callback)` signature is gone — the 4.0.0 changelog entry reads "Changes `addProtocol` to be promise-based without the usage of callbacks and cancelable". A handler is now `async (params, abortController)` and must resolve to **an object with a `data` property**: `{data, cacheControl?, expires?}`. Resolving to a bare `ArrayBuffer`, `Blob`, `Response` or `Uint8Array` is not the contract — MapLibre reads `.data` off whatever the handler resolves with, so a bare buffer reads as no data at all and an `arrayBuffer` request is filled with an empty `ArrayBuffer(0)`: the tile comes back blank instead of erroring. Register the handler on the module — `maplibregl.addProtocol(...)`, or the named `addProtocol` import — once, before the first map is constructed: the protocol registry is global, so one registration covers every map on the page.
+
+```js
+// ❌ v3 — callback signature; on v4+ nothing ever resolves the request
+maplibregl.addProtocol('custom', (params, callback) => {
+  fetch(params.url)
+    .then((r) => r.arrayBuffer())
+    .then((buffer) => callback(null, buffer))
+    .catch((error) => callback(error));
+  return { cancel: () => {} };
+});
+
+// ✅ v4+ — async (params, abortController) resolving to {data}
+maplibregl.addProtocol('custom', async (params, abortController) => {
+  const response = await fetch(params.url, { signal: abortController.signal });
+  if (!response.ok) throw new Error(`Tile fetch error: ${response.statusText}`);
+  const buffer = await response.arrayBuffer();
+  return { data: buffer }; // the {data} wrapper is required; a bare buffer is not
+});
+```
+
+**PMTiles users upgrading need no code change.** `new pmtiles.Protocol().tile` is the library's v4 handler wrapped in its `v3compat` shim: it checks whether the second argument is an `AbortController` and adapts, so the single line `maplibregl.addProtocol('pmtiles', protocol.tile)` is correct on v3, v4, v5 and v6, and it already resolves to `{data: Uint8Array, cacheControl, expires}`. The contract above is what you need when you write your own handler, or when a hand-rolled callback handler broke on the v4 upgrade.
+
 **Referencing layers:** The style has one source (e.g. `sources.tiles`) pointing at the .pmtiles URL. Each layer in the `layers` array that draws from that file uses `source: 'tiles'` and `"source-layer": "layerName"`, where `layerName` is the name of a vector layer inside the file (from whatever schema the tiles use). Add multiple style layers with different `source-layer` values to show roads, labels, etc. from the same file.
 
 **Important:** The `url` can be `pmtiles://https://...` (protocol + HTTPS URL to the .pmtiles file). The library will fetch the file via range requests. Your style must still define glyphs and sprite if you use labels or icons (see [maplibre-source-wiring](../maplibre-source-wiring/SKILL.md)).
 
 **Zoom range comes from the header — use `url:`, not `tiles:`.** A PMTiles archive stores its own min/max zoom in the header. When you reference it with `url: 'pmtiles://https://...'`, the protocol reads that header and hands MapLibre a TileJSON with the correct `minzoom`/`maxzoom`, so overzoom past the archive's max works automatically and you never set `maxzoom` by hand. If you instead hand-wire a `tiles: ['pmtiles://.../{z}/{x}/{y}']` template, you bypass that header lookup. The protocol still serves the per-tile requests up to the archive's max — this is not a missing-handler or 404 problem — but MapLibre, given no zoom range, assumes `maxzoom: 22` and keeps requesting zoom levels the archive doesn't contain, which come back empty (blank tiles for vector, nothing for raster) instead of overzooming. Always use `url:`.
+
+**❌ A source has exactly two tile-location properties: `url` and `tiles`.** There is no `tileset` property — not in any version of the MapLibre style spec, for `vector`, `raster` or `raster-dem` sources. If a zoom range is wrong, fix which of the two you used; don't reach for a third.
 
 **Raster and raster-dem:** The same protocol works for raster PMTiles. Use a `type: 'raster'` source for imagery. For terrain/elevation, use a `type: 'raster-dem'` source with `"encoding": "terrarium"` (or `"mapbox"`) so MapLibre can apply hillshade or 3D terrain; then reference it in the style’s `terrain` property. Example source:
 
@@ -132,6 +157,8 @@ The [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) is the official comman
 - **Convert MBTiles to PMTiles** — Many tools (tippecanoe, GDAL, martin-cp) output MBTiles. One command turns any .mbtiles file into a .pmtiles file: `pmtiles convert in.mbtiles out.pmtiles`. This is often the simplest way to get PMTiles when your pipeline already produces MBTiles.
 - **Inspect and verify archives** — `pmtiles show <file>` prints header and metadata (bounds, zoom range, tile count). `pmtiles verify <file>` checks archive integrity. Useful for debugging or confirming a file before uploading.
 - **Extract subsets** — `pmtiles extract` creates a smaller .pmtiles file from an existing one (e.g. by bounding box or zoom range), so you can ship a region or a limited zoom band without regenerating from source.
+
+**❌ The subcommand list is closed — don't reach for a plausible-sounding verb.** go-pmtiles ships exactly `show`, `tile`, `verify`, `extract`, `merge`, `serve`, `convert`, `cluster`, `upload`, `edit` and `version`. There is no `info` verb and no `inspect` verb, and nothing sets metadata from the command line except `edit`. To read an archive's header, bounds and zoom range, the command is `pmtiles show`; to check integrity, `pmtiles verify`.
 
 **Install:** Download the binary for your OS/arch from [GitHub Releases (go-pmtiles)](https://github.com/protomaps/go-pmtiles/releases), or use Docker: `protomaps/go-pmtiles`.
 
@@ -201,6 +228,7 @@ PMTiles supports **raster** tiles (PNG/JPEG, e.g. satellite or pre-rendered imag
 
 - [MapLibre GL JS: PMTiles source and protocol](https://maplibre.org/maplibre-gl-js/docs/examples/pmtiles/) — Official example: adding the protocol, vector and raster sources.
 - [PMTiles for MapLibre GL](https://docs.protomaps.com/pmtiles/maplibre) (Protomaps) — Setup, vector/raster/raster-dem (Terrarium) sources, React usage.
+- [`addProtocol` (MapLibre GL JS API)](https://maplibre.org/maplibre-gl-js/docs/API/functions/addProtocol/) — The custom-protocol handler signature and the `{data}` return shape.
 - [PMTiles](https://github.com/protomaps/PMTiles) — Format and protocol
 - [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) — Simplest way to create PMTiles (`convert`, `show`, `verify`, `extract`)
 - [Planetiler](https://github.com/onthegomap/planetiler) — OSM → PMTiles/MBTiles
