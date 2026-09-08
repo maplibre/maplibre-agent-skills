@@ -94,7 +94,8 @@ const map = new maplibregl.Map({
 **`addProtocol` changed in MapLibre GL JS 4.0.0.** The v3 `(params, callback)` signature is gone — the 4.0.0 changelog entry reads "Changes `addProtocol` to be promise-based without the usage of callbacks and cancelable". A handler is now `async (params, abortController)` and must resolve to **an object with a `data` property**: `{data, cacheControl?, expires?}`. Resolving to a bare `ArrayBuffer`, `Blob`, `Response` or `Uint8Array` is not the contract — MapLibre reads `.data` off whatever the handler resolves with, so a bare buffer reads as no data at all and an `arrayBuffer` request is filled with an empty `ArrayBuffer(0)`: the tile comes back blank instead of erroring. Register the handler on the module — `maplibregl.addProtocol(...)`, or the named `addProtocol` import — once, before the first map is constructed: the protocol registry is global, so one registration covers every map on the page.
 
 ```js
-// ❌ v3 — callback signature; on v4+ nothing ever resolves the request
+// ❌ v3 — on v4+ the second argument is an AbortController, so callback(...) throws,
+// and the returned {cancel} has no data: the tile comes back blank
 maplibregl.addProtocol('custom', (params, callback) => {
   fetch(params.url)
     .then((r) => r.arrayBuffer())
@@ -112,7 +113,7 @@ maplibregl.addProtocol('custom', async (params, abortController) => {
 });
 ```
 
-**PMTiles users upgrading need no code change.** `new pmtiles.Protocol().tile` is the library's v4 handler wrapped in its `v3compat` shim: it checks whether the second argument is an `AbortController` and adapts, so the single line `maplibregl.addProtocol('pmtiles', protocol.tile)` is correct on v3, v4, v5 and v6, and it already resolves to `{data: Uint8Array, cacheControl, expires}`. The contract above is what you need when you write your own handler, or when a hand-rolled callback handler broke on the v4 upgrade.
+**PMTiles users need no code change.** `new pmtiles.Protocol().tile` is the library's v4 handler wrapped in its `v3compat` shim (`pmtiles` ≥ 3.0.0): it checks whether the second argument is an `AbortController` and adapts, so the single line `maplibregl.addProtocol('pmtiles', protocol.tile)` is correct on GL JS v3, v4, v5 and v6, and it already resolves to `{data: Uint8Array, cacheControl, expires}`. A project still on `pmtiles` 2.x has a callback-only `tile` and must upgrade the library along with MapLibre. The contract above is what you need when you write your own handler, or when a hand-rolled callback handler broke on the v4 upgrade.
 
 **Referencing layers:** The style has one source (e.g. `sources.tiles`) pointing at the .pmtiles URL. Each layer in the `layers` array that draws from that file uses `source: 'tiles'` and `"source-layer": "layerName"`, where `layerName` is the name of a vector layer inside the file (from whatever schema the tiles use). Add multiple style layers with different `source-layer` values to show roads, labels, etc. from the same file.
 
@@ -120,7 +121,7 @@ maplibregl.addProtocol('custom', async (params, abortController) => {
 
 **Zoom range comes from the header — use `url:`, not `tiles:`.** A PMTiles archive stores its own min/max zoom in the header. When you reference it with `url: 'pmtiles://https://...'`, the protocol reads that header and hands MapLibre a TileJSON with the correct `minzoom`/`maxzoom`, so overzoom past the archive's max works automatically and you never set `maxzoom` by hand. If you instead hand-wire a `tiles: ['pmtiles://.../{z}/{x}/{y}']` template, you bypass that header lookup. The protocol still serves the per-tile requests up to the archive's max — this is not a missing-handler or 404 problem — but MapLibre, given no zoom range, assumes `maxzoom: 22` and keeps requesting zoom levels the archive doesn't contain, which come back empty (blank tiles for vector, nothing for raster) instead of overzooming. Always use `url:`.
 
-**❌ A source has exactly two tile-location properties: `url` and `tiles`.** There is no `tileset` property — not in any version of the MapLibre style spec, for `vector`, `raster` or `raster-dem` sources. If a zoom range is wrong, fix which of the two you used; don't reach for a third.
+**❌ A source has exactly two tile-location properties: `url` and `tiles`.** There is no `tileset` property in the MapLibre style spec, for `vector`, `raster` or `raster-dem` sources. If a zoom range is wrong, fix which of the two you used; don't reach for a third.
 
 **Raster and raster-dem:** The same protocol works for raster PMTiles. Use a `type: 'raster'` source for imagery. For terrain/elevation, use a `type: 'raster-dem'` source with `"encoding": "terrarium"` (or `"mapbox"`) so MapLibre can apply hillshade or 3D terrain; then reference it in the style’s `terrain` property. Example source:
 
