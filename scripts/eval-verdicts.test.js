@@ -7,6 +7,8 @@ import {
   classificationBlock,
   classifyEval,
   headlineFor,
+  isSafeCliPath,
+  isSafeConfigPath,
   listEvalConfigs,
   missingVerdicts,
   parseVerdicts,
@@ -229,6 +231,111 @@ describe('listEvalConfigs', () => {
       join(dir, 'maplibre-cartography.yaml'),
       join(dir, 'maplibre-tile-sources.yaml')
     ]);
+  });
+});
+
+describe('isSafeCliPath', () => {
+  it('accepts the paths this runner actually builds', () => {
+    for (const path of [
+      'evals/prompts/maplibre-cartography.yaml',
+      'evals/results',
+      'evals/results/2026-09-06-maplibre-cartography.csv',
+      '/tmp/eval',
+      '/var/folders/ab/T/eval',
+      '.claude/worktrees/x'
+    ]) {
+      assert.equal(isSafeCliPath(path), true, path);
+    }
+  });
+
+  it('rejects the characters that give a path a second meaning', () => {
+    for (const path of [
+      '',
+      'evals/prompts/$(id).yaml',
+      'a;b',
+      'a b',
+      'a|b',
+      'a&b',
+      'a`b`',
+      'a\\b',
+      "a'b",
+      'a*b',
+      'evals\nprompts'
+    ]) {
+      assert.equal(isSafeCliPath(path), false, JSON.stringify(path));
+    }
+  });
+
+  it('rejects traversal, empty segments, and leading dashes', () => {
+    for (const path of [
+      '../evals',
+      'evals/../x',
+      'evals/./x',
+      '.',
+      '..',
+      '-flag',
+      'evals/-x',
+      '//evals',
+      'evals//x',
+      'evals/'
+    ]) {
+      assert.equal(isSafeCliPath(path), false, JSON.stringify(path));
+    }
+  });
+
+  it('rejects a value that is not a string', () => {
+    for (const value of [undefined, null, 42, {}, ['evals/results']]) {
+      assert.equal(isSafeCliPath(value), false, String(value));
+    }
+  });
+});
+
+describe('isSafeConfigPath', () => {
+  function configDir() {
+    const dir = mkdtempSync(join(tmpdir(), 'safe-config-'));
+    mkdirSync(join(dir, 'sub'));
+    for (const name of [
+      'maplibre-cartography.yaml',
+      'TEMPLATE.yaml',
+      'x.yml',
+      '$(id).yaml'
+    ]) {
+      writeFileSync(join(dir, name), '');
+    }
+    writeFileSync(join(dir, 'sub', 'x.yaml'), '');
+    return dir;
+  }
+
+  it('accepts an existing config file sitting directly in the config dir', () => {
+    const dir = configDir();
+    assert.equal(
+      isSafeConfigPath(join(dir, 'maplibre-cartography.yaml'), dir),
+      true
+    );
+  });
+
+  it('rejects the template, a subdirectory, a missing file, and another dir', () => {
+    const dir = configDir();
+    const other = configDir();
+    assert.equal(isSafeConfigPath(join(dir, 'TEMPLATE.yaml'), dir), false);
+    assert.equal(isSafeConfigPath(join(dir, 'sub', 'x.yaml'), dir), false);
+    assert.equal(isSafeConfigPath(join(dir, 'missing.yaml'), dir), false);
+    assert.equal(
+      isSafeConfigPath(join(other, 'maplibre-cartography.yaml'), dir),
+      false
+    );
+    assert.equal(isSafeConfigPath(dir, dir), false);
+  });
+
+  it('rejects a wrong extension and a directory itself', () => {
+    const dir = configDir();
+    assert.equal(isSafeConfigPath(join(dir, 'x.yml'), dir), false);
+    assert.equal(isSafeConfigPath(join(dir, 'sub'), dir), false);
+  });
+
+  it('rejects a name outside the character rule even when the file exists', () => {
+    const dir = configDir();
+    assert.equal(isSafeConfigPath(join(dir, '$(id).yaml'), dir), false);
   });
 });
 

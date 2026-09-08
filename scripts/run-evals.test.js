@@ -125,6 +125,41 @@ describe('buildCommand', () => {
     );
   });
 
+  it('refuses a config or output path the shell could read', () => {
+    assert.throws(
+      () =>
+        buildCommand({
+          config: 'evals/prompts/$(id).yaml',
+          name: '2026-09-06',
+          resultsDir: 'evals/results',
+          workDir: '/tmp/eval'
+        }),
+      (error) => error.message.includes('evals/prompts/$(id).yaml')
+    );
+    assert.throws(
+      () =>
+        buildCommand({
+          config: 'evals/prompts/maplibre-cartography.yaml',
+          name: '2026-09-06',
+          resultsDir: 'out dir',
+          workDir: '/tmp/eval'
+        }),
+      (error) =>
+        error.message.includes('out dir/2026-09-06-maplibre-cartography.csv')
+    );
+    assert.throws(
+      () =>
+        buildCommand({
+          config: 'evals/prompts/maplibre-cartography.yaml',
+          name: '2026-09-06',
+          resultsDir: 'evals/results',
+          workDir: 'x y'
+        }),
+      (error) =>
+        error.message.includes('x y/2026-09-06-maplibre-cartography.json')
+    );
+  });
+
   it('withholds the skill on a baseline run, and names the files for it', () => {
     const { args } = buildCommand({
       config: 'evals/prompts/maplibre-cartography.yaml',

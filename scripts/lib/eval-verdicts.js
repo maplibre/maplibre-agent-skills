@@ -27,8 +27,8 @@
  * other shape throws: a classifier that guessed would report a green week it
  * never checked.
  */
-import { readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { readdirSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 const NONE = 0;
 const ASSERT = 1;
@@ -46,6 +46,59 @@ export function listEvalConfigs(dir = 'evals/prompts') {
     .filter((name) => name.endsWith('.yaml') && name !== 'TEMPLATE.yaml')
     .sort()
     .map((name) => join(dir, name));
+}
+
+// One `/`-separated path segment: letters, digits, dot, underscore, dash.
+// Everything a shell gives a second meaning — space, quote, `$`, `;`, `|`, `&`,
+// backtick, backslash, parenthesis, glob, newline — is outside it.
+const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Whether a path is plain enough to place in a child process's argv.
+ *
+ * Every segment is a name from the safe set, no segment is `.`, `..`, or empty,
+ * and none starts with a dash, which the receiving command would read as a flag.
+ * A single leading `/` is ordinary — work dirs are absolute (`/tmp/eval`, or
+ * macOS `/var/folders/ab/T/eval`) — and nothing else is allowed.
+ */
+export function isSafeCliPath(p) {
+  if (typeof p !== 'string' || p.length === 0) return false;
+  const segments = p.split('/');
+  if (segments[0] === '') segments.shift();
+  if (segments.length === 0) return false;
+  return segments.every(
+    (segment) =>
+      SAFE_SEGMENT.test(segment) &&
+      segment !== '.' &&
+      segment !== '..' &&
+      !segment.startsWith('-')
+  );
+}
+
+/**
+ * Whether a value names an eval config this repo actually has: a plain path, a
+ * `.yaml` file that is not the template, sitting directly in `configDir`, and
+ * present on disk as a regular file. A name that fails any of those is a typo or
+ * someone else's idea, and either way not something to hand to a runner.
+ */
+export function isSafeConfigPath(config, configDir = 'evals/prompts') {
+  if (!isSafeCliPath(config)) return false;
+  if (!config.endsWith('.yaml')) return false;
+  if (basename(config) === 'TEMPLATE.yaml') return false;
+  const inner = relative(resolve(configDir), resolve(config));
+  if (
+    inner === '' ||
+    inner.startsWith('..') ||
+    isAbsolute(inner) ||
+    inner !== basename(inner)
+  ) {
+    return false;
+  }
+  try {
+    return statSync(config).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** `evals/prompts/maplibre-cartography.yaml` -> `maplibre-cartography`. */

@@ -35,6 +35,9 @@
  * and rewrites `<work>/summary.json`, so a run cut off halfway still hands the
  * publish job a record it can report.
  *
+ * Config and output paths are validated before they are placed in the `npm run`
+ * argv, which a shell receives.
+ *
  *   node scripts/run-evals.js --dry-run
  *   node scripts/run-evals.js evals/prompts/maplibre-cartography.yaml
  *
@@ -64,6 +67,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   classifyEval,
+  isSafeCliPath,
+  isSafeConfigPath,
   listEvalConfigs,
   runName,
   skillOf
@@ -113,6 +118,10 @@ export function parseArgs(argv) {
  * Never combine configs into one invocation: promptfoo merges the defaultTest
  * blocks of combined configs (last one wins), which would inject a single
  * skill's SKILL.md into every test.
+ *
+ * These args reach a shell through `npm run`; npm quotes them, but the runner
+ * does not rely on that — every path is checked here before it enters argv, so a
+ * hostile or mistyped config name is rejected rather than forwarded.
  */
 export function buildCommand({
   config,
@@ -122,6 +131,24 @@ export function buildCommand({
   baseline = false
 }) {
   const skill = skillOf(config);
+  const csvPath = join(resultsDir, `${name}-${skill}.csv`);
+  const jsonPath = join(workDir, `${name}-${skill}.json`);
+  // The last point before the child process, so this covers every caller.
+  if (!isSafeCliPath(config)) {
+    throw new Error(
+      `Refusing to build a command with an unusable config path: ${JSON.stringify(config)}`
+    );
+  }
+  if (!isSafeCliPath(csvPath)) {
+    throw new Error(
+      `Refusing to build a command with an unusable output path: ${JSON.stringify(csvPath)}`
+    );
+  }
+  if (!isSafeCliPath(jsonPath)) {
+    throw new Error(
+      `Refusing to build a command with an unusable output path: ${JSON.stringify(jsonPath)}`
+    );
+  }
   return {
     command: 'npm',
     args: [
@@ -132,8 +159,8 @@ export function buildCommand({
       config,
       ...(baseline ? ['--var', 'injectSkill=false'] : []),
       '--output',
-      join(resultsDir, `${name}-${skill}.csv`),
-      join(workDir, `${name}-${skill}.json`)
+      csvPath,
+      jsonPath
     ]
   };
 }
@@ -471,6 +498,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error('No eval configs found.');
     process.exit(1);
   }
+  const rejected = configs.filter((c) => !isSafeConfigPath(c, configDir));
+  if (rejected.length > 0) {
+    for (const value of rejected) {
+      console.error(`Not an eval config under ${configDir}: ${value}`);
+    }
+    console.error(`Configs must be existing ${configDir}/<skill>.yaml paths.`);
+    process.exit(1);
+  }
 
   const baseline = args.baseline || process.env.INPUT_BASELINE === 'true';
   const name = runName(new Date().toISOString().slice(0, 10), baseline);
@@ -483,6 +518,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const budgetMinutes = Number(
     process.env.EVAL_BUDGET_MINUTES || BUDGET_MINUTES_DEFAULT
   );
+
+  const badDirs = [
+    ['--results-dir', resultsDir],
+    ['--work-dir / EVAL_WORK_DIR', workDir]
+  ].filter(([, dir]) => !isSafeCliPath(dir));
+  if (badDirs.length > 0) {
+    for (const [flag, dir] of badDirs) {
+      console.error(`Not a usable ${flag} path: ${dir}`);
+    }
+    process.exit(1);
+  }
 
   if (args.dryRun) {
     console.log(
