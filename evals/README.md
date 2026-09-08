@@ -47,6 +47,8 @@ Current models:
 
 Update `providers.yaml` and this table together when the model changes; see [CI](#ci) for how the pin is enforced.
 
+The generator's reasoning trace is excluded from the graded output (`showThinking: false` in `providers.yaml`), so assertions and the judge grade the answer only.
+
 **Groq** (required for all runs):
 
 1. Sign up at [console.groq.com](https://console.groq.com/) (free, no credit card).
