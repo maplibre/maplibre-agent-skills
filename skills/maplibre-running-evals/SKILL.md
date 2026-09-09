@@ -33,8 +33,6 @@ curl -s -X POST https://api.groq.com/openai/v1/chat/completions \
 ## 2. Write the tests before the content
 
 - Copy [`evals/prompts/TEMPLATE.yaml`](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/prompts/TEMPLATE.yaml) to `evals/prompts/<skill>.yaml` and write four tests — explicit, implicit, anti-pattern, negative — before the skill has any content. [evals/README.md, "Writing eval prompts"](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/README.md#writing-eval-prompts) is the how; this skill is the running procedure.
-- State a prohibition as `Must NOT …`, naming the artifact, in its own clause: "must do X rather than Y" is satisfied by an answer that does both.
-- Describe only the symptom in the prompt. A prompt that names the API, property, or value the rubric wants grades the harness, not the model.
 
 ## 3. Run the baseline, with the skill withheld
 
