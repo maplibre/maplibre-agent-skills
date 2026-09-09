@@ -1,72 +1,96 @@
 ---
 name: maplibre-running-evals
-description: How to run this repo's Promptfoo evals without wasting a run — baseline before content, the pinned flags never to hand-roll, and how to tell a hung run or a stale output file from a real result. Use before running any eval, not after one has already failed.
+description: The step-by-step procedure for running this repo's Promptfoo evals against a generator and a judge — budgeting a run against the provider's limits, proving a gap at baseline before writing content, diagnosing a stalled or rate-limited run, and deciding when a change needs a retest. Use before running an eval, not after one has already failed.
 status: process
 ---
 
 # Running Promptfoo Evals
 
-[evals/README.md](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/README.md) covers what to test and how to write prompts and rubrics. This is the procedure for running them.
+Every eval here runs two roles over provider APIs: a **generator**, the model under test, and a **judge**, the model that grades each `llm-rubric` assertion. [evals/README.md](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/README.md) covers what to test and how to write prompts and rubrics; this is the procedure for running them. Work the phases in order — do not start at phase 5 because content already exists.
 
-## Procedure
+## 1. Set up and budget the run
 
-1. **Baseline first, before writing any content.** `npm run eval:graded -- --config evals/prompts/<skill>.yaml --var injectSkill=false`
-2. **Write content only for tests that failed at baseline** — a passing test has nothing for the skill to fix. See [CONTRIBUTING.md, "Cutting content the model already gets right"](https://github.com/maplibre/maplibre-agent-skills/blob/main/CONTRIBUTING.md#cutting-content-the-model-already-gets-right).
-3. **With-skill second.** `npm run eval:graded -- --config evals/prompts/<skill>.yaml` (injection is the default).
-4. **Only a test that fails at baseline and passes with the skill is a demonstrated gap.** Passing both, failing both, or no with-skill run means no claim yet.
-5. **One config per invocation.** Promptfoo merges `defaultTest` across combined configs, so one skill's `SKILL.md` lands in another's tests.
-6. **Canary before any batch, once per run type.** Run a single-test copy of the config first, for baseline and again for with-skill: a with-skill call sends an entire `SKILL.md` on top of the prompt, so a green baseline canary says nothing about it.
-7. **Write every run to `--output evals/results/local/<skill>-<baseline|with-skill>.csv`** (gitignored), and promote only the runs you cite: copy each to `evals/results/latest/<skill>-<baseline|with-skill>_<YYYY-MM-DD>.csv` — the naming already there, e.g. `maplibre-pmtiles-patterns-baseline_2026-08-30.csv` — and cite it from `evals/results/<skill>.md`. That pair is how [CONTRIBUTING.md step 3](https://github.com/maplibre/maplibre-agent-skills/blob/main/CONTRIBUTING.md#write-a-new-skill), "commit the raw CSVs to `evals/results/`", is met in this repo. For a run you do not cite, terminal output and `npx promptfoo view` are enough; the weekly CI run commits its own dated CSVs.
+Budget before anything else. These providers are used on free tiers, and a run you cannot finish teaches nothing.
 
-## Before you run
-
-- **Check both keys, presence only, never the value:** `echo "GROQ set: ${GROQ_API_KEY:+yes}"` and `echo "GOOGLE set: ${GOOGLE_API_KEY:+yes}"`. If either is missing, stop and report; do not extrapolate a result.
-- **Use `eval:graded` for every run you record or cite.** A bare `npm run eval` has no `--grader`, so Promptfoo picks the judge from whatever credentials it finds — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`/`GEMINI_API_KEY`, Azure, Mistral, xAI, Vertex ADC, `~/.codex/auth.json`, or `GITHUB_TOKEN`. Groq is never a candidate, and with `GOOGLE_API_KEY` set the pick is Promptfoo's own Gemini default, not the pinned judge. With no `GOOGLE_API_KEY`, `eval:graded` errors on every `llm-rubric` instead.
-- **Never pass `--providers` on a run you record or cite.** It replaces the pinned generator with a bare one — no `temperature`, no `max_tokens`, no label — and reintroduces mid-answer truncation. `--providers echo` is fine for probing prompt wiring; no model is called.
-- **Never hand-roll `--grader`, `--delay`, or `-j`.** `package.json`'s `eval:graded` pins all three. A wrong value is a `package.json` change, not a flag typed around it. A results doc that records a different value — `evals/results/maplibre-v6-migration.md` records `--delay 20000` — documents that run; it is not a value to copy.
-- **When the window or the day is smaller than the run, run fewer tests per invocation and wait it out.** `--filter-pattern '<regex against the test description>'` runs only the matching tests (quote it; `npm run` passes it through a shell), and `--filter-failing <eval id or .json output path>` re-runs only the tests that failed or errored — eval ids come from `npx promptfoo list evals`; a CSV `--output` does not qualify.
-- **Never run two graded evals at once**, including across terminals or teammates — quota is per key and a single run drains two, the generator's on Groq (per-minute and per-day) and the judge's on Gemini. On Groq's Free Plan the daily token cap is the scarce one, so the collision may surface on the generator as `429`s and queue timeouts before the judge ever rate-limits. Chain them with `&& sleep 45 &&`.
-- **Budget the run against the daily cap before launching, not only the per-minute one.** Tokens ≈ bytes / 4, so `wc -c skills/<skill>/SKILL.md` gives the with-skill overhead per test: each with-skill test costs about that plus `max_tokens` (`4096` in `evals/prompts/lib/providers.yaml`) on the generator, plus a separate judge call on Gemini. A 22 KB skill is ≈ 5.5K tokens, so six with-skill tests are ≈ 58K tokens before judging — more than a quarter of the 200K tokens-per-day Free Plan cap Groq lists for this model. Weigh it against `x-ratelimit-remaining-tokens` from the direct call under "Is it hung?" for the minute, and against what the day has already spent.
-- `--delay` paces requests; it does not create budget. A rate-limit failure that survives correct pacing and no concurrency is exhausted capacity — stop, note the reset time from the direct call under "Is it hung?", do not loop.
-
-## Is it hung?
-
-Promptfoo prints the table and writes `--output` only after the run finishes, and its progress bar needs a TTY on stderr, so under an agent a healthy run and a dead one both show nothing. Never infer progress from elapsed time.
+- **Confirm a generator key and a judge key are set — presence only, never the value:** `echo "generator: ${GROQ_API_KEY:+set}"` and `echo "judge: ${GOOGLE_API_KEY:+set}"`. If either is missing, stop and report; do not extrapolate a result from a run you did not make.
+- **Both roles are pinned:** the generator in [`evals/prompts/lib/providers.yaml`](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/prompts/lib/providers.yaml), the judge in `package.json`'s `eval:graded` script. Use the pinned pair by default. The one hard requirement is that they are different models — never grade a generator with itself — and any result you report names both.
+- **Send every recorded run through `npm run eval:graded`,** the only place `--grader`, `--delay`, and `-j` are set. Do not hand-type them, and do not copy a value out of an older results doc: that value documents that run, not this one. Do not pass `--providers` either: it replaces the pinned generator with a bare one, so the run is no longer pinned and its results are mislabeled — [evals/README.md, "Writing eval prompts"](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/README.md#writing-eval-prompts) has the detail. `--providers echo` is the exception: it renders the prompts back and calls no model.
+- **Learn the provider's limits before launching:** read its rate-limit documentation for the pinned model's tier, then make one minimal request to the endpoint with response headers shown. On an OpenAI-compatible endpoint the `x-ratelimit-*` headers carry the per-minute token window (limit, remaining, reset) and the per-day request count; a daily token cap has no header of its own, so it surfaces only when a `429` arrives — `retry-after` gives the wait, and the body names which limit tripped. Header names and what they count are provider-specific and change, so confirm them against the provider's own page.
 
 ```bash
-pgrep -fl promptfoo                       # take the node pid, not the sh wrapper — the wrapper holds no sockets
-lsof -nP -p <node-pid> -i                 # ESTABLISHED = waiting on the provider
-ls -l ~/.promptfoo/promptfoo.db*          # each finished result is written to the db; the -wal file's mtime stops advancing on a stall
-```
-
-An open connection is the signal; CPU is not — a healthy run waiting on the provider sits at 0%. Kill only when the connection is gone **and** the mtime is frozen. A killed run writes no `--output` file — its finished rows are only in the local db (export them, under "Reading results") — so give the re-run a fresh `--output` path.
-
-Promptfoo reports a spent minute and a spent day the same way — `Request groq:openai/gpt-oss-120b[...] timed out after 300000ms in queue`, or `RateLimitExhaustedError` on the request that was retrying — so the message does not say which. (A request too large for the window is different: Groq rejects it outright with `413` rather than `429`, and Promptfoo records that as an error row carrying the body, not as a timeout.) One direct call to the provider does:
-
-```bash
+# Example against the current generator's OpenAI-compatible endpoint; the URL and model id come from providers.yaml.
 curl -s -X POST https://api.groq.com/openai/v1/chat/completions \
   -H "Authorization: Bearer $GROQ_API_KEY" -H "Content-Type: application/json" \
   --data '{"model":"openai/gpt-oss-120b","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
   -D - | grep -iE 'ratelimit|retry-after|"error"'
 ```
 
-The headers carry the per-minute window (`x-ratelimit-limit-tokens: 8000`, `x-ratelimit-remaining-tokens`, `x-ratelimit-reset-tokens`) and the daily request count (`x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests`); no header carries the daily token cap — it appears in the `429` body's `error.message`, which names the limit that tripped (`tokens per minute (TPM)` or `tokens per day (TPD)`), the limit value, and the wait (`Please try again in …`).
+- **Do the arithmetic before launching.** Tokens ≈ bytes / 4, so `wc -c skills/<skill>/SKILL.md` gives the injection cost per test; a with-skill run costs roughly tests × (that + the generator's configured `max_tokens`), plus one judge call per rubric, against whatever the day has left. A baseline run drops the injection. If the total does not fit the remaining budget, do not launch it whole.
+- **Run sequentially, one config per invocation.** `-j 1` is pinned, and never run two graded evals at once — across terminals or across teammates. Limits are per account, not per process, so a `429` on either role kills both runs; chain them instead, leaving a full per-minute window between: `<run one> && sleep 60 && <run two>`. Pass a single `--config`, because Promptfoo merges `defaultTest` across combined configs and one skill's `SKILL.md` would be injected into another skill's tests.
+- **`--delay` paces requests; it does not create budget.** A rate-limit failure that survives correct pacing with no concurrency is exhausted capacity — stop, take the reset time from the direct call above, and do not loop.
+- **When the remaining window or day is smaller than the run, run fewer tests per invocation — never a larger delay.** `--filter-pattern '<regex against the test description>'` runs only the matching tests (quote it; `npm run` passes it through a shell), and it is also how you probe one test of a run type before committing the whole config. `--filter-failing <eval id or .json output path>` re-runs only what failed or errored.
 
-## Reading results
+## 2. Write the tests before the content
 
-- **Check the output file's mtime and row count before reading it.** A killed run leaves the previous file in place. If either looks wrong, say so instead of narrating numbers from it.
-- **Check the tail of every FAIL for truncation.** A truncated PASS is usually safe; a truncated FAIL may have been cut before the part the rubric wanted.
-- **The asymmetry inverts for `must NOT` clauses** — a prohibition is satisfied for free by an answer that stopped early, so there the truncated PASS is the unsafe one.
-- **An empty row is not a FAIL.** The call never reached the model. Record it as no data; retrying more than once spends quota for no evidence.
-- **Read the grader reason for `Error:` first.** When the judge is down, read the raw output and decide with a human; never edit a grader's reason in a recorded CSV.
-- **No `--output` file? Export the last eval:** `npx promptfoo export eval latest -o evals/results/local/last.json` writes the most recent eval out of the local db and calls no provider. Read `results.results[].gradingResult.componentResults[].reason` beside `results.results[].response.output`, matched on `results.results[].testCase.description` — the reason alone is never enough to judge a verdict by; the raw output is what to read.
-- **One run is a sample.** The generator is nondeterministic even at `temperature: 0` — never conclude "the skill regressed" from one run.
-- **A test belongs to the skill that owns the claim,** not the config you had open. Test placement drives content placement, which is how one claim ends up in three drifting copies.
-- **Deletion needs a higher bar than addition.** A baseline FAIL demonstrates a gap; a baseline PASS is only the absence of one on one sample. On a single baseline PASS, demote — a naming plus a pointer — rather than delete.
-- **A leading prompt grades the harness, not the model.** When the question names the property, API, or value the rubric wants — asking whether `url: 'pmtiles://…'` should replace the `tiles` array instead of describing the tiles that go blank past a zoom level — a baseline PASS is the model repeating the question back. Reword the prompt to the symptom a user would report and re-run; the rubric was not the problem.
-- **A rubric goes stale.** When you change a skill's wording, grep its rubric for the phrase you removed, in the same commit; an outdated rubric grades leniently and comes back green. Rewording a rubric invalidates that test's baseline — re-run it.
-- **State a prohibition as `Must NOT ...`, naming the artifact,** in its own clause. "Must do X rather than Y" is satisfied by an answer that does both.
-- **A stop condition must quote a rubric clause.** If you cannot point at the clause, it is your reading of the skill — an advisory note, never a verdict or a halt.
+- Copy [`evals/prompts/TEMPLATE.yaml`](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/prompts/TEMPLATE.yaml) to `evals/prompts/<skill>.yaml` and write four tests — explicit, implicit, anti-pattern, negative — before the skill has any content. [evals/README.md, "Writing eval prompts"](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/README.md#writing-eval-prompts) is the how; this skill is the running procedure.
+- State a prohibition as `Must NOT …`, naming the artifact, in its own clause: "must do X rather than Y" is satisfied by an answer that does both.
+- Describe only the symptom in the prompt. A prompt that names the API, property, or value the rubric wants grades the harness, not the model.
+
+## 3. Run the baseline, with the skill withheld
+
+`npm run eval:graded -- --config evals/prompts/<skill>.yaml --var injectSkill=false`
+
+- **An explicit, implicit, or anti-pattern test that passes at baseline has no discriminating power.** Redesign it. Never keep it as evidence, and never delete a test to make a run green. A negative test may pass at baseline — that is what it is for.
+- **Read every baseline answer, not the verdict column.** A hallucination the judge waved through is a failure of the test design, not evidence of a gap.
+- **One run is one sample.** The generator is nondeterministic even at `temperature: 0`, so a claim rests on a FAIL you have read, never on a verdict alone.
+
+## 4. Write content only for what failed at baseline
+
+- Content the model already gets right is a cost, not a benefit — [CONTRIBUTING.md, "Cutting content the model already gets right"](https://github.com/maplibre/maplibre-agent-skills/blob/main/CONTRIBUTING.md#cutting-content-the-model-already-gets-right).
+- A claim belongs in the skill that owns it, not the config you had open. Test placement drives content placement, and the alternative is one claim living in three drifting copies.
+
+## 5. Run with the skill injected
+
+`npm run eval:graded -- --config evals/prompts/<skill>.yaml` — injection is the default. **A demonstrated gap is a FAIL at baseline and a PASS with the skill.** Passing both, failing both, or no with-skill run at all means there is no claim yet.
+
+## 6. Diagnose before retrying
+
+Promptfoo prints its table and writes `--output` only after the run finishes, and the progress bar needs a TTY on stderr, so under an agent a healthy run and a dead one look identical. Never infer progress from elapsed time — establish which one it is.
+
+```bash
+pgrep -fl promptfoo                       # take the node pid, not the sh wrapper — the wrapper holds no sockets
+lsof -nP -p <node-pid> -i                 # ESTABLISHED = still waiting on a provider
+ls -l ~/.promptfoo/promptfoo.db*          # finished rows land in the local db; the -wal file's mtime stops advancing on a stall
+```
+
+- **An open connection is the signal; CPU is not** — a run waiting on a provider sits at 0%. Kill only when the connection is gone **and** the mtime is frozen.
+- **Ask which limit tripped**, with the direct call from phase 1. A spent minute and a spent day are reported identically: a queue timeout, or a rate-limit error on the request that was retrying. A request larger than the per-minute window is different — the provider rejects it outright and Promptfoo records an error row carrying the body.
+- **`0 passed / 0 failed` alongside "There were some errors" is no data, not a result,** and an empty row is not a FAIL — the call never reached the model. Record either as no data; retrying more than once spends budget for no evidence.
+- **A killed run writes no `--output` file** and leaves any previous one in place, so check mtime and row count before reading. Its finished rows are in the local db: `npx promptfoo export eval latest -o <path>.json` writes them out and calls no provider. Read `results.results[].response.output` beside `results.results[].gradingResult.componentResults[].reason`, matched on `testCase.description` — the reason alone is never enough to judge a verdict by, and a reason that is an error message, or empty, is a judge failure, not a verdict. Never edit a grader's reason in a recorded CSV.
+- **Check the tail of every FAIL for truncation, and the tail of every `Must NOT` PASS for an early stop.** A cut-off answer can lose the part the rubric wanted, and it satisfies a prohibition for free.
+
+## 7. When a retest is needed, and when it is not
+
+Needed:
+
+- A claim is added, corrected, or removed — run the tests covering it with the skill, and baseline any **new** claim before writing it.
+- A rubric or prompt is reworded — that test's baseline is now invalid, so re-run that test with `--filter-pattern`, not the whole config. The reverse holds too: when you change a skill's wording, grep its rubric for the phrase you removed, in the same commit, because an outdated rubric grades leniently and comes back green.
+- The pinned generator or judge changes — re-run every config.
+
+The weekly CI drift check (`eval.yml`) re-runs the whole collection against the default branch on its own cadence; that run is not something a contributor repeats by hand.
+
+Not needed:
+
+- Wording that keeps the meaning, formatting, link fixes, typos.
+- Moving a claim between skills — the corpus is unchanged; the test moves with the claim to the owning skill's config.
+- Removing content the generator did not need in order to pass — the baseline PASS is the evidence. Record it in the results doc as the reason for the cut.
+- A `status: process` skill — eval-exempt, reviewed by reading it against the files it describes.
+
+## 8. Record the result concisely
+
+- **Write every run to `--output evals/results/local/<skill>-<baseline|with-skill>.csv`** (gitignored). Promote only a run you cite: copy it to `evals/results/latest/<skill>-<baseline|with-skill>_<YYYY-MM-DD>.csv`.
+- **`evals/results/<skill>.md` is one table** — a row per test carrying its type, the baseline outcome, the with-skill outcome, and the failure mode compressed into the cell. Head it with a `Run:` line naming the date, the generator model, and the judge model; close with a bold pass/fail tally. Add nothing else unless a verdict needed human reading — then say which one, and where the raw output is.
+- **`status:` follows the run:** `verified` only when the pinned run passes, `provisional` otherwise.
 
 ## Related Skills
 
@@ -76,7 +100,7 @@ The headers carry the per-minute window (`x-ratelimit-limit-tokens: 8000`, `x-ra
 
 - [evals/README.md](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/README.md) — prompts, rubrics, baseline-probe methodology, provider setup
 - `package.json`'s `eval:graded` script — the single source of truth for grader, delay, and concurrency
-- [Groq rate limits](https://console.groq.com/docs/rate-limits) — the tier limits and the headers
+- [The current generator's rate-limit page](https://console.groq.com/docs/rate-limits) — the tier limits and the response headers
 
 ---
 
