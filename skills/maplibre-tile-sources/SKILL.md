@@ -271,6 +271,7 @@ Hosted providers handle CORS for you. For self-hosted servers or static storage,
 ## Related Skills
 
 - [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Setting up the `glyphs` URL, self-hosting or generating font PBFs, and non-Latin script support.
+- [**maplibre-sprites-icons**](../maplibre-sprites-icons/SKILL.md) — The `sprite` URL forms, loading multiple sheets, self-hosting sprite assets, and route shields.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Serverless PMTiles hosting and MapLibre integration.
 - **maplibre-style-patterns** — Layer and source configuration for common use cases. (Not yet in repo.)
 - [**maplibre-mapbox-migration**](../maplibre-mapbox-migration/SKILL.md) — Replacing Mapbox tiles with MapLibre-compatible sources.
