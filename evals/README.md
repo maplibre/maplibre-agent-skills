@@ -130,7 +130,11 @@ match your skill directory. Each eval config contains four tests, one of each ty
 
 Write each `llm-rubric` assertion's `value` as a checklist of what a correct answer
 must include (specific enough for a judge to evaluate, e.g. "mentions `addProtocol`
-by name" rather than "explains the API").
+by name" rather than "explains the API"). State a prohibition as `Must NOT …`, naming the
+artifact, in its own clause: "must do X rather than Y" is satisfied by an answer that does both.
+
+Describe only the symptom in the prompt. A prompt that names the API, property, or value the
+rubric wants grades the harness, not the model.
 
 **Negative tests:** The question should be adjacent to the skill's topic — close enough
 that an over-eager agent might wrongly push the new skill information, but where doing so
