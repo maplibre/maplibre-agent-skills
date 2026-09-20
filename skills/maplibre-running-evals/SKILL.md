@@ -1,6 +1,6 @@
 ---
 name: maplibre-running-evals
-description: The step-by-step procedure for running this repo's Promptfoo evals against a generator and a judge — budgeting a run against the provider's limits, proving a gap at baseline before writing content, diagnosing a stalled or rate-limited run, and deciding when a change needs a retest. Use before running an eval, not after one has already failed.
+description: The step-by-step procedure for running this repo's Promptfoo evals with a generator and a judge over provider APIs. Use when starting a new skill and needing a baseline before writing content, when a run stalls or returns no data, when a provider rate-limits, or when deciding whether an edit needs a retest.
 status: process
 ---
 
