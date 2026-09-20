@@ -28,7 +28,7 @@ curl -s -X POST https://api.groq.com/openai/v1/chat/completions \
 - **Do the arithmetic before launching.** Tokens ≈ bytes / 4, so `wc -c skills/<skill>/SKILL.md` gives the injection cost per test; a with-skill run costs roughly tests × (that + the generator's configured `max_tokens`), plus one judge call per rubric, against whatever the day has left. A baseline run drops the injection. If the total does not fit the remaining budget, do not launch it whole.
 - **Run sequentially, one config per command.** `-j 1` is pinned, and never run two graded evals at once — across terminals or across teammates. Limits are per account, not per process, so a `429` on either role kills both runs; chain them instead, leaving a full per-minute window between: `<run one> && sleep 60 && <run two>`. Each config already wires `lib/skill-prompt.mjs` and `lib/providers.yaml`, so there is nothing to assemble by hand; if you do write a Promptfoo command yourself, it still names exactly one `--config` — given several, Promptfoo merges their `defaultTest` blocks and the last `skillFile` wins.
 - **`--delay` paces requests; it does not create budget.** A rate-limit failure that survives correct pacing with no concurrency is exhausted capacity — stop, take the reset time from the direct call above, and do not loop.
-- **When the remaining window or day is smaller than the run, run fewer tests per invocation — never a larger delay.** `--filter-pattern '<regex against the test description>'` runs only the matching tests (quote it; `npm run` passes it through a shell), and it is also how you probe one test of a run type before committing the whole config. `--filter-failing <eval id or .json output path>` re-runs only what failed or errored.
+- **When the remaining window or day is smaller than the run, run fewer tests per invocation — never a larger delay.** `--filter-pattern '<regex against the test description>'` runs only the matching tests (quote it; `npm run` passes it through a shell), and it is also how you probe one test of a run type before committing the whole config. `--filter-failing <the run's .json output>` re-runs only what failed or errored — phase 8 writes that file.
 
 ## 2. Write the tests before the content
 
@@ -53,7 +53,7 @@ curl -s -X POST https://api.groq.com/openai/v1/chat/completions \
 
 ## 6. Diagnose before retrying
 
-Promptfoo prints its table and writes `--output` only after the run finishes, and the progress bar needs a TTY on stderr, so under an agent a healthy run and a dead one look identical. Never infer progress from elapsed time — establish which one it is.
+Promptfoo prints its table and writes the `--output` files only after the run finishes, and the progress bar needs a TTY on stderr, so under an agent a healthy run and a dead one look identical. Never infer progress from elapsed time — establish which one it is.
 
 ```bash
 pgrep -fl promptfoo                       # take the node pid, not the sh wrapper — the wrapper holds no sockets
@@ -64,7 +64,8 @@ ls -l ~/.promptfoo/promptfoo.db*          # finished rows land in the local db; 
 - **An open connection is the signal; CPU is not** — a run waiting on a provider sits at 0%. Kill only when the connection is gone **and** the mtime is frozen.
 - **Ask which limit tripped**, with the direct call from phase 1. A spent minute and a spent day are reported identically: a queue timeout, or a rate-limit error on the request that was retrying. A request larger than the per-minute window is different — the provider rejects it outright and Promptfoo records an error row carrying the body.
 - **`0 passed / 0 failed` alongside "There were some errors" is no data, not a result,** and an empty row is not a FAIL — the call never reached the model. Record either as no data; retrying more than once spends budget for no evidence.
-- **A killed run writes no `--output` file** and leaves any previous one in place, so check mtime and row count before reading. Its finished rows are in the local db: `npx promptfoo export eval latest -o <path>.json` writes them out and calls no provider. Read `results.results[].response.output` beside `results.results[].gradingResult.componentResults[].reason`, matched on `testCase.description` — the reason alone is never enough to judge a verdict by, and a reason that is an error message, or empty, is a judge failure, not a verdict. Never edit a grader's reason in a recorded CSV.
+- **A killed run writes no `--output` files** and leaves any previous ones in place, so check mtime and row count before reading. Its finished rows are in the local db: `npx promptfoo export eval latest -o <path>.json` writes them out in the same shape as a run's own JSON output, and calls no provider.
+- **Read the JSON output, not only the CSV.** The CSV flattens each cell to the verdict, the answer, and the top-level grader reason; the JSON keeps every assertion's own result and reason, and the full error behind an ERROR row. In it, read `results.results[].response.output` beside `results.results[].gradingResult.componentResults[].reason`, matched on `testCase.description` — the reason alone is never enough to judge a verdict by, and a reason that is an error message, or empty, is a judge failure, not a verdict. Never edit a grader's reason in a recorded CSV.
 - **Check the tail of every FAIL for truncation, and the tail of every `Must NOT` PASS for an early stop.** A cut-off answer can lose the part the rubric wanted, and it satisfies a prohibition for free.
 
 ## 7. When a retest is needed, and when it is not
@@ -86,7 +87,7 @@ Not needed:
 
 ## 8. Record the result concisely
 
-- **Write every run to `--output evals/results/local/<skill>-<baseline|with-skill>.csv`** (gitignored). Promote only a run you cite: copy it to `evals/results/latest/<skill>-<baseline|with-skill>_<YYYY-MM-DD>.csv`.
+- **Write every run to two files, CSV and JSON:** `--output evals/results/local/<skill>-<baseline|with-skill>.csv evals/results/local/<skill>-<baseline|with-skill>.json` — the flag takes several paths, and the directory is gitignored. The CSV is the record; the JSON is the diagnosis (phase 6) and the input to `--filter-failing`. `scripts/run-evals.js` writes the same pair in CI. Promote only a run you cite: copy its CSV to `evals/results/latest/<skill>-<baseline|with-skill>_<YYYY-MM-DD>.csv`.
 - **`evals/results/<skill>.md` is one table** — a row per test carrying its type, the baseline outcome, the with-skill outcome, and the failure mode compressed into the cell. Head it with a `Run:` line naming the date, the generator model, and the judge model; close with a bold pass/fail tally. Add nothing else unless a verdict needed human reading — then say which one, and where the raw output is.
 - **`status:` follows the run:** `verified` only when the pinned run passes, `provisional` otherwise.
 
