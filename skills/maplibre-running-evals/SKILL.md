@@ -100,6 +100,7 @@ Not needed:
 - [evals/README.md](https://github.com/maplibre/maplibre-agent-skills/blob/main/evals/README.md) — prompts, rubrics, baseline-probe methodology, provider setup
 - `package.json`'s `eval:graded` script — the single source of truth for grader, delay, and concurrency
 - [The current generator's rate-limit page](https://console.groq.com/docs/rate-limits) — the tier limits and the response headers
+- Promptfoo 0.122 — `package.json` pins `^0.122.0`; every flag and behavior named above was checked against that version's CLI help and source, so re-check them when the pin moves
 
 ---
 
