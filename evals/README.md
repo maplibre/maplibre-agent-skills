@@ -39,11 +39,10 @@ Run `npm install` once before running evals locally.
 
 Current models:
 
-| Role          | When                        | Provider                                      | Model ID                       |
-| ------------- | --------------------------- | --------------------------------------------- | ------------------------------ |
-| Generator     | All runs                    | [Groq](https://console.groq.com/)             | `groq:openai/gpt-oss-120b`     |
-| Judge (CI)    | CI only                     | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite` |
-| Judge (local) | Optional — stronger quality | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite` |
+| Role      | When                          | Provider                                      | Model ID                       |
+| --------- | ----------------------------- | --------------------------------------------- | ------------------------------ |
+| Generator | All runs                      | [Groq](https://console.groq.com/)             | `groq:openai/gpt-oss-120b`     |
+| Judge     | All graded runs, local and CI | [Google Gemini](https://aistudio.google.com/) | `google:gemini-2.5-flash-lite` |
 
 Update `providers.yaml` and this table together when the model changes; see [CI](#ci) for how the pin is enforced.
 
@@ -59,11 +58,11 @@ export GROQ_API_KEY=your_key_here
 echo 'export GROQ_API_KEY=your_key_here' >> ~/.zshrc
 ```
 
-**Google Gemini** (optional — recommended for baseline validation):
+**Google Gemini** (required for graded runs):
 
-Gemini is a stricter judge, better at catching responses that satisfy a rubric's
-letter without the required reasoning — use it when validating that new tests
-discriminate.
+The judge grades every `llm-rubric` assertion. It must be a different model from the
+generator — a model grading its own answers shares their blind spots — and the pinned
+judge is the `--grader` in `eval:graded`, which every recorded run goes through.
 
 1. Get a free API key at [aistudio.google.com](https://aistudio.google.com/).
 2. Add it to your shell:
@@ -75,21 +74,36 @@ echo 'export GOOGLE_API_KEY=your_key_here' >> ~/.zshrc
 
 ## Running evals
 
-Run the eval for the skill you are working on:
+Run the eval for the skill you are working on, one config per command:
 
 ```bash
-# Groq judge (default — uses GROQ_API_KEY only):
-npm run eval -- \
-  --config evals/prompts/<skill-name>.yaml \
-  --no-cache -j 1
-
-# Gemini judge (optional — stronger; requires GOOGLE_API_KEY):
 npm run eval:graded -- --config evals/prompts/<skill-name>.yaml
 ```
 
-`eval:graded` (see `package.json`) is the one place the grader, `--delay`, and
+`eval:graded` (see `package.json`) is the one place the judge (`--grader`), `--delay`, and
 concurrency are pinned — CI calls the same script. Don't hand-roll those flags in a
 second location; a value copied here would drift the moment `package.json` changes.
+
+A bare `npm run eval` is not a Groq-judged run. With no `--grader`, Promptfoo picks a
+default judge from whichever credentials it finds in the environment — `GROQ_API_KEY` is
+not one it checks — so the judge is unpinned and goes unrecorded. Use `eval:graded` for
+anything you will read, record, or cite.
+
+### Using a different judge
+
+The hard rule is that the generator and the judge are different models; the pin is the
+default, not the only legitimate judge. Reasons to swap: the pinned judge's provider is
+rate-limiting or down for your account, you want a second opinion on a verdict that looks
+wrong, or the generator pin has moved into the judge's model family. Pick a model at least
+as capable as the pinned judge and append the flag after the script's own — the last
+`--grader` wins:
+
+```bash
+npm run eval:graded -- --config evals/prompts/<skill-name>.yaml --grader <provider>:<model>
+```
+
+Name the judge you used in the results doc's `Run:` line, so the record says which model
+graded it. The weekly CI run re-grades everything with the pinned pair.
 
 All assertions must pass before pushing.
 
@@ -99,13 +113,18 @@ To view results interactively after any run:
 npx promptfoo view
 ```
 
-Local results are ephemeral — terminal output and `promptfoo view` are sufficient.
+Write each run's outputs where you can read them back, a CSV and a JSON side by side:
+`--output evals/results/local/<skill>-<baseline|with-skill>.csv evals/results/local/<skill>-<baseline|with-skill>.json`
+(gitignored). The JSON keeps what the CSV flattens away (see [CI](#ci)), and
+`--filter-failing <that .json>` re-runs only what did not pass. Runs you cite are copied to
+`evals/results/latest/`; see [CONTRIBUTING.md](../CONTRIBUTING.md) for the results doc that
+goes with them.
 
 ## Proving tests fail without the skill
 
 Before writing skill content, verify your eval prompts have discriminating power —
 they should fail without the skill and pass with it. Add `--var injectSkill=false`
-to the [Gemini-judge command above](#running-evals) to omit the skill from the
+to the [command above](#running-evals) to omit the skill from the
 system prompt and run the baseline check.
 
 Explicit, implicit, and anti-pattern tests must all fail without the skill — if any of
