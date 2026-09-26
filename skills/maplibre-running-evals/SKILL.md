@@ -87,7 +87,7 @@ Not needed:
 
 ## 8. Record the result concisely
 
-- **Write every run to two files, CSV and JSON:** `--output evals/results/local/<skill>-<baseline|with-skill>.csv evals/results/local/<skill>-<baseline|with-skill>.json` — the flag takes several paths, and the directory is gitignored. The CSV is the record; the JSON is the diagnosis (phase 6) and the input to `--filter-failing`. `scripts/run-evals.js` writes the same pair in CI. Promote only a run you cite: copy its CSV to `evals/results/latest/<skill>-<baseline|with-skill>_<YYYY-MM-DD>.csv`.
+- **Write every run to two files, CSV and JSON:** `--output evals/results/local/<skill>-<baseline|with-skill>.csv evals/results/local/<skill>-<baseline|with-skill>.json` — the flag takes several paths, and the directory is gitignored. The CSV is the record; the JSON is the diagnosis (phase 6) and the input to `--filter-failing`. `scripts/run-evals.js` writes the same pair in CI. Promote only a run you cite: commit its CSV as `evals/results/latest/<skill>-<baseline|with-skill>_<YYYY-MM-DD>.csv`.
 - **`evals/results/<skill>.md` is one table** — a row per test carrying its type, the baseline outcome, the with-skill outcome, and the failure mode compressed into the cell. Head it with a `Run:` line naming the date, the generator model, and the judge model; close with a bold pass/fail tally. Add nothing else unless a verdict needed human reading — then say which one, and where the raw output is.
 - **`status:` follows the run:** `verified` only when the pinned run passes, `provisional` otherwise.
 

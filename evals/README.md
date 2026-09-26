@@ -106,7 +106,7 @@ npm run eval:graded -- --config evals/prompts/<skill-name>.yaml \
 
 The CSV has one row per test: the answer, the verdict, and one overall grader reason. The JSON also has each assertion's own verdict and reason, and the error message behind an ERROR row, which the CSV does not carry. Read the JSON when a row errors or a verdict looks wrong, and pass it to `--filter-failing` to re-run only the tests that did not pass.
 
-To cite a run, commit its CSV as `evals/results/latest/<skill-name>-<baseline|with-skill>_<YYYY-MM-DD>.csv` and write the results doc described in [CONTRIBUTING.md](../CONTRIBUTING.md). For CI runs you pass nothing: `scripts/run-evals.js` passes both paths for every config, and the weekly run commits its dated CSVs to `evals/results/`.
+To cite a run, commit its CSV as `evals/results/latest/<skill-name>-<baseline|with-skill>_<YYYY-MM-DD>.csv` and write the results doc described in [CONTRIBUTING.md](../CONTRIBUTING.md). For CI runs you pass no paths: `scripts/run-evals.js` passes both for every config, and the weekly run commits its dated CSVs to `evals/results/`.
 
 ### Using a different judge
 
