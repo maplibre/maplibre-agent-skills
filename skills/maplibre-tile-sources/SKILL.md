@@ -26,7 +26,7 @@ A style has three main components:
 
 - **Sources** — Point to the actual data. Each source has a `type` and either inline data or a URL. MapLibre requests tiles or data as the viewport changes. The same source can back many layers (e.g. roads, water, and labels all from one vector URL).
 - **Layers** — An ordered list defining what to draw and how. Each layer references a source (and for vector tiles, a `source-layer` name) and specifies paint/layout properties.
-- **Glyphs and sprite** — URLs to font SDF stacks and icon spritesheets. `sprite` has no fallback: a missing icon is silently omitted. `glyphs` does have one on GL JS ≥ 5.11.0 (text still renders, in a local/system font) — see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md) for the mechanism and its limits. Production styles should still supply both explicitly.
+- **Glyphs and sprite** — URLs to font SDF stacks and icon spritesheets. `sprite` has no fallback: a missing icon is omitted. `glyphs` does have one on GL JS ≥ 5.11.0 (text still renders, in a local/system font) — see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md) for the mechanism and its limits. Production styles should still supply both explicitly.
 
 **Source types:**
 
