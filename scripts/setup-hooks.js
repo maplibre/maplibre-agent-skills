@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Setup git hooks for local CI checks
 
-import { existsSync, copyFileSync, chmodSync } from 'fs';
-import { join } from 'path';
+import { existsSync, copyFileSync, chmodSync, statSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
@@ -10,7 +11,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = join(__dirname, '..');
 
-const HOOKS_DIR = join(rootDir, '.git', 'hooks');
+// In a git worktree `.git` is a file, and the hooks live in the main
+// checkout's git directory. `--git-dir` keeps a `GIT_DIR` inherited from
+// another repo's hook from pointing git elsewhere.
+function gitCommonDir() {
+  const dotGit = join(rootDir, '.git');
+  if (!existsSync(dotGit) || !statSync(dotGit).isFile()) return dotGit;
+  const commonDir = execFileSync(
+    'git',
+    ['--git-dir', dotGit, 'rev-parse', '--git-common-dir'],
+    { cwd: rootDir, encoding: 'utf8' }
+  ).trim();
+  return resolve(rootDir, commonDir);
+}
+
+const HOOKS_DIR = join(gitCommonDir(), 'hooks');
 const SOURCE_HOOKS_DIR = join(rootDir, '.githooks');
 
 console.log('🔧 Setting up git hooks...');
