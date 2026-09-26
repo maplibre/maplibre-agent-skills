@@ -1,21 +1,20 @@
 ---
 name: maplibre-cartography
-description: Cartographic principles for MapLibre GL JS — label and symbol legibility on imagery vs. vector basemaps, figure-ground for point icons, styling vector roads over aerial imagery, visual hierarchy, sprites and route shields, layer ordering for data injection, and accessibility. Use when styling a map, choosing text or symbol colors, making markers or roads readable on satellite/aerial imagery, setting up icons, debugging shields, or ordering layers correctly.
+description: Cartographic principles for MapLibre GL JS — label and symbol legibility on imagery vs. vector basemaps, figure-ground for point icons, styling vector roads over aerial imagery, visual hierarchy, layer ordering for data injection, and accessibility. Use when styling a map, choosing text or symbol colors, making markers or roads readable on satellite/aerial imagery, or ordering layers correctly.
 status: verified
 ---
 
 # MapLibre Cartography
 
-MapLibre renders exactly what you describe in your style. This skill covers how to describe it well: choosing label colors for readability on any basemap, building a coherent visual hierarchy, sourcing and self-hosting icons, and ordering style layers correctly. For font/glyph setup, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
+MapLibre renders exactly what you describe in your style. This skill covers how to describe it well: choosing label colors for readability on any basemap, building a coherent visual hierarchy, and ordering style layers correctly. For font/glyph setup, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md); for sprites, icon sourcing, and route shields, see [maplibre-sprites-icons](../maplibre-sprites-icons/SKILL.md).
 
 ## When to Use This Skill
 
 - Reviewing a style against cartographic best practices before it ships
 - Choosing label `text-color` and `text-halo-color`, or point symbol/icon colors, for a new or migrated style — including cases where they read fine on a flat vector basemap but disappear or camouflage once the basemap is imagery
-- Setting up `sprite` for a custom or self-hosted style (for `glyphs`, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md))
+- Setting up or debugging `sprite`, icons, or route shields — see [maplibre-sprites-icons](../maplibre-sprites-icons/SKILL.md); for `glyphs`, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md)
 - Injecting your own data layers into an existing basemap without covering labels
 - Restyling roads from a light-basemap vector palette so they sit in (not on top of) imagery
-- Route shields render as bare numbers or missing badges
 - Auditing a style for contrast accessibility
 
 ## Basemap Type Determines Label Colors
@@ -114,34 +113,9 @@ Vector road palettes from light-basemap styles (OSM Bright, OSM Liberty) are tun
 }
 ```
 
-## Sprites: Icons and Markers
+## Sprites and icons
 
-The style's `sprite` value is a **base URL with no file extension** (e.g. `https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite`, for testing purposes only, do not use in production); MapLibre appends `.json`, `.png`, and `@2x` variants itself. Symbol layers reference sprite images by ID with `icon-image`; the value must exactly match an ID in the sprite JSON index or the icon is silently not rendered.
-
-### Self-hosted sprites
-
-To avoid third-party dependencies, copy an existing sprite directory (PNG + JSON, plus any @2x files) from a style or tileset provider and host it under your own domain, pointing the style's `sprite` property at its base URL. Always check the provider's license before republishing and add attribution if required.
-
-Host sprite assets on a static host you control (GitHub Pages, Netlify, Vercel, S3, same origin as the style). **Do not point production styles at `raw.githubusercontent.com`** Raw is for serving repository blobs, not production assets: anonymous requests are aggressively rate-limited so real users see intermittent HTTP 429s [2], caching is fixed at five minutes with no control, there is no SLA, and private-repo URLs return 404 to everyone but authenticated collaborators (it works for you while logged in, then fails for every other user) [3].
-
-### Building a sprite from SVGs
-
-Generate sprite assets from a directory of SVGs with tools such as [spritezero](https://github.com/mapbox/spritezero), [spreet](https://github.com/flother/spreet), or [Martin](https://maplibre.org/martin/sources-sprites/).
-
-Useful icon sources include [Maki](https://github.com/mapbox/maki) and [Temaki](https://github.com/ideditor/temaki). These are common source repositories for map-style SVG icons, but check each repository's license before republishing derived sprite assets.
-
-### Creating your own icons
-
-For a small number of custom icons, `map.loadImage()` and `addImage()` can work without a full sprite pipeline. For larger reusable icon sets, generating a sprite remains the standard and more maintainable approach. [10]
-
-### Broken route shields
-
-Broken-looking route shields (bare floating numbers, missing badges) are almost always a **missing sprite image**. The shield number is text (font) and usually renders fine; the badge behind it is an `icon-image` from the sprite. Diagnose in this order:
-
-1. **Confirm glyphs load.** Probe the `glyphs` server for the exact `text-font` names and expect HTTP 200. If they 200, the font is not the problem.
-2. **Confirm the sprite carries the shield images.** OpenMapTiles and OSM Liberty shield style layers use `icon-image: "{network}_{ref_length}"` for known networks (e.g. `us-interstate_2`, `us-highway_3`, `us-state_2`) and `road_{ref_length}` for generic refs. A missing icon is silently omitted, so grep the sprite JSON for those keys.
-
-Not every sprite carries shields localized for the US, so grep the sprite JSON for the `{network}_{ref_length}` keys before assuming they exist. Both the `demotiles.maplibre.org/styles/osm-bright-gl-style/sprite` and `openmaptiles.github.io/osm-bright-gl-style/sprite` sheets currently include `us-interstate_*`, `us-highway_*`, and `us-state_*` (alongside the generic `road_1`–`road_6`), but a minimal or custom sprite may ship only the generic `road_*`. If yours lacks the shield images and your tiles populate `network`, `ref`, and `ref_length` (the OSM US OpenMapTiles tiles do), point `sprite` at one that has them — the `{network}_{ref_length}` style layers then resolve with no layer edits.
+Sprite setup, loading multiple sprite sheets, self-hosting sprite assets, building a sprite from SVGs, and diagnosing route shields live in [maplibre-sprites-icons](../maplibre-sprites-icons/SKILL.md).
 
 ## Style Layer Ordering
 
@@ -177,6 +151,7 @@ MapLibre styles are rendered in the browser as a WebGL canvas. Accessibility con
 
 ## Related Skills
 
+- [**maplibre-sprites-icons**](../maplibre-sprites-icons/SKILL.md) — The `sprite` base URL and `{id, url}` array form, self-hosting and building sprites, runtime images with `addImage`, and route shields.
 - [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Setting up the `glyphs` URL, self-hosting or generating font PBFs, the GL JS local-font fallback, MapLibre Native's `font-faces`, and non-Latin script support.
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
 - [**maplibre-source-wiring**](../maplibre-source-wiring/SKILL.md) — Sprites and source configuration.
@@ -186,8 +161,6 @@ MapLibre styles are rendered in the browser as a WebGL canvas. Accessibility con
 ## References
 
 1. [**`Map.addImage()` (MapLibre GL JS API)**](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#addimage)
-2. [**Unauthenticated rate limits on `raw.githubusercontent.com` (GitHub Community Discussion)**](https://github.com/orgs/community/discussions/159123) — anonymous requests are rate-limited; production traffic sees intermittent HTTP 429
-3. [**`raw.githubusercontent.com` and private repositories (GitHub Community Discussion)**](https://github.com/orgs/community/discussions/69281) — private-repo raw URLs return 404/403 to anonymous requests
 
 ---
 
