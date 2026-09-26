@@ -1,15 +1,16 @@
 ---
 name: maplibre-sprites-icons
-description: Sprites and icon images for MapLibre GL JS — the style's `sprite` base URL, loading several sheets at once with the `{id, url}` array form, self-hosting sprite assets, building a sprite from SVGs, registering images at runtime with `addImage`, and diagnosing route shields that render as bare numbers. Use when a symbol layer's icons never appear, when adding your own icons to a style whose sprite you do not control, when setting up or self-hosting a sprite, or when shields are missing their badge.
+description: Sprites and icon images for MapLibre GL JS — choosing between a sprite, `addImage`, and a `Marker`, the style's `sprite` base URL, loading several sheets at once with the `{id, url}` array form, self-hosting sprite assets, building a sprite from SVGs, registering images (including SVGs) at runtime with `addImage`, and diagnosing route shields that render as bare numbers. Use when deciding how to put icons on a map, when a symbol layer's icons never appear, when adding your own icons to a style whose sprite you do not control, when setting up or self-hosting a sprite, or when shields are missing their badge.
 status: verified
 ---
 
 # MapLibre Sprites and Icons
 
-Every icon a symbol layer draws comes from a **sprite** — a PNG atlas plus a JSON index served from the style's `sprite` URL — or from an image registered at runtime with `addImage`. This skill covers where those images come from, how one style loads more than one sheet, how to host or build your own, and why a route shield loses its badge. For icon color, halos, and figure-ground against imagery, see [maplibre-cartography](../maplibre-cartography/SKILL.md); for text and glyph setup, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
+Every icon a symbol layer draws comes from a **sprite** — a PNG atlas plus a JSON index served from the style's `sprite` URL — or from an image registered at runtime with `addImage`. A `Marker` is the third way to put an icon on a map, outside the style. This skill covers which of the three to use, where the images come from, how one style loads more than one sheet, how to host or build your own, and why a route shield loses its badge. For icon color, halos, and figure-ground against imagery, see [maplibre-cartography](../maplibre-cartography/SKILL.md); for text and glyph setup, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md).
 
 ## When to Use This Skill
 
+- Choosing between a sprite, `addImage`, and a `Marker` for icons on a map
 - A symbol layer's icons silently do not render
 - Setting up `sprite` for a custom or self-hosted style (for `glyphs`, see [maplibre-fonts-glyphs](../maplibre-fonts-glyphs/SKILL.md))
 - Adding your own icon sheet to a style whose `sprite` you do not control
@@ -17,6 +18,28 @@ Every icon a symbol layer draws comes from a **sprite** — a PNG atlas plus a J
 - Adding a handful of custom images at runtime instead of rebuilding a sprite
 - Route shields render as bare numbers or missing badges
 - Writing tooling that reads or generates symbol layers and has to recognize a shield
+
+## Sprite, `addImage`, or `Marker`
+
+| Drawing                                                                                             | Use                                                                                                    | Why                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Icons the style itself draws: POIs, town dots, shields, pattern textures                            | A sprite, named in `icon-image` or a `*-pattern` property                                              | One sheet fetched once for every icon; symbols are placed together with the labels, so collisions and draw order follow the style's hierarchy                               |
+| Icons for a data layer you add at runtime, such as a GeoJSON source, that the sprite does not carry | A set: build a sprite and load it as a second sheet with the `{id, url}` array form. A few: `addImage` | A symbol layer draws them either way, with the same collision handling and layer order as sprite icons; see [Runtime images with `addImage`](#runtime-images-with-addimage) |
+| A few annotations the user works with: a pin to drag, arbitrary HTML                                | `Marker`                                                                                               | An HTML element over the canvas, outside the style: drawn above every layer, labels included, and never part of collision detection                                         |
+
+- **A `Marker` is one DOM element, repositioned on every camera move.** Fine for a handful; for a point dataset, put the points in a GeoJSON source and draw them with a symbol layer.
+- **A symbol layer hides icons that collide by default** (`icon-allow-overlap` is `false`, and `icon-overlap` overrides it when set); `symbol-sort-key` decides which survive. Turning overlap on (`icon-allow-overlap: true`, or `icon-overlap: "always"`) draws every icon without checking collisions, which the GL JS [large-data guide](https://maplibre.org/maplibre-gl-js/docs/guides/large-data/) suggests at high feature counts; the icons then stack.
+- ❌ `"icon-optional": true` to make colliding icons disappear. It applies only to a symbol with both an icon and text, letting the text show without its icon when the icon collides and the text does not; on a layer with no `text-field` it changes nothing.
+- ✅ A runtime icon layer needs nothing beyond the image id; collisions are already handled:
+
+```js
+map.addLayer({
+  id: 'venues',
+  type: 'symbol',
+  source: 'venues',
+  layout: { 'icon-image': ['get', 'category'] } // ids registered with addImage
+});
+```
 
 ## The `sprite` value is a base URL
 
