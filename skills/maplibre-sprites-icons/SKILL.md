@@ -82,9 +82,13 @@ Useful icon sources include [Maki](https://github.com/mapbox/maki) and [Temaki](
 
 ## Runtime images with `addImage`
 
-For a small number of custom icons, `map.loadImage()` and `addImage()` can work without a full sprite pipeline.[3] For larger reusable icon sets, generating a sprite remains the standard and more maintainable approach.
+For a few custom icons, `addImage` saves building a sprite: a PNG, WebP, or JPEG through `map.loadImage()`, an SVG through an `Image` element (below).[3] For a larger reusable set, build a sprite.
 
-`addImage`'s options carry the same per-image metadata the sprite index does — `pixelRatio`, `sdf`, `stretchX`, `stretchY`, and `content` — so a runtime image can be an SDF (which `icon-color` and `icon-halo-color` then apply to) or a stretchable badge, exactly like one baked into a sheet.[3]
+- **Since GL JS 4.0.0, `map.loadImage()` returns a promise.** 4.0.0 removed the callback form,[4] so `map.loadImage(url, callback)` never calls back; `await` it and pass `response.data` to `addImage`.[3]
+- **An SVG goes through an `HTMLImageElement`, not `loadImage`.** Set an `Image`'s `src` to the SVG, wait for it to load, and pass the element to `map.addImage(id, image)`; `addImage` rasterizes it at the element's `width` and `height`. MapLibre's [Display a remote SVG symbol](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-remote-svg-symbol/) example does this inside GL JS 6's `setMissingStyleImageResolver`.
+- **Leave `sdf` off for an ordinary SVG.** An image marked `sdf` has its alpha read as a distance field and every opaque pixel painted `icon-color` (default black), so a multicolor icon turns into a one-color silhouette.
+
+`addImage`'s options carry the same per-image metadata the sprite index does — `pixelRatio`, `sdf`, `stretchX`, `stretchY`, `content`, `textFitWidth`, and `textFitHeight` — so a runtime image built as an SDF takes `icon-color` and `icon-halo-color`, and one with `stretchX`/`stretchY` stretches as a badge, exactly like an image baked into a sheet.[3]
 
 ## Broken route shields
 
@@ -121,8 +125,8 @@ When reading layout values back out of a style, remember they are not always str
 
 1. [**Style Spec: `sprite`**](https://maplibre.org/maplibre-style-spec/sprite/) — the string and `{id, url}` array forms, image-name prefixing, the `default` id, and the sprite index file's `content`, `stretchX`/`stretchY`, and `textFitWidth`/`textFitHeight` fields
 2. [**Style Spec: symbol layer layout properties**](https://maplibre.org/maplibre-style-spec/layers/#icon-text-fit) — `icon-text-fit` values (`none` default, `width`, `height`, `both`) and `icon-text-fit-padding`
-3. [**`Map.addImage()` (MapLibre GL JS API)**](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#addimage)
-4. [**MapLibre GL JS CHANGELOG**](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md) — "Add support for multiple `sprite` declarations in one style file" ships in 3.0.0
+3. [**`Map.addImage()` (MapLibre GL JS API)**](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#addimage) — with [`Map.loadImage()`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#loadimage) on the same page: PNG, WebP, or JPEG, resolving to a response whose `data` is the image
+4. [**MapLibre GL JS CHANGELOG**](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md) — "Add support for multiple `sprite` declarations in one style file" ships in 3.0.0; `map.loadImage` returns a `Promise` and drops its callback in 4.0.0 ([#3233](https://github.com/maplibre/maplibre-gl-js/pull/3233), [#3422](https://github.com/maplibre/maplibre-gl-js/pull/3422))
 5. [**Unauthenticated rate limits on `raw.githubusercontent.com` (GitHub Community Discussion)**](https://github.com/orgs/community/discussions/159123) — anonymous requests are rate-limited; production traffic sees intermittent HTTP 429
 6. [**`raw.githubusercontent.com` and private repositories (GitHub Community Discussion)**](https://github.com/orgs/community/discussions/69281) — private-repo raw URLs return 404/403 to anonymous requests
 
