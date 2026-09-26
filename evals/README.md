@@ -113,12 +113,16 @@ To view results interactively after any run:
 npx promptfoo view
 ```
 
-Write each run's outputs where you can read them back, a CSV and a JSON side by side:
-`--output evals/results/local/<skill>-<baseline|with-skill>.csv evals/results/local/<skill>-<baseline|with-skill>.json`
-(gitignored). The JSON keeps what the CSV flattens away (see [CI](#ci)), and
-`--filter-failing <that .json>` re-runs only what did not pass. Runs you cite are copied to
-`evals/results/latest/`; see [CONTRIBUTING.md](../CONTRIBUTING.md) for the results doc that
-goes with them.
+Without `--output`, a local run is saved only to Promptfoo's local database, which `npx promptfoo view` reads. Pass a CSV path and a JSON path to get files (`evals/results/local/` is gitignored):
+
+```bash
+npm run eval:graded -- --config evals/prompts/<skill-name>.yaml \
+  --output evals/results/local/<skill-name>-<baseline|with-skill>.csv evals/results/local/<skill-name>-<baseline|with-skill>.json
+```
+
+The CSV has one row per test: the answer, the verdict, and one overall grader reason. The JSON also has each assertion's own verdict and reason, and the error message behind an ERROR row, which the CSV does not carry. Read the JSON when a row errors or a verdict looks wrong, and pass it to `--filter-failing` to re-run only the tests that did not pass.
+
+To cite a run, commit its CSV as `evals/results/latest/<skill-name>-<baseline|with-skill>_<YYYY-MM-DD>.csv` and write the results doc described in [CONTRIBUTING.md](../CONTRIBUTING.md). For CI runs you pass nothing: `scripts/run-evals.js` passes both paths for every config, and the weekly run commits its dated CSVs to `evals/results/`.
 
 ## Proving tests fail without the skill
 
