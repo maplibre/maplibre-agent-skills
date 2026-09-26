@@ -89,22 +89,6 @@ default judge from whichever credentials it finds in the environment — `GROQ_A
 not one it checks — so the judge is unpinned and goes unrecorded. Use `eval:graded` for
 anything you will read, record, or cite.
 
-### Using a different judge
-
-The hard rule is that the generator and the judge are different models; the pin is the
-default, not the only legitimate judge. Reasons to swap: the pinned judge's provider is
-rate-limiting or down for your account, you want a second opinion on a verdict that looks
-wrong, or the generator pin has moved into the judge's model family. Pick a model at least
-as capable as the pinned judge and append the flag after the script's own — the last
-`--grader` wins:
-
-```bash
-npm run eval:graded -- --config evals/prompts/<skill-name>.yaml --grader <provider>:<model>
-```
-
-Name the judge you used in the results doc's `Run:` line, so the record says which model
-graded it. The weekly CI run re-grades everything with the pinned pair.
-
 All assertions must pass before pushing.
 
 To view results interactively after any run:
@@ -123,6 +107,22 @@ npm run eval:graded -- --config evals/prompts/<skill-name>.yaml \
 The CSV has one row per test: the answer, the verdict, and one overall grader reason. The JSON also has each assertion's own verdict and reason, and the error message behind an ERROR row, which the CSV does not carry. Read the JSON when a row errors or a verdict looks wrong, and pass it to `--filter-failing` to re-run only the tests that did not pass.
 
 To cite a run, commit its CSV as `evals/results/latest/<skill-name>-<baseline|with-skill>_<YYYY-MM-DD>.csv` and write the results doc described in [CONTRIBUTING.md](../CONTRIBUTING.md). For CI runs you pass nothing: `scripts/run-evals.js` passes both paths for every config, and the weekly run commits its dated CSVs to `evals/results/`.
+
+### Using a different judge
+
+The hard rule is that the generator and the judge are different models; the pin is the
+default, not the only legitimate judge. Reasons to swap: the pinned judge's provider is
+rate-limiting or down for your account, you want a second opinion on a verdict that looks
+wrong, or the generator pin has moved into the judge's model family. Pick a model at least
+as capable as the pinned judge and append the flag after the script's own — the last
+`--grader` wins:
+
+```bash
+npm run eval:graded -- --config evals/prompts/<skill-name>.yaml --grader <provider>:<model>
+```
+
+Name the judge you used in the results doc's `Run:` line, so the record says which model
+graded it. The weekly CI run re-grades everything with the pinned pair.
 
 ## Proving tests fail without the skill
 
