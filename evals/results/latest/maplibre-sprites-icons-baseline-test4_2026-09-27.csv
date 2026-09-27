@@ -1,0 +1,475 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+anti-pattern — shield detection that compares symbol-placement as a string,skills/maplibre-sprites-icons/SKILL.md,false,"Reviewing my style-audit script. It flags a MapLibre symbol layer as a route shield when layer.layout['text-anchor'] === undefined and layer.layout['symbol-placement'] === 'point'. It is tagging plain place-name layers as shields and skipping real shield layers. Is the heuristic sound, and what should it key off instead?","### TL;DR  
+The test you’re using (`text‑anchor === undefined && symbol‑placement === 'point'`) is **not a reliable way to recognise a route‑shield symbol**.  
+Both plain place‑name layers and many other point‑based symbols share exactly those two defaults, so you’ll get a lot of false‑positives and miss the real shields.
+
+A more robust heuristic is to look at the **combination of properties that are unique to shields**:
+
+| Property | Why it matters for shields | Typical values for shields |
+|----------|---------------------------|----------------------------|
+| `layout.icon-image` | Shields are drawn from a sprite that contains a shield graphic. | A string that resolves to a sprite (often contains “shield”, “road‑shield”, “route‑”, “ref‑”, etc.) |
+| `layout.text-field` | The route number (or other identifier) is rendered as text on top of the shield. | A token like `{ref}`, `{ref_number}`, `{shield_text}`, or a literal placeholder. |
+| `layout.icon-text-fit` | Makes the icon stretch to fit the text (the classic “shield” behaviour). | `""both""` (or `""width""`/`""height""` in some styles). |
+| `layout.icon-allow-overlap` / `layout.text-allow-overlap` | Shields need to sit on top of other symbols without being culled. | Usually `true`. |
+| `layout.icon-ignore-placement` / `layout.text-ignore-placement` | Prevents the shield from being displaced by other symbols. | Often `true`. |
+| `paint.icon-color` (or `icon-opacity`) | Shields are often coloured via the sprite, not via a paint property, but if a style colours the shield it will be set here. | Usually left at default (`null`). |
+| `paint.text-color` | The colour of the route number. | Often a high‑contrast colour (white, black, yellow). |
+| `layout.text-font` | Shields tend to use a bold, legible font. | `""Open Sans Bold""`, `""Roboto Bold""`, `""Noto Sans Bold""` etc. |
+| `layout.text-size` | Usually a relatively small size (8‑12 pt) because the text sits inside a small graphic. | 8‑12 (or a `[""interpolate"", …]` expression). |
+
+If you combine **at least two** of the “shield‑specific” clues (e.g., an `icon-image` **and** a `text-field` **and** `icon-text-fit === 'both'`), you’ll dramatically cut down the false‑positives while still catching the genuine shield layers.
+
+---
+
+## Why the current heuristic fails
+
+| Condition | What it really means | How many layers satisfy it |
+|-----------|----------------------|---------------------------|
+| `text-anchor === undefined` | “No explicit anchor was set → use the default (`'center'`)” | **Almost every** symbol layer that shows text (place‑names, POIs, etc.) |
+| `symbol-placement === 'point'` | “Place the symbol at a point geometry” | The default for **all** point‑based symbol layers (place‑names, POIs, traffic signs, custom icons, …) |
+
+Because both of those are *defaults*, they give you **no discriminating power**. A plain place‑name layer that only has a `text-field` and no `icon-image` will still meet the test, and a true shield that also sets `text-anchor` (many styles do) will be missed.
+
+---
+
+## A practical, “good‑enough” heuristic you can drop into your audit script
+
+Below is a **self‑contained JavaScript snippet** (compatible with Node, the MapLibre Style Specification, or any style‑linting tool) that flags a layer as a *potential* shield only when it satisfies a tighter set of conditions.
+
+```js
+/**
+ * Returns true if the given symbol layer looks like a route shield.
+ *
+ * @param {object} layer – A MapLibre style layer object.
+ * @returns {boolean}
+ */
+function isPotentialShield(layer) {
+  // Must be a symbol layer
+  if (layer.type !== 'symbol') return false;
+
+  const layout = layer.layout || {};
+  const paint   = layer.paint   || {};
+
+  // 1️⃣ Must have an icon (the shield graphic) AND a text field (the route number)
+  const hasIcon  = typeof layout['icon-image'] === 'string';
+  const hasText  = typeof layout['text-field'] === 'string';
+
+  if (!hasIcon || !hasText) return false;
+
+  // 2️⃣ Icon should be set to fit the text – the classic shield behaviour
+  const fitsText = layout['icon-text-fit'] === 'both' ||
+                   layout['icon-text-fit'] === 'width' ||
+                   layout['icon-text-fit'] === 'height';
+
+  // 3️⃣ Overlap/ignore‑placement flags are usually turned on for shields
+  const overlap = layout['icon-allow-overlap'] === true ||
+                  layout['text-allow-overlap'] === true ||
+                  layout['icon-ignore-placement'] === true ||
+                  layout['text-ignore-placement'] === true;
+
+  // 4️⃣ Heuristic on the sprite name – optional but helps cut false‑positives
+  const spriteName = layout['icon-image'];
+  const spriteLooksLikeShield = /shield|road|route|ref|sign|signage|badge/i.test(spriteName);
+
+  // 5️⃣ Heuristic on the text token – many styles use `{ref}` or `{ref_number}`
+  const textToken = layout['text-field'];
+  const tokenLooksLikeRef = /\{(ref|ref_number|route|shield_text|number)\}/i.test(textToken);
+
+  // Combine the clues – we require the core (icon+text) plus at least one of the
+  // additional signals (fit, overlap, sprite name, token).
+  const core = hasIcon && hasText;
+  const extra = fitsText || overlap || spriteLooksLikeShield || tokenLooksLikeRef;
+
+  return core && extra;
+}
+
+/* Example usage */
+style.layers.forEach(layer => {
+  if (isPotentialShield(layer)) {
+    console.log(`🔰 Possible shield → ${layer.id}`);
+  }
+});
+```
+
+### How the heuristic works
+
+| Step | What it checks | Why it matters |
+|------|----------------|----------------|
+| **Core requirement** (`hasIcon && hasText`) | Guarantees the layer is trying to draw *both* an image **and** a label. | Plain place‑name layers usually have **only** a `text-field`. Real shields always have an icon (the shield graphic) plus a label (the route number). |
+| **Fit check** (`icon-text-fit`) | Shields often stretch the sprite to wrap the text. | Most POI icons do **not** use `icon-text-fit`. |
+| **Overlap/ignore‑placement** | Shields need to sit on top of other symbols without being displaced. | Place‑names typically rely on the default placement algorithm (`icon-allow-overlap` is `false`). |
+| **Sprite‑name pattern** | Looks for common naming conventions in the sprite sheet. | If your sprite sheet follows a naming scheme (e.g., `road-shield-01`, `us‑101-shield`), this catches them. |
+| **Text‑field token pattern** | Many styles use a token like `{ref}` to inject the route number. | Place‑names usually use `{name}` or `{name_en}`. |
+
+You can tune the **threshold** (`core && extra`) to be stricter (e.g., require both `fitsText` **and** `overlap`) or looser (just `core && (fitsText || spriteLooksLikeShield)`) depending on how noisy your source style is.
+
+---
+
+## What to do if you *must* rely on a single property
+
+If you absolutely cannot inspect the sprite sheet or the `text-field` token (e.g., you’re only given a raw style JSON without the accompanying sprite), the **single most discriminating property** is still `layout.icon-image`.  
+
+- **Why?**  
+  - Place‑name layers **never** set `icon-image`.  
+  - Shield layers **always** set it (the shield graphic).  
+
+So a *minimal* but still useful check is:
+
+```js
+if (layer.type === 'symbol' &&
+    typeof layer.layout?.['icon-image'] === 'string' &&
+    typeof layer.layout?.['text-field'] === 'string') {
+  // likely a shield
+}
+```
+
+That will still produce a few false‑positives (e.g., POI icons that also have a label), but it eliminates the bulk of plain place‑name layers.
+
+---
+
+## Quick sanity‑check against a typical MapLibre style
+
+| Layer type | `icon-image` | `text-field` | `symbol-placement` | `text-anchor` | **Heuristic result** |
+|------------|--------------|--------------|--------------------|---------------|----------------------|
+| `place-label` (city) | *none* | `{name}` | `point` | *undefined* (defaults to `center`) | **Not a shield** (fails core test) |
+| `road-shield` | `road-shield-01` | `{ref}` | `point` | *undefined* | **Shield** (core + token + sprite pattern) |
+| `poi-label` (restaurant) | `restaurant-15` | `{name}` | `point` | *undefined* | **Not a shield** (fails token pattern, no `icon-text-fit`) |
+| `custom-symbol` (logo + label) | `logo` | `{brand}` | `point` | *undefined* | **Potential false‑positive** – you can filter it out by requiring `icon-text-fit` or overlap flags. |
+
+---
+
+## TL;DR Summary for Your Script
+
+1. **Drop** the `text-anchor === undefined` test – it’s just the default and tells you nothing.  
+2. **Add** a requirement that the layer defines **both** `layout.icon-image` **and** `layout.text-field`.  
+3. **Prefer** layers that also set `layout.icon-text-fit` to `""both""` (or `""width""`/`""height""`).  
+4. **Optionally** check for overlap/ignore‑placement flags (`icon-allow-overlap`, `text-allow-overlap`, `icon-ignore-placement`, `text-ignore-placement`).  
+5. **If you have access to the sprite names**, look for a shield‑related substring (`shield|road|route|ref|badge`).  
+6. **If you have access to the text token**, look for `{ref}`‑style placeholders.
+
+Implementing those checks will dramatically reduce the mis‑tagging of plain place‑name layers and will correctly surface the genuine route‑shield layers in most MapLibre styles. Happy lint‑checking! 🚦🛣️",FAIL,0.35,,"The output correctly states that `text-anchor === undefined` is not a reliable test because it defaults to `'center'`, and this default provides no discriminating power. However, it fails to address the point that `symbol-placement` can be an expression, not just a string. The output also correctly identifies that shields are formed by an `icon-image` behind a `text-field` and mentions the two forms of badges (pre-drawn and stretchable). It also correctly identifies that `icon-text-fit` is not a requirement. The output does not mention the specific examples of `road_{ref_length}` or `{network}_{ref_length}` when discussing pre-drawn badges.",
+anti-pattern — shield detection that compares symbol-placement as a string,skills/maplibre-sprites-icons/SKILL.md,false,"Reviewing my style-audit script. It flags a MapLibre symbol layer as a route shield when layer.layout['text-anchor'] === undefined and layer.layout['symbol-placement'] === 'point'. It is tagging plain place-name layers as shields and skipping real shield layers. Is the heuristic sound, and what should it key off instead?","### TL;DR  
+The rule  
+
+```js
+if (layer.type === 'symbol' &&
+    layer.layout['text-anchor'] === undefined &&
+    layer.layout['symbol-placement'] === 'point') {
+    // flag as “route shield”
+}
+```  
+
+is **not a reliable way to spot route‑shield symbols**.  
+`text-anchor` defaults to `""center""` when it isn’t set, and *any* point‑placed symbol (place‑names, POIs, icons, etc.) will satisfy the condition. That’s why you’re getting false‑positives on plain place‑name layers and missing the real shields.
+
+A much sturdier heuristic is to look at **what makes a shield a shield** in the style spec:
+
+| What a shield usually has | Why it matters |
+|---------------------------|----------------|
+| **`layout.icon-image`** (or `paint['icon-image']`) pointing to a sprite that looks like a shield (often contains “shield”, “road‑shield”, “route‑”, “sign‑”, etc.) | The graphic that gives the shield its shape. |
+| **`layout.text-field`** (or `paint['text-field']`) that pulls a route reference (`{ref}`, `{ref:short}`, `{shield_text}`, etc.) | The alphanumeric label that sits on the shield. |
+| **Both `icon-image` **and** `text-field` defined** (or at least one of them with the other set to `optional`) | Shields are the classic “icon + text” combo; plain place‑names usually have only `text-field`. |
+| **`layout.icon-allow-overlap` / `layout.text-allow-overlap` (or the `ignore‑placement` equivalents) set to `true`** | Shields are meant to sit on top of the road network without being culled. |
+| **`layout.icon-pitch-alignment` / `layout.text-pitch-alignment` = `""viewport""`** (or `""auto""` with `icon-rotation-alignment: ""viewport""`). | Keeps the shield upright as the map tilts. |
+| **`layout.text-font`** that matches the font used for shield text (often a bold sans‑serif like `""Open Sans Bold""` or a custom “Road Shield” font). | Gives a visual cue that the text is meant for a shield. |
+| **`layout.icon-size`** often scaled relative to `text-size` (e.g., `[""interpolate"", [""linear""], [""zoom""], 10, 0.8, 14, 1.2]`). | Shields are usually sized together with the label. |
+
+If you combine a few of those signals you’ll dramatically cut down on false‑positives while catching the real shields.
+
+---
+
+## 1. Why the original heuristic fails
+
+| Condition | What it actually tells you | Typical layers that satisfy it |
+|-----------|---------------------------|--------------------------------|
+| `layer.layout['text-anchor'] === undefined` | “No explicit anchor – use the default (`center`).” | **All** symbol layers that don’t override the default (the majority). |
+| `layer.layout['symbol-placement'] === 'point'` | “Place the symbol at a point geometry (as opposed to `line`).” | Place‑name labels, POI icons, traffic‑camera symbols, custom markers, etc. |
+
+Because both conditions are *generic defaults*, they don’t discriminate between “plain label” and “shield”.
+
+---
+
+## 2. A more robust heuristic (code example)
+
+Below is a **self‑contained function** you can drop into your style‑audit script. It tries to be tolerant of different naming conventions while still being strict enough to avoid most false‑positives.
+
+```js
+/**
+ * Returns true if a symbol layer looks like a route‑shield.
+ *
+ * @param {Object} layer – a MapLibre style layer definition
+ * @param {Object} spriteMeta – optional sprite metadata (object mapping sprite names → {width, height, ...})
+ * @returns {boolean}
+ */
+function isRouteShield(layer, spriteMeta = {}) {
+  // 1️⃣ Must be a symbol layer
+  if (layer.type !== 'symbol') return false;
+
+  const layout = layer.layout || {};
+  const paint   = layer.paint   || {};
+
+  // 2️⃣ Must have an icon‑image *or* a text‑field (most shields have both)
+  const iconImage = layout['icon-image'] ?? paint['icon-image'];
+  const textField = layout['text-field'] ?? paint['text-field'];
+
+  // If we have neither, it can’t be a shield.
+  if (!iconImage && !textField) return false;
+
+  // 3️⃣ If we have an icon‑image, it should look like a shield sprite.
+  //    (You can tune the regex to match your own sprite naming scheme.)
+  const shieldIconPattern = /shield|road[-_]?(sign|shield|badge|marker)|route[-_]?(sign|shield)/i;
+  const iconLooksLikeShield = iconImage && shieldIconPattern.test(iconImage);
+
+  // 4️⃣ If we have a text‑field, it should be pulling a route reference.
+  //    Common property names: ref, ref:short, ref:long, shield_text, route_number, etc.
+  const shieldTextPattern = /{ *ref *}|{ *ref:short *}|{ *ref:long *}|{ *shield[_-]?text *}|{ *route[_-]?number *}/i;
+  const textLooksLikeShield = textField && shieldTextPattern.test(textField);
+
+  // 5️⃣ Overlap / placement flags that are typical for shields.
+  const allowOverlap = (layout['icon-allow-overlap'] === true ||
+                        layout['text-allow-overlap'] === true ||
+                        layout['icon-ignore-placement'] === true ||
+                        layout['text-ignore-placement'] === true);
+
+  // 6️⃣ Pitch/alignment – shields usually stay upright.
+  const upright = (layout['icon-pitch-alignment'] === 'viewport' ||
+                   layout['text-pitch-alignment'] === 'viewport');
+
+  // 7️⃣ Optional: verify that the sprite actually exists and is roughly square.
+  //    (If you have the sprite JSON handy you can do a quick size check.)
+  let spriteLooksValid = true;
+  if (iconImage && spriteMeta[iconImage]) {
+    const { width, height } = spriteMeta[iconImage];
+    // Shields are typically square or close to it.
+    spriteLooksValid = Math.abs(width - height) / Math.max(width, height) < 0.3;
+  }
+
+  // ---- Decision matrix ----
+  // We require *either* a convincing icon OR a convincing text field,
+  // plus at least one of the typical placement/overlap flags.
+  const hasStrongIconSignal = iconLooksLikeShield && spriteLooksValid;
+  const hasStrongTextSignal = textLooksLikeShield;
+
+  return (hasStrongIconSignal || hasStrongTextSignal) && (allowOverlap || upright);
+}
+```
+
+### How to use it
+
+```js
+// Assuming `style` is a MapLibre style JSON and you have loaded the sprite meta:
+const spriteMeta = await fetch(`${style.sprite}.json`).then(r => r.json());
+
+style.layers.forEach(layer => {
+  if (isRouteShield(layer, spriteMeta)) {
+    console.log(`🔰 Shield layer detected: ${layer.id}`);
+  }
+});
+```
+
+**Why this works better**
+
+| Signal | What it catches | What it discards |
+|--------|----------------|------------------|
+| `icon-image` matches a “shield‑ish” name | Custom road‑shield sprites (`road-shield-1`, `us‑101-shield`, etc.) | Generic POI icons (`restaurant`, `park`, `city‑dot`). |
+| `text-field` contains a `{ref}`‑style placeholder | Route numbers, highway designations, etc. | Plain place‑name fields (`{name}`, `{name_en}`). |
+| Overlap / ignore‑placement flags | Shields are deliberately allowed to overlap roads. | Labels that rely on collision detection (most place‑names). |
+| Pitch‑alignment = `viewport` | Keeps the shield upright on tilted maps. | Labels that follow the terrain (`map`). |
+| Sprite aspect‑ratio check (optional) | Shields are roughly square; icons like “star” or “circle” are filtered out. | Non‑shield icons. |
+
+You can tighten or loosen the regexes depending on how your team names sprites and data properties.
+
+---
+
+## 3. What to **avoid** in a heuristic
+
+| Bad practice | Reason |
+|--------------|--------|
+| Relying on **default values** (`text-anchor` undefined) | Defaults are intentionally omitted for brevity; they give you no semantic information. |
+| Checking only **`symbol-placement: 'point'`** | Almost every label that isn’t a line‑label uses `'point'`. |
+| Using **`icon-size`** alone | Many non‑shield icons are also scaled. |
+| Assuming **`text-font`** is unique | Fonts are often shared across many label types. |
+| Hard‑coding a single sprite name (e.g., `icon-image === 'road-shield'`) | Projects often have many shield variants (`road-shield-1`, `road-shield-2`, …). |
+
+---
+
+## 4. Quick sanity‑check checklist for a layer you *think* is a shield
+
+| ✅ Check | How to verify |
+|--------|----------------|
+| **Icon image** points to a sprite that looks like a shield (square, with a border). | Open the sprite sheet or inspect the sprite JSON. |
+| **Text field** pulls a route reference (`{ref}` or similar). | Look at the source data – does it have a `ref`/`ref:short` property? |
+| **Both icon and text are allowed to overlap** (`icon-allow-overlap` / `text-allow-overlap`). | `true` or `icon-ignore-placement: true`. |
+| **Pitch/alignment** set to `viewport`. | Keeps the shield upright on 3‑D maps. |
+| **Layer is drawn above the road network** (higher `z-index` / later in the layer list). | Shields need to sit on top of the road line layers. |
+| **No `text-anchor` override** (optional) – but **don’t use this as a primary signal**. | Default is fine; it’s not a discriminator. |
+
+If a layer passes **≥ 3** of the above checks, you can safely treat it as a shield for audit purposes.
+
+---
+
+## 5. TL;DR Implementation Summary
+
+```js
+// 1. Must be a symbol layer.
+if (layer.type !== 'symbol') return false;
+
+// 2. Look for a shield‑like icon name.
+const icon = layer.layout?.['icon-image'] ?? layer.paint?.['icon-image'];
+const iconLooksShield = icon && /shield|road[-_]?(sign|shield|badge)/i.test(icon);
+
+// 3. Look for a route‑reference text field.
+const txt = layer.layout?.['text-field'] ?? layer.paint?.['text-field'];
+const txtLooksShield = txt && /{ *ref *}|{ *shield[_-]?text *}/i.test(txt);
+
+// 4. Require at least one of the above plus a typical shield flag.
+const overlapFlag = layer.layout?.['icon-allow-overlap'] === true ||
+                    layer.layout?.['text-allow-overlap'] === true ||
+                    layer.layout?.['icon-ignore-placement'] === true ||
+                    layer.layout?.['text-ignore-placement'] === true;
+
+return (iconLooksShield || txtLooksShield) && overlapFlag;
+```
+
+That’s a **compact** version you can start with; expand it with the sprite‑aspect‑ratio or pitch‑alignment checks if you need extra confidence.
+
+---
+
+### Bottom",FAIL,0.50,,"Expected output to contain one of ""zoom function, zoom-function, zoom‑function""",
+anti-pattern — shield detection that compares symbol-placement as a string,skills/maplibre-sprites-icons/SKILL.md,false,"Reviewing my style-audit script. It flags a MapLibre symbol layer as a route shield when layer.layout['text-anchor'] === undefined and layer.layout['symbol-placement'] === 'point'. It is tagging plain place-name layers as shields and skipping real shield layers. Is the heuristic sound, and what should it key off instead?","### TL;DR  
+The “`text‑anchor` missing + `symbol‑placement: point`” test is **not a reliable way to spot route‑shield symbols**.  
+A shield is usually identified by the **presence of an `icon-image` that points at a shield sprite (often with a `{ref}` or similar token) and/or a `text-field` that contains a route‑reference token**.  
+Add those checks (and a few supporting ones) and you’ll stop flagging ordinary place‑name labels while catching the real shields.
+
+---
+
+## 1. Why the current heuristic breaks
+
+| Condition you use | What it actually means in the spec |
+|-------------------|------------------------------------|
+| `layer.layout['text-anchor'] === undefined` | “No explicit anchor was set”. The default for a **text‑only** symbol is `center`. Most place‑name layers never set `text-anchor` because they rely on the default, so they satisfy this part of the test. |
+| `layer.layout['symbol-placement'] === 'point'` | “Treat the symbol as a point feature”. This is the default for **any** symbol layer that is not a line‑placement (e.g., road‑labels, POI icons, shields, etc.). Again, it’s a very generic flag. |
+
+Together they describe *almost every* point‑based symbol layer that does **not** override the default text‑anchor – which is the majority of place‑name layers. Hence the false‑positives.
+
+Real shield layers often **do** set `text-anchor` (e.g., `center` or `bottom`) and they may also use `symbol-placement: line` for “road‑shield‑along‑the‑road” styles. So the heuristic also **misses** many genuine shields.
+
+---
+
+## 2. What a “shield” really looks like in a MapLibre style
+
+A route shield is a **composite of an icon (the shield graphic) and a text label (the route number)**. The style author usually does one of the following:
+
+| Pattern | Example |
+|---------|---------|
+| **Icon + Text** – the icon is a generic shield shape and the text is the route number. | ```json { ""type"":""symbol"", ""layout"":{ ""icon-image"":""road-shield"", ""text-field"":""{ref}"" } } ``` |
+| **Icon‑only** – the sprite already contains the number (common for US‑style shields). | ```json { ""type"":""symbol"", ""layout"":{ ""icon-image"":""road-shield-101"" } } ``` |
+| **Text‑only** – the shield is rendered as a colored background via `text-halo`/`text-color` (rare). | ```json { ""type"":""symbol"", ""layout"":{ ""text-field"":""{ref}"" }, ""paint"":{ ""text-halo-color"":""#fff"", ""text-halo-width"":2 } } ``` |
+
+Key things you can reliably test for:
+
+| Property | Why it matters |
+|----------|----------------|
+| **`icon-image`** | Shields need an icon (the shield shape). The value is almost always a sprite name that contains the word *shield*, *road‑shield*, *route‑shield*, or a token like `{ref}` that will be replaced by the route number. |
+| **`text-field`** | The route number is usually inserted via a token (`{ref}`, `{network}`, `{route}` etc.). If the field contains a token, you know the layer is meant to display a dynamic route identifier. |
+| **Token detection** (`/{\w+}/`) | Place‑name layers also use tokens (`{name}`, `{name_en}`), but you can differentiate by the *token name*: `ref`, `ref_number`, `route`, `network`, `shield`, etc. |
+| **`icon-allow-overlap` / `text-allow-overlap`** | Shields are usually allowed to overlap other symbols because they sit on top of the road line. |
+| **`text-font` / `text-size`** | Shields often use a very specific font (e.g., `""Open Sans Bold""` or a custom “shield” font) and a relatively large size (12‑16 px). |
+| **`icon-size`** | Shields are often scaled (`icon-size` > 1) to match road‑width. |
+| **`text-optional` / `icon-optional`** | Shields may be optional at low zooms – these flags are common on shield layers. |
+| **`filter`** | Many shield layers filter on a property like `""ref""` or `""network""` to ensure they only draw where a route reference exists. |
+
+---
+
+## 3. A more robust heuristic
+
+Below is a **step‑by‑step checklist** you can embed in your audit script. It’s deliberately tolerant (so you don’t miss a shield) but strict enough to weed out ordinary place‑name layers.
+
+```js
+function isPotentialShield(layer) {
+  // 1️⃣ Must be a symbol layer
+  if (layer.type !== 'symbol') return false;
+
+  const layout = layer.layout || {};
+  const paint   = layer.paint   || {};
+
+  // 2️⃣ Look for an icon that *looks* like a shield
+  const icon = layout['icon-image'];
+  const iconLooksLikeShield = typeof icon === 'string' &&
+    /shield|road[-_]shield|route[-_]shield|sign[-_]shield|shield-/.test(icon);
+
+  // 3️⃣ Look for a text field that contains a route‑reference token
+  const text = layout['text-field'];
+  const token = typeof text === 'string' && /\{(\w+)\}/.exec(text);
+  const tokenLooksLikeRef = token && /ref|route|network|shield|number/.test(token[1]);
+
+  // 4️⃣ If we have *both* an icon and a token, we’re almost certainly a shield
+  if (iconLooksLikeShield && tokenLooksLikeRef) return true;
+
+  // 5️⃣ Icon‑only shields: icon name ends with a numeric suffix (e.g. road‑shield‑101)
+  const iconOnlyShield = typeof icon === 'string' && /\d+$/.test(icon);
+  if (iconOnlyShield && tokenLooksLikeRef) return true; // token may be missing but we still have a numeric icon
+
+  // 6️⃣ Text‑only shields (rare): token present + a halo that mimics a shield background
+  const hasHalo = paint['text-halo-color'] !== undefined;
+  if (tokenLooksLikeRef && hasHalo) return true;
+
+  // 7️⃣ Additional sanity checks (optional but helpful)
+  const allowOverlap = layout['icon-allow-overlap'] === true ||
+                       layout['text-allow-overlap'] === true;
+  const isLinePlacement = layout['symbol-placement'] === 'line';
+
+  // Shields are usually allowed to overlap and often placed on lines
+  if ((iconLooksLikeShield || tokenLooksLikeRef) && allowOverlap) return true;
+  if (isLinePlacement && (iconLooksLikeShield || tokenLooksLikeRef)) return true;
+
+  // If none of the above matched, it’s probably not a shield
+  return false;
+}
+```
+
+### What this does differently
+
+| Old test | New test | Effect |
+|----------|----------|--------|
+| `text-anchor` missing | **Explicitly checks for a shield‑like `icon-image`** | Stops flagging plain labels that never set an icon. |
+| `symbol-placement: point` | **Allows both `point` and `line`** (shields are often placed on the road line) | Catches shields that use `symbol-placement: line`. |
+| No token check | **Looks for `{ref}`‑style tokens** | Distinguishes “place‑name” tokens (`{name}`) from route tokens. |
+| No overlap check | **Considers `icon-allow-overlap` / `text-allow-overlap`** | Shields are usually allowed to overlap other symbols. |
+| No naming pattern | **Regex on `icon-image`** | Filters out generic icons (e.g., `city-10`, `park`) that are not shields. |
+
+---
+
+## 4. Edge‑cases & how to handle them
+
+| Situation | Why it can slip through | How to catch it |
+|-----------|------------------------|-----------------|
+| **Custom sprite names** (e.g., `us‑101‑shield`) | No “shield” word in the name. | Add a secondary regex that looks for a trailing numeric suffix (`\d+$`) **and** a preceding dash/underscore (`[-_]`). |
+| **International shields** (e.g., `road‑sign‑A1`) | Different language, different naming. | Expand the regex to include common non‑English words: `sign|badge|marker|route|road|highway`. |
+| **Shields rendered purely as text with a halo** | No `icon-image` at all. | Detect a `text-halo-color` + a route token (`{ref}`) + a relatively large `text-size` (≥ 12). |
+| **Place‑name layers that also use `{ref}`** (e.g., a city that has a “ref” property) | Token name collides. | Combine token detection with the presence of a shield‑like icon **or** a halo. If only a token is present *and* the layer has a `text-font` that is *not* a typical place‑name font (e.g., not `""Open Sans Regular""`), you can still flag it. |
+| **Layer that re‑uses a generic shield sprite for other purposes** (e.g., a “parking” icon named `shield-parking`) | Name contains “shield” but isn’t a route shield. | Check that the **text-field** also contains a route token, or that the layer’s filter references a property like `""ref""` or `""network""`. |
+
+---
+
+## 5. Quick sanity‑check against a typical style
+
+| Layer (excerpt) | What the script sees | Verdict |
+|-----------------|----------------------|---------|
+| ```json { ""id"":""road-shield-1"", ""type"":""symbol"", ""layout"":{ ""icon-image"":""road-shield"", ""text-field"":""{ref}"" }, ""paint"":{ ""icon-color"":""#fff"" } } ``` | `icon-image` matches `/shield/`, `text-field` token = `ref` | **Shield** |
+| ```json { ""id"":""city-label"", ""type"":""symbol"", ""layout"":{ ""text-field"":""{name}"", ""text-anchor"":""center"" } } ``` | No `icon-image`, token = `name` (not a ref) | **Not a shield** |
+| ```json { ""id"":""highway-label"", ""type"":""symbol"", ""layout"":{ ""symbol-placement"":""line"", ""text-field"":""{ref}"", ""icon-image"":""road-shield"" } } ``` | Both icon and ref token present, line placement | **Shield** |
+| ```json { ""id"":""park-icon"", ""type"":""symbol"", ""layout"":{ ""icon-image"":""park"", ""text-field"":""{name}"" } } ``` | Icon does **not** match shield regex, token = `name` | **Not a shield** |
+| ```json { ""id"":""us-101-shield"", ""type"":""symbol"", ""layout"":{ ""icon-image"":""us-101"", ""text-optional"":true } } ``` | Icon ends with digits, no token, but numeric suffix suggests a pre‑baked shield | **Shield (icon‑only)** |
+
+---
+
+## 6. TL;DR checklist you can copy‑paste into your audit
+
+```js
+// 1. Symbol layer?
+if (layer.type !== 'symbol') return false;
+
+// 2. Does it have an icon that looks like a shield?
+const icon = layer.layout?.['icon-image'];
+const iconLooksLikeShield = typeof icon",FAIL,0.50,,"Expected output to contain one of ""zoom function, zoom-function, zoom‑function""",
