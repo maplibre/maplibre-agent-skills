@@ -35,7 +35,8 @@ const ASSERT = 1;
 const ERROR = 2;
 
 // Signatures a config's verdict can carry. The first four come from the failure
-// text in the run log of 2026-08-30; the last three are the runner's own.
+// text in the run log of 2026-08-30, and `judge-unavailable` from the sidecars
+// of 2026-09-13 and 2026-09-27; the last three are the runner's own.
 const CUT_OFF_SIGNATURES = new Set(['max-duration', 'not-run', 'killed']);
 
 /** Every skill's eval config, sorted, template excluded. */
@@ -117,6 +118,11 @@ export function runName(date, baseline) {
  * raises RateLimitExhaustedError for the generator and the judge alike, and the
  * row's message still names which one. Order matters: that message contains
  * the bare "Rate limit exceeded" phrase too, so it is matched first.
+ *
+ * `judge-unavailable` is the exception that names a side: its phrase comes from
+ * promptfoo's Google provider, and of the pinned pair only the judge is Google.
+ * An ASSERT row carries whatever name a flagged grader reason earns; see
+ * graderErrorOf.
  */
 export function signatureOf(message) {
   const text = String(message ?? '');
@@ -125,10 +131,41 @@ export function signatureOf(message) {
   if (/timed out after \d+ms in queue/.test(text)) {
     return 'queue-timeout';
   }
+  if (
+    /No candidates returned in API response/.test(text) &&
+    (/\b503\b/.test(text) || /"UNAVAILABLE"/.test(text))
+  ) {
+    return 'judge-unavailable';
+  }
   if (/\b429\b/.test(text) || /Rate limit exceeded/.test(text)) {
     return 'rate-limit';
   }
   return 'other';
+}
+
+/**
+ * The reason behind a failed grader call inside an ASSERT row, or null.
+ *
+ * promptfoo flags a grading result that holds no verdict with
+ * `metadata.graderError: true` (typed at
+ * node_modules/promptfoo/dist/src/index.d.ts:1493). Only `graderFail` sets it
+ * (node_modules/promptfoo/dist/src/graders-B_if87De.js:545), for unparseable
+ * judge output (:987), a call error or no output (:1010), a failed remote
+ * grading (:1962), and G-Eval (:2083), plus the moderation path
+ * (node_modules/promptfoo/dist/src/evaluator-SSlcaq_U.js:447); a parsed verdict
+ * never carries it. `handleLlmRubric` passes a flagged result through unchanged
+ * (same file, :2418, via `isGraderFailure`, graders-B_if87De.js:2077: "a grader
+ * error is not evidence that the criterion was or was not met"), so the row is
+ * ASSERT and the flagged result sits in `gradingResult.componentResults`
+ * (`AssertionsResult.addResult`, evaluator-SSlcaq_U.js:1162). Every component
+ * is read because the row's `error` repeats only the last failing reason (same
+ * file, :1183, copied at :6884).
+ */
+function graderErrorOf(row) {
+  const flagged = (row.gradingResult?.componentResults ?? []).find(
+    (result) => result?.metadata?.graderError === true
+  );
+  return flagged ? flagged.reason : null;
 }
 
 /**
@@ -138,6 +175,10 @@ export function signatureOf(message) {
  * assertion failure: a run that was rate-limited has not graded the content, so
  * it gets no say over a skill's status. That is deliberately conservative — a
  * real regression in a rate-limited week waits a week to be seen.
+ *
+ * An ASSERT row whose grader call failed counts as an ERROR row, for the same
+ * reason: promptfoo files the failed call as a failed assertion, but the judge
+ * never graded the answer.
  */
 export function classifyEval(sidecar) {
   const summary = sidecar?.results;
@@ -162,11 +203,12 @@ export function classifyEval(sidecar) {
         `Unexpected promptfoo output: failureReason ${JSON.stringify(reason)} on row ${index}`
       );
     }
+    const graderError = reason === ASSERT ? graderErrorOf(row) : null;
     if (reason === NONE) counts.pass++;
-    if (reason === ASSERT) counts.fail++;
-    if (reason === ERROR) {
+    if (reason === ASSERT && graderError === null) counts.fail++;
+    if (reason === ERROR || graderError !== null) {
       counts.error++;
-      const message = row.error ?? '';
+      const message = graderError ?? row.error ?? '';
       const signature = signatureOf(message);
       if (!signatures.includes(signature)) signatures.push(signature);
       errors.push({
