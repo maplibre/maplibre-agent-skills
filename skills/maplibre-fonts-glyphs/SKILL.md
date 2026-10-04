@@ -1,7 +1,7 @@
 ---
 name: maplibre-fonts-glyphs
 description: Configuring fonts and glyphs for MapLibre GL JS and MapLibre Native — the style's `glyphs` URL, self-hosting or generating font PBFs, the GL JS local-font fallback (omitted `glyphs` or a failed glyph fetch), MapLibre Native's `font-faces` property, and Noto/CJK/RTL/Devanagari script handling. Use when text labels aren't rendering in the intended font, setting up a glyphs server, choosing between self-hosting and generating font PBFs, or handling non-Latin scripts.
-status: verified
+status: provisional
 ---
 
 # MapLibre Fonts and Glyphs
