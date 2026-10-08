@@ -57,6 +57,29 @@ const GRADER_RATE_LIMIT =
 const QUEUE_TIMEOUT =
   'Request groq:openai/gpt-oss-120b[7b7ebfedd4ce]-1788103001543-7fjq3b4amns-0 timed out after 300000ms in queue';
 const MAX_DURATION = 'Evaluation exceeded max duration of 2700000ms';
+// The judge's own 503, verbatim from the 2026-09-27 maplibre-cartography sidecar
+// (run 36312598528, the implicit test) and the 2026-09-13
+// maplibre-pmtiles-patterns one. promptfoo files it as an ASSERT row, with the
+// text as the llm-rubric component's reason and `metadata.graderError: true` on
+// that component.
+const JUDGE_UNAVAILABLE =
+  'Error: No candidates returned in API response.\n\nGot response: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}';
+// A rubric the judge did grade, from the 2026-09-06 maplibre-pmtiles-patterns
+// sidecar (the addProtocol anti-pattern test).
+const RUBRIC_FAILURE =
+  'However, the rubric specifically requires the handler to return an object with a `data` property (e.g., `{ data: buffer }`) and states that returning a bare `ArrayBuffer`, `Blob`, or `Response` is *not* the v4 contract.';
+
+// An ASSERT row trimmed to what the classifier reads: each assertion keeps its
+// own verdict and reason in gradingResult.componentResults, and the row's
+// `error` repeats the last failing one.
+function assertRow(description, componentResults) {
+  const failing = componentResults.filter((result) => !result.pass);
+  const reason = failing[failing.length - 1].reason;
+  return {
+    ...row(1, description, reason),
+    gradingResult: { pass: false, score: 0, reason, componentResults }
+  };
+}
 
 describe('classifyEval', () => {
   it('calls an all-passing run a pass', () => {
@@ -112,6 +135,105 @@ describe('classifyEval', () => {
     assert.deepEqual(result.signatures, ['rate-limit-exhausted']);
   });
 
+  it('calls a judge outage inside a rubric an error, not a fail', () => {
+    const result = classifyEval(
+      sidecar([
+        row(0, 'explicit'),
+        assertRow('implicit', [
+          {
+            pass: false,
+            score: 0,
+            reason: JUDGE_UNAVAILABLE,
+            metadata: { graderError: true },
+            assertion: { type: 'llm-rubric' }
+          }
+        ]),
+        row(0, 'anti-pattern'),
+        row(0, 'negative')
+      ])
+    );
+    assert.equal(result.verdict, 'error');
+    assert.deepEqual(result.counts, { pass: 3, fail: 0, error: 1 });
+    assert.deepEqual(result.signatures, ['judge-unavailable']);
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0].description, 'implicit');
+    assert.equal(result.errors[0].signature, 'judge-unavailable');
+    assert.equal(result.errors[0].message, JUDGE_UNAVAILABLE);
+  });
+
+  it('keeps a rubric the judge did grade a fail', () => {
+    const result = classifyEval(
+      sidecar([
+        row(0, 'explicit'),
+        assertRow('anti-pattern', [
+          {
+            pass: true,
+            score: 1,
+            reason: 'Assertion passed',
+            assertion: { type: 'icontains' }
+          },
+          {
+            pass: false,
+            score: 0.3,
+            reason: RUBRIC_FAILURE,
+            assertion: { type: 'llm-rubric' }
+          }
+        ]),
+        row(0, 'negative')
+      ])
+    );
+    assert.equal(result.verdict, 'fail');
+    assert.deepEqual(result.counts, { pass: 2, fail: 1, error: 0 });
+    assert.deepEqual(result.signatures, []);
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('lets a judge outage outrank a graded failure in the same row', () => {
+    const result = classifyEval(
+      sidecar([
+        row(0, 'explicit'),
+        assertRow('implicit', [
+          {
+            pass: false,
+            score: 0,
+            reason: 'Expected output to contain "pmtiles"',
+            assertion: { type: 'icontains' }
+          },
+          {
+            pass: false,
+            score: 0,
+            reason: JUDGE_UNAVAILABLE,
+            metadata: { graderError: true },
+            assertion: { type: 'llm-rubric' }
+          }
+        ])
+      ])
+    );
+    assert.equal(result.verdict, 'error');
+    assert.deepEqual(result.counts, { pass: 1, fail: 0, error: 1 });
+    assert.deepEqual(result.signatures, ['judge-unavailable']);
+  });
+
+  it('calls any failed grader call an error, named by its reason', () => {
+    const result = classifyEval(
+      sidecar([
+        row(0, 'explicit'),
+        assertRow('implicit', [
+          {
+            pass: false,
+            score: 0,
+            reason: 'API call error: TypeError: fetch failed',
+            metadata: { graderError: true },
+            assertion: { type: 'llm-rubric' }
+          }
+        ])
+      ])
+    );
+    assert.equal(result.verdict, 'error');
+    assert.deepEqual(result.counts, { pass: 1, fail: 0, error: 1 });
+    assert.deepEqual(result.signatures, ['other']);
+  });
+
   it('reads the max-duration rows the time bound writes', () => {
     const result = classifyEval(
       sidecar([
@@ -160,6 +282,16 @@ describe('signatureOf', () => {
 
   it('names the time bound', () => {
     assert.equal(signatureOf(MAX_DURATION), 'max-duration');
+  });
+
+  it('names the judge outage only with the phrase promptfoo wraps it in', () => {
+    assert.equal(signatureOf(JUDGE_UNAVAILABLE), 'judge-unavailable');
+    assert.equal(
+      signatureOf(
+        'The output tells the user to retry a tile request that got a 503 "UNAVAILABLE".'
+      ),
+      'other'
+    );
   });
 
   it('names a generator rate limit from a 429 or its text', () => {
