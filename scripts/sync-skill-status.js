@@ -14,11 +14,17 @@
  * week cannot demote a skill and cannot promote one either. The cost is
  * deliberate: a real regression in a rate-limited week waits a week to be seen.
  *
- * A skill with an eval config but no line at all is reported as missing and
- * makes the run `partial`, so a half-finished run is never read as a clean one.
+ * A skill the run planned but produced no line for is reported as missing and
+ * makes the run `partial`, so a half-finished run is never read as a clean
+ * one. The plan is the `planned` list in the summary.json beside the verdicts
+ * file: a scheduled run covers one shard of the configs (eval.yml splits the
+ * week across days to fit the generator key's daily token cap — #108), and
+ * measuring it against every config would report the other shard missing on
+ * every run. With no readable plan, the expected set falls back to every
+ * config: a run that cannot say what it planned is checked against everything.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   listEvalConfigs,
@@ -81,6 +87,25 @@ export function syncSkillStatus({
   };
 }
 
+/** The skills this run was supposed to grade — see the header. */
+export function expectedSkillsFor(verdictsPath) {
+  try {
+    const summary = JSON.parse(
+      readFileSync(join(dirname(verdictsPath), 'summary.json'), 'utf8')
+    );
+    if (
+      Array.isArray(summary.planned) &&
+      summary.planned.length > 0 &&
+      summary.planned.every((skill) => typeof skill === 'string')
+    ) {
+      return summary.planned;
+    }
+  } catch {
+    // No summary beside the verdicts file — fall back to every config.
+  }
+  return listEvalConfigs().map(skillOf);
+}
+
 /** Let the workflow open a report issue on the changes, and see a partial run. */
 export function outputsFor({ changes, missing }) {
   return {
@@ -101,7 +126,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     result = syncSkillStatus({
       verdictsText: readFileSync(verdictsPath, 'utf8'),
-      expectedSkills: listEvalConfigs().map(skillOf)
+      expectedSkills: expectedSkillsFor(verdictsPath)
     });
   } catch (error) {
     console.error(`❌ ${error.message}`);

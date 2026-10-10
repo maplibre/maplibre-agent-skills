@@ -182,9 +182,7 @@ Two workflows run in CI, and only one of them gates a merge:
 - **`check.yml`** — the deterministic gate: formatting, spelling, markdown lint,
   terminology, model pins, and skill validation. It runs on every PR including forks,
   needs no secrets, and is the only workflow that blocks merge.
-- **`eval.yml`** — the judge-graded eval: a weekly drift check against the default
-  branch, plus `workflow_dispatch` (`ref`, `configs`, `baseline`) for a maintainer to
-  validate a branch or PR by hand, pre- or post-merge.
+- **`eval.yml`** — the judge-graded eval: a weekly drift check against the default branch, run as three scheduled slices (Sunday, Wednesday, and Friday, 10:17 UTC) because a full pass needs more generator tokens than the Groq key's free-tier day holds ([#108](https://github.com/maplibre/maplibre-agent-skills/issues/108)); plus `workflow_dispatch` (`ref`, `configs`, `baseline`) for a maintainer to validate a branch or PR by hand, pre- or post-merge.
 
 **It never runs automatically on `pull_request`.** GitHub withholds secrets from a
 fork's `pull_request`, so an automatic job there couldn't reach the generator or
@@ -195,7 +193,9 @@ context with its secrets regardless of whose ref it checks out.
 harness (`evals/prompts/lib/`) as a reason to look closer — `--ignore-scripts` blocks
 a malicious lifecycle script, not a modified `eval:graded` command.
 
-**Three verdicts, and only two of them move a status.** `scripts/run-evals.js` runs one `npm run eval:graded` per config and records `pass`, `fail`, or `error` for each. `error` means the run reached no graded verdict — a provider or judge failure, a config the per-config time bound cut off, or one the run budget never reached — and `scripts/sync-skill-status.js` leaves those skills' `status:` fields exactly as they were, in either direction, so a rate-limited Sunday cannot demote a skill. A skill whose config produced no line at all is reported with a `::warning::` and makes the run partial. The two bounds are `EVAL_CONFIG_MINUTES` and `EVAL_BUDGET_MINUTES` on the "Run evals" step in `eval.yml`; the run's verdict artifact holds `verdicts.txt`, a `summary.json` with per-config counts, error signatures, and token usage, and one JSON sidecar per config.
+**Three verdicts, and only two of them move a status.** `scripts/run-evals.js` runs one `npm run eval:graded` per config and records `pass`, `fail`, or `error` for each. `error` means the run reached no graded verdict — a provider or judge failure, a config the per-config time bound cut off, or one the run budget never reached — and `scripts/sync-skill-status.js` leaves those skills' `status:` fields exactly as they were, in either direction, so a rate-limited Sunday cannot demote a skill. A skill the run planned but produced no line for is reported with a `::warning::` and makes the run partial. The two bounds are `EVAL_CONFIG_MINUTES` and `EVAL_BUDGET_MINUTES` on the "Run evals" step in `eval.yml`; the run's verdict artifact holds `verdicts.txt`, a `summary.json` with per-config counts, error signatures, and token usage, and one JSON sidecar per config.
+
+**Each scheduled run grades one slice of the configs.** The cron that fired sets `EVAL_SHARD` (`1/3`, `2/3`, or `3/3` — the mapping sits beside the cron strings in `eval.yml`), and the shard is the matching contiguous slice of the sorted config list, sizes within one of each other; `node scripts/run-evals.js --shard k/n` takes the same slice locally. The status sync reads the run's plan from its own `summary.json`, so the skills a shard never planned are not reported missing. A shard never shapes an explicit config list — a dispatch with `configs` set runs exactly those, and passing both is refused. The slices are positional and recomputed per run, so merging or removing a config midweek can shift a config across a day boundary: at worst its verdict waits for the next week's slices or lands twice, the same one-week wait the sync already accepts for a rate-limited run, and never a status flip.
 
 `npm run lint:model-pins` fails on any provider id that drifts from the [Setup](#setup)
 pins (the generator in `providers.yaml`, the judge in the `eval:graded` script).

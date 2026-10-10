@@ -35,6 +35,16 @@
  * and rewrites `<work>/summary.json`, so a run cut off halfway still hands the
  * publish job a record it can report.
  *
+ * A scheduled week is bigger than the generator key's day: a full pass over
+ * every config needs roughly 340K generator tokens against the Groq key's
+ * 200K-per-day free-tier cap, which is how the last four configs ended as
+ * `error` every Sunday from 2026-09-06 on (#108). So eval.yml runs the week in
+ * scheduled slices on separate days, mapping each cron to an EVAL_SHARD value.
+ * `--shard k/n` (or EVAL_SHARD) takes the k-th of n contiguous slices of the
+ * discovered, already-sorted config list; it never shapes an explicit config
+ * list — that combination is refused as ambiguous rather than quietly running
+ * a subset of what the caller named.
+ *
  * Config and output paths are validated before they are placed in the `npm run`
  * argv, which a shell receives.
  *
@@ -46,13 +56,14 @@
  * Flags:
  *   --baseline           withhold the skill (--var injectSkill=false)
  *   --dry-run            print the commands and the bounds; run nothing
+ *   --shard <k/n>        run the k-th of n contiguous slices of the discovered configs
  *   --results-dir <d>    where the dated CSVs go (default evals/results)
  *   --work-dir <d>       where the sidecars, verdicts, and summary go
  *   --config-dir <d>     where the eval configs live (default evals/prompts)
  *
- * Env: EVAL_CONFIG_MINUTES, EVAL_BUDGET_MINUTES, EVAL_WORK_DIR, INPUT_CONFIGS,
- * INPUT_BASELINE. The workflow sets the two bounds in YAML so they are visible
- * and tunable there; the defaults here match.
+ * Env: EVAL_CONFIG_MINUTES, EVAL_BUDGET_MINUTES, EVAL_WORK_DIR, EVAL_SHARD,
+ * INPUT_CONFIGS, INPUT_BASELINE. The workflow sets the two bounds in YAML so
+ * they are visible and tunable there; the defaults here match.
  */
 import { spawn as spawnChild } from 'node:child_process';
 import {
@@ -102,6 +113,7 @@ export function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--baseline') args.baseline = true;
     else if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--shard') args.shard = argv[++i];
     else if (arg === '--results-dir') args.resultsDir = argv[++i];
     else if (arg === '--work-dir') args.workDir = argv[++i];
     else if (arg === '--config-dir') args.configDir = argv[++i];
@@ -111,6 +123,44 @@ export function parseArgs(argv) {
     } else args.configs.push(arg);
   }
   return args;
+}
+
+/**
+ * `k/n` → the k-th of n contiguous slices, 1-based so the workflow's
+ * `EVAL_SHARD=1/2` reads the way a human says it. The format is strict:
+ * anything else — `0/2`, `3/2`, `1-2`, an empty string — is a loud error
+ * rather than a silently full (or silently empty) run.
+ */
+export function parseShard(value) {
+  const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value ?? '');
+  if (!match) {
+    throw new Error(
+      `Not a shard: ${JSON.stringify(value)}. Expected k/n with 1 <= k <= n, e.g. 1/2.`
+    );
+  }
+  const index = Number(match[1]);
+  const count = Number(match[2]);
+  if (index > count) {
+    throw new Error(
+      `Not a shard: ${value}. The slice index exceeds the slice count.`
+    );
+  }
+  return { index, count };
+}
+
+/**
+ * The k-th of n contiguous slices of an already-sorted config list. Contiguous
+ * rather than round-robin so a human can predict a day's slice from the
+ * alphabetical list. Slice sizes differ by at most one, earlier slices taking
+ * the remainder — 9 configs in halves is 5 then 4, in quarters 3,2,2,2 — so a
+ * slice is never empty while there are at least n configs.
+ */
+export function shardOf(configs, { index, count }) {
+  const base = Math.floor(configs.length / count);
+  const extra = configs.length % count;
+  const start = (index - 1) * base + Math.min(index - 1, extra);
+  const size = base + (index - 1 < extra ? 1 : 0);
+  return configs.slice(start, start + size);
 }
 
 /**
@@ -374,6 +424,7 @@ export async function runEvals({
   configs,
   name,
   baseline = false,
+  shard = null,
   resultsDir,
   workDir,
   capMinutes = CONFIG_MINUTES_DEFAULT,
@@ -394,6 +445,9 @@ export async function runEvals({
   const summary = {
     name,
     baseline,
+    // Which slice of the week this run is, so the artifact says so itself;
+    // `planned` below is already only this slice's skills.
+    ...(shard === null ? {} : { shard }),
     bounds: { configMinutes: capMinutes, budgetMinutes },
     planned: configs.map(skillOf),
     configs: []
@@ -488,12 +542,44 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const fromInput = (process.env.INPUT_CONFIGS ?? '')
     .split(/\s+/)
     .filter(Boolean);
-  const configs =
+  const explicit =
     args.configs.length > 0
       ? args.configs
       : fromInput.length > 0
         ? fromInput
-        : listEvalConfigs(configDir);
+        : null;
+
+  // The shard shapes only the discovered list. Shaping an explicit list too
+  // would mean a dispatch that names configs runs some unstated subset of
+  // them, so the combination is refused instead of guessed at.
+  const shardSpec = args.shard ?? process.env.EVAL_SHARD ?? '';
+  let shard = null;
+  if (shardSpec !== '') {
+    if (explicit !== null) {
+      console.error(
+        '--shard (and EVAL_SHARD) slice the discovered config list; pass either a shard or explicit configs, not both.'
+      );
+      process.exit(1);
+    }
+    try {
+      shard = parseShard(shardSpec);
+    } catch (error) {
+      console.error(error.message);
+      process.exit(1);
+    }
+  }
+
+  let configs = explicit ?? listEvalConfigs(configDir);
+  if (shard !== null) {
+    const discovered = configs.length;
+    configs = shardOf(configs, shard);
+    if (configs.length === 0) {
+      console.error(
+        `Shard ${shardSpec} selects no configs — only ${discovered} were discovered.`
+      );
+      process.exit(1);
+    }
+  }
   if (configs.length === 0) {
     console.error('No eval configs found.');
     process.exit(1);
@@ -547,12 +633,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   // The publish job names its committed CSVs from this.
   setOutputs({ name });
+  if (shardSpec !== '') console.log(`Shard ${shardSpec} of the config list.`);
   console.log(`Evaluating: ${configs.join(' ')}`);
 
   const { failed } = await runEvals({
     configs,
     name,
     baseline,
+    shard: shardSpec === '' ? null : shardSpec,
     resultsDir,
     workDir,
     capMinutes,

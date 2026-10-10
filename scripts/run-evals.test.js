@@ -11,7 +11,9 @@ import {
   buildCommand,
   childEnv,
   dryRunLines,
+  parseShard,
   runEvals,
+  shardOf,
   spawnEval,
   verdictFor,
   SIGKILL_AFTER_MS
@@ -455,6 +457,33 @@ describe('runEvals', () => {
     assert.deepEqual(summary.planned, written.planned);
   });
 
+  it('records the shard in the summary when the run is one slice of the week', async () => {
+    const { resultsDir, workDir } = workspace();
+    const spawn = async (command, args) => {
+      const jsonPath = args[args.indexOf('--output') + 2];
+      writeFileSync(jsonPath, sidecar([row(0)]));
+      return { exitCode: 0, durationMs: 1000 };
+    };
+
+    const { summary } = await runEvals({
+      configs: ['evals/prompts/maplibre-cartography.yaml'],
+      name: '2026-10-11',
+      shard: '1/2',
+      resultsDir,
+      workDir,
+      capMinutes: 30,
+      budgetMinutes: 240,
+      spawn,
+      log: () => {}
+    });
+
+    assert.equal(summary.shard, '1/2');
+    const written = JSON.parse(
+      readFileSync(join(workDir, 'summary.json'), 'utf8')
+    );
+    assert.equal(written.shard, '1/2');
+  });
+
   it('records one not-run error per config when the budget is gone', async () => {
     const { resultsDir, workDir } = workspace();
     const spawn = async () => {
@@ -507,5 +536,83 @@ describe('dryRunLines', () => {
       /--output evals\/results\/2026-09-06-maplibre-cartography\.csv \/tmp\/eval\/2026-09-06-maplibre-cartography\.json/
     );
     assert.ok(lines.some((line) => line.includes('240')));
+  });
+});
+
+describe('parseShard', () => {
+  it('reads k/n the way the workflow writes it', () => {
+    assert.deepEqual(parseShard('1/2'), { index: 1, count: 2 });
+    assert.deepEqual(parseShard('2/2'), { index: 2, count: 2 });
+    assert.deepEqual(parseShard('10/12'), { index: 10, count: 12 });
+  });
+
+  it('rejects everything that is not a 1-based slice of a count', () => {
+    const rejected = [
+      '0/2',
+      '3/2',
+      '1-2',
+      '1/2/3',
+      '1/',
+      '/2',
+      '1/0',
+      'x',
+      '',
+      undefined
+    ];
+    for (const value of rejected) {
+      assert.throws(() => parseShard(value), /Not a shard/);
+    }
+  });
+});
+
+describe('shardOf', () => {
+  const configs = (n) =>
+    Array.from(
+      { length: n },
+      (_, i) => `evals/prompts/skill-${String(i).padStart(2, '0')}.yaml`
+    );
+
+  it('splits eight configs into two halves of four', () => {
+    const all = configs(8);
+    assert.deepEqual(shardOf(all, { index: 1, count: 2 }), all.slice(0, 4));
+    assert.deepEqual(shardOf(all, { index: 2, count: 2 }), all.slice(4));
+  });
+
+  it('hands the earlier slices the remainder: halves of nine are five then four', () => {
+    const all = configs(9);
+    assert.deepEqual(shardOf(all, { index: 1, count: 2 }), all.slice(0, 5));
+    assert.deepEqual(shardOf(all, { index: 2, count: 2 }), all.slice(5));
+  });
+
+  it('keeps every slice within one of the others: quarters of nine are 3,2,2,2', () => {
+    const all = configs(9);
+    const sizes = [1, 2, 3, 4].map(
+      (index) => shardOf(all, { index, count: 4 }).length
+    );
+    assert.deepEqual(sizes, [3, 2, 2, 2]);
+  });
+
+  it('covers every config exactly once, with no slice empty while configs are not outnumbered', () => {
+    for (const length of [1, 2, 3, 7, 8, 9, 11]) {
+      for (const count of [1, 2, 3, 4]) {
+        const all = configs(length);
+        const seen = [];
+        for (let index = 1; index <= count; index++) {
+          const slice = shardOf(all, { index, count });
+          if (length >= count) {
+            assert.ok(
+              slice.length > 0,
+              `slice ${index}/${count} of ${length} configs is empty`
+            );
+          }
+          seen.push(...slice);
+        }
+        assert.deepEqual(seen, all, `${length} configs in ${count} slices`);
+      }
+    }
+  });
+
+  it('returns an empty slice when the count outruns the configs', () => {
+    assert.deepEqual(shardOf(configs(2), { index: 3, count: 3 }), []);
   });
 });

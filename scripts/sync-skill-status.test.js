@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { outputsFor, syncSkillStatus } from './sync-skill-status.js';
+import {
+  expectedSkillsFor,
+  outputsFor,
+  syncSkillStatus
+} from './sync-skill-status.js';
+import { listEvalConfigs, skillOf } from './lib/eval-verdicts.js';
 
 // A skills dir holding one SKILL.md per entry, `status` being the frontmatter
 // field under test — or null for a skill that never opted into auto-sync.
@@ -145,6 +150,54 @@ describe('outputsFor', () => {
         partial: 'false',
         summary: 'a: verified -> provisional'
       }
+    );
+  });
+});
+
+describe('expectedSkillsFor', () => {
+  function runDir(files) {
+    const dir = mkdtempSync(join(tmpdir(), 'expected-skills-'));
+    for (const [name, content] of Object.entries(files)) {
+      writeFileSync(join(dir, name), content);
+    }
+    return dir;
+  }
+
+  it('reads the plan from the summary beside the verdicts file', () => {
+    const dir = runDir({
+      'verdicts.txt': 'maplibre-cartography:pass\n',
+      'summary.json': JSON.stringify({
+        planned: ['maplibre-cartography', 'maplibre-fonts-glyphs']
+      })
+    });
+    assert.deepEqual(expectedSkillsFor(join(dir, 'verdicts.txt')), [
+      'maplibre-cartography',
+      'maplibre-fonts-glyphs'
+    ]);
+  });
+
+  it('falls back to every config without a readable plan', () => {
+    const everyConfig = listEvalConfigs().map(skillOf);
+    const missing = runDir({ 'verdicts.txt': '' });
+    assert.deepEqual(
+      expectedSkillsFor(join(missing, 'verdicts.txt')),
+      everyConfig
+    );
+    const unreadable = runDir({
+      'verdicts.txt': '',
+      'summary.json': 'not json'
+    });
+    assert.deepEqual(
+      expectedSkillsFor(join(unreadable, 'verdicts.txt')),
+      everyConfig
+    );
+    const empty = runDir({
+      'verdicts.txt': '',
+      'summary.json': JSON.stringify({ planned: [] })
+    });
+    assert.deepEqual(
+      expectedSkillsFor(join(empty, 'verdicts.txt')),
+      everyConfig
     );
   });
 });
