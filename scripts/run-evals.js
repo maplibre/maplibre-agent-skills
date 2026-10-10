@@ -38,12 +38,12 @@
  * A scheduled week is bigger than the generator key's day: a full pass over
  * every config needs roughly 340K generator tokens against the Groq key's
  * 200K-per-day free-tier cap, which is how the last four configs ended as
- * `error` every Sunday from 2026-09-06 on (#108). So eval.yml runs the week as
- * two half-runs, mapping each cron to EVAL_SHARD=1/2 or 2/2. `--shard k/n` (or
- * EVAL_SHARD) takes the k-th of n contiguous slices of the discovered,
- * already-sorted config list; it never shapes an explicit config list — that
- * combination is refused as ambiguous rather than quietly running a subset of
- * what the caller named.
+ * `error` every Sunday from 2026-09-06 on (#108). So eval.yml runs the week in
+ * scheduled slices on separate days, mapping each cron to an EVAL_SHARD value.
+ * `--shard k/n` (or EVAL_SHARD) takes the k-th of n contiguous slices of the
+ * discovered, already-sorted config list; it never shapes an explicit config
+ * list — that combination is refused as ambiguous rather than quietly running
+ * a subset of what the caller named.
  *
  * Config and output paths are validated before they are placed in the `npm run`
  * argv, which a shell receives.
@@ -151,12 +151,16 @@ export function parseShard(value) {
 /**
  * The k-th of n contiguous slices of an already-sorted config list. Contiguous
  * rather than round-robin so a human can predict a day's slice from the
- * alphabetical list, and ceiling-sized so the earlier slices absorb a
- * remainder: 9 configs in halves is 5 then 4.
+ * alphabetical list. Slice sizes differ by at most one, earlier slices taking
+ * the remainder — 9 configs in halves is 5 then 4, in quarters 3,2,2,2 — so a
+ * slice is never empty while there are at least n configs.
  */
 export function shardOf(configs, { index, count }) {
-  const size = Math.ceil(configs.length / count);
-  return configs.slice((index - 1) * size, index * size);
+  const base = Math.floor(configs.length / count);
+  const extra = configs.length % count;
+  const start = (index - 1) * base + Math.min(index - 1, extra);
+  const size = base + (index - 1 < extra ? 1 : 0);
+  return configs.slice(start, start + size);
 }
 
 /**

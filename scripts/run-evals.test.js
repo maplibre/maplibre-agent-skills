@@ -584,13 +584,28 @@ describe('shardOf', () => {
     assert.deepEqual(shardOf(all, { index: 2, count: 2 }), all.slice(5));
   });
 
-  it('covers every config exactly once across the slices', () => {
+  it('keeps every slice within one of the others: quarters of nine are 3,2,2,2', () => {
+    const all = configs(9);
+    const sizes = [1, 2, 3, 4].map(
+      (index) => shardOf(all, { index, count: 4 }).length
+    );
+    assert.deepEqual(sizes, [3, 2, 2, 2]);
+  });
+
+  it('covers every config exactly once, with no slice empty while configs are not outnumbered', () => {
     for (const length of [1, 2, 3, 7, 8, 9, 11]) {
       for (const count of [1, 2, 3, 4]) {
         const all = configs(length);
         const seen = [];
         for (let index = 1; index <= count; index++) {
-          seen.push(...shardOf(all, { index, count }));
+          const slice = shardOf(all, { index, count });
+          if (length >= count) {
+            assert.ok(
+              slice.length > 0,
+              `slice ${index}/${count} of ${length} configs is empty`
+            );
+          }
+          seen.push(...slice);
         }
         assert.deepEqual(seen, all, `${length} configs in ${count} slices`);
       }
