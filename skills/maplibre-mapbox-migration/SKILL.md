@@ -1,7 +1,7 @@
 ---
 name: maplibre-mapbox-migration
 description: Migrating from Mapbox GL JS to MapLibre GL JS — package and import changes, removing the access token, choosing tile sources, plugin equivalents, and what you gain or give up. Use when moving an existing Mapbox map to MapLibre.
-status: verified
+status: provisional
 ---
 
 # Mapbox to MapLibre Migration

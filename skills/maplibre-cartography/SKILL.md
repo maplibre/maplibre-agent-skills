@@ -1,7 +1,7 @@
 ---
 name: maplibre-cartography
 description: Cartographic principles for MapLibre GL JS — label and symbol legibility on imagery vs. vector basemaps, figure-ground for point icons, styling vector roads over aerial imagery, visual hierarchy, layer ordering for data injection, and accessibility. Use when styling a map, choosing text or symbol colors, making markers or roads readable on satellite/aerial imagery, or ordering layers correctly.
-status: provisional
+status: verified
 ---
 
 # MapLibre Cartography
