@@ -1,7 +1,10 @@
 name: Eval
 
 ## Runs the evals in evals/prompts/*.yaml. Triggered by:
-#   - schedule: a weekly drift check against the default branch.
+#   - schedule: a weekly drift check against the default branch, as two
+#       half-runs on different days: a full pass needs more generator tokens
+#       than the Groq key's free-tier day holds (#108), so each cron below maps
+#       to one EVAL_SHARD slice in the "Run evals" step.
 #   - workflow_dispatch: a maintainer validates a branch or PR, pre- or post-merge.
 #       ref      – branch, or refs/pull/<N>/head for a fork PR. Blank = default branch.
 #       configs  – space-separated evals/prompts/*.yaml. Blank = all.
@@ -19,7 +22,12 @@ name: Eval
 
 on:
   schedule:
-    - cron: '17 10 * * 0' # Sunday 10:17 UTC: low API traffic; off-:00 so GitHub doesn't drop it
+    # One cron per shard — the "Run evals" step matches these strings
+    # literally to set EVAL_SHARD, so a change here changes that step too.
+    # 10:17 UTC: low API traffic; off-:00 so GitHub doesn't drop it. Days sit
+    # apart so each half-run meets a fresh Groq daily token budget.
+    - cron: '17 10 * * 0' # Sunday: first half of the configs (EVAL_SHARD=1/2)
+    - cron: '17 10 * * 3' # Wednesday: second half (EVAL_SHARD=2/2)
   workflow_dispatch:
     inputs:
       ref:
@@ -85,10 +93,19 @@ jobs:
           PROMPTFOO_DISABLE_TELEMETRY: '1'
           INPUT_CONFIGS: ${{ inputs.configs }}
           INPUT_BASELINE: ${{ inputs.baseline }}
+          EVAL_SCHEDULE: ${{ github.event.schedule }}
           EVAL_WORK_DIR: ${{ runner.temp }}/eval
           EVAL_CONFIG_MINUTES: 30
           EVAL_BUDGET_MINUTES: 240
-        run: node scripts/run-evals.js
+        # The case patterns are the cron strings under `on:`, matched
+        # literally. A dispatch has no schedule string, so EVAL_SHARD stays
+        # unset and the run covers INPUT_CONFIGS or every config.
+        run: |
+          case "$EVAL_SCHEDULE" in
+            '17 10 * * 0') export EVAL_SHARD=1/2 ;;
+            '17 10 * * 3') export EVAL_SHARD=2/2 ;;
+          esac
+          node scripts/run-evals.js
 
       - name: Upload results
         if: always()
