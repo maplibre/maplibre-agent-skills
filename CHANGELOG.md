@@ -21,6 +21,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- `eval.yml`: the weekly drift check runs as three scheduled slices (Sunday, Wednesday, Friday) sized to Groq's daily token cap, and the status sync measures a run against its own plan instead of every config ([#113](https://github.com/maplibre/maplibre-agent-skills/pull/113))
 - `scripts/setup-hooks.js`: `npm install` from a git worktree installs the pre-push hook instead of failing ([#103](https://github.com/maplibre/maplibre-agent-skills/pull/103))
 - `eval.yml`: the runner rejects config and output paths that are not plain `evals/prompts/<skill>.yaml` files or plain directories before they reach `npm run`, answering the CodeQL shell-command alert ([#95](https://github.com/maplibre/maplibre-agent-skills/pull/95))
 - evals: the judge and the deterministic assertions grade the generator's answer only; the reasoning trace is no longer prepended to the graded output ([#94](https://github.com/maplibre/maplibre-agent-skills/pull/94))
