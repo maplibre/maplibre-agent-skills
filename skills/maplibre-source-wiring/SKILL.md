@@ -176,6 +176,7 @@ Work down this list — the symptoms overlap heavily:
 - [**maplibre-tile-sources**](../maplibre-tile-sources/SKILL.md) — Choosing between GeoJSON and tiles for a dataset.
 - [**maplibre-pmtiles-patterns**](../maplibre-pmtiles-patterns/SKILL.md) — Registering the `pmtiles://` protocol and PMTiles-specific source setup.
 - [**maplibre-fonts-glyphs**](../maplibre-fonts-glyphs/SKILL.md) — Font stacks, glyph endpoints, and script coverage.
+- [**maplibre-sprites-icons**](../maplibre-sprites-icons/SKILL.md) — The `sprite` URL forms, loading multiple sheets, self-hosting sprite assets, and route shields.
 - [**maplibre-cartography**](../maplibre-cartography/SKILL.md) — The layer-injection pattern in full, and canonical layer order for a custom style.
 
 ## References
