@@ -1,5 +1,5 @@
 /**
- * The vocabulary the weekly eval run reports in: `pass`, `fail`, and `error`.
+ * The vocabulary the scheduled eval run reports in: `pass`, `fail`, and `error`.
  *
  * `pass` and `fail` are the author's original pair and keep their meaning — a
  * graded verdict on skill content. `error` is new and means "no verdict": the
@@ -187,7 +187,7 @@ function graderErrorOf(row) {
  * Any ERROR row makes the whole config an `error`, even alongside a genuine
  * assertion failure: a run that was rate-limited has not graded the content, so
  * it gets no say over a skill's status. That is deliberately conservative — a
- * real regression in a rate-limited week waits a week to be seen.
+ * real regression in a rate-limited run waits for the config's next turn.
  *
  * An ASSERT row whose grader call failed counts as an ERROR row, for the same
  * reason: promptfoo files the failed call as a failed assertion, but the judge
@@ -374,6 +374,20 @@ export function classificationBlock({ summary, evalResult, publish }) {
       }.`,
       ''
     );
+    const said = summary.day?.spentByGroq;
+    if (said) {
+      lines.push(
+        `Groq refused a request for the key's daily limit (${thousands(said.used)} of ${thousands(said.tokensPerDay)} tokens used), so the run stopped starting configs.`,
+        ''
+      );
+    }
+    const waiting = summary.day?.waiting ?? [];
+    if (waiting.length > 0) {
+      lines.push(
+        `Waiting for another day, since the day's generator tokens would not cover them: ${waiting.join(', ')}.`,
+        ''
+      );
+    }
   }
 
   lines.push(

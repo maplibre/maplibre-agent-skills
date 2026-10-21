@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Flips a skill's `status:` frontmatter to match the weekly drift check:
+ * Flips a skill's `status:` frontmatter to match the drift check:
  * provisional -> verified on pass, verified -> provisional on fail.
  *
  * Reads one "skillName:pass", "skillName:fail", or "skillName:error" line per
@@ -12,15 +12,16 @@
  * failure, the per-config time bound, or a run budget that ran out before the
  * config started. It never flips a status in either direction, so an unlucky
  * week cannot demote a skill and cannot promote one either. The cost is
- * deliberate: a real regression in a rate-limited week waits a week to be seen.
+ * deliberate: a real regression in a rate-limited run waits for the config's
+ * next turn to be seen.
  *
  * A skill the run planned but produced no line for is reported as missing and
  * makes the run `partial`, so a half-finished run is never read as a clean
  * one. The plan is the `planned` list in the summary.json beside the verdicts
- * file: a scheduled run covers one shard of the configs (eval.yml splits the
- * week across days to fit the generator key's daily token cap — #108), and
- * measuring it against every config would report the other shard missing on
- * every run. With no readable plan, the expected set falls back to every
+ * file: a scheduled run grades only as many configs as the generator key's
+ * daily tokens hold (#108), and measuring it against every config would
+ * report the rest missing on every run. With no readable plan,
+ * the expected set falls back to every
  * config: a run that cannot say what it planned is checked against everything.
  */
 import { readFileSync, writeFileSync } from 'node:fs';

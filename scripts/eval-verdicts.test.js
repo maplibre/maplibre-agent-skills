@@ -677,6 +677,32 @@ describe('classificationBlock', () => {
     assert.match(block, /\| maplibre-fonts-glyphs \| pass \| — \|/);
   });
 
+  it('says which configs wait for another day, and when Groq said the day was spent', () => {
+    const summary = {
+      ...withConfigs([
+        {
+          skill: 'maplibre-cartography',
+          verdict: 'error',
+          signatures: ['rate-limit-exhausted']
+        },
+        { skill: 'maplibre-fonts-glyphs', verdict: 'pass', signatures: [] }
+      ]),
+      day: {
+        tokensPerDay: 200000,
+        spent: 151000,
+        waiting: ['maplibre-sprites-icons'],
+        spentByGroq: { tokensPerDay: 150000, used: 149990 }
+      }
+    };
+    const block = classificationBlock({
+      summary,
+      evalResult: 'failure',
+      publish: {}
+    });
+    assert.match(block, /daily limit \(149,990 of 150,000 tokens used\)/);
+    assert.match(block, /Waiting for another day.*: maplibre-sprites-icons\./);
+  });
+
   it('reports a rejected push in the publish steps', () => {
     const block = classificationBlock({
       summary: PASSING,

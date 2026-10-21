@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Runs the eval configs the weekly drift check covers, one bounded child per
+ * Runs the eval configs the drift check covers, one bounded child per
  * config, and leaves a complete record whatever happens.
  *
  * The bound is promptfoo's own: `PROMPTFOO_MAX_EVAL_TIME_MS` arms a global timer
@@ -43,15 +43,22 @@
  * re-run, since their gap tests are meant to fail; neither is a config the bound
  * cut off, nor one with more than MAX_RETRIED_TESTS tests down.
  *
- * A scheduled week is bigger than the generator key's day: a full pass over
- * every config needs roughly 340K generator tokens against the Groq key's
- * 200K-per-day free-tier cap, which is how the last four configs ended as
- * `error` every Sunday from 2026-09-06 on (#108). So eval.yml runs the week in
- * scheduled slices on separate days, mapping each cron to an EVAL_SHARD value.
- * `--shard k/n` (or EVAL_SHARD) takes the k-th of n contiguous slices of the
- * discovered, already-sorted config list; it never shapes an explicit config
- * list — that combination is refused as ambiguous rather than quietly running
- * a subset of what the caller named.
+ * A week of evals is bigger than the generator key's day: a full pass over
+ * every config needs more generator tokens than the Groq key's daily free-tier
+ * cap, which is how the last four configs ended as `error` every Sunday from
+ * 2026-09-06 on (#108). So every run plans its own day. It measures the
+ * generator's limits (`measureLimits`), sizes each config's requests by them,
+ * puts the configs in `longestWaiting` order by the day each last got a verdict
+ * (`lastGraded`), and runs each one whose worst case, re-runs included, fits in
+ * what EVAL_TOKENS_PER_DAY has left after what the run has spent. What does not
+ * fit is first in line the next day, so how often a config is graded follows
+ * from how many configs there are and how big they are, and nothing has to be
+ * retuned as they grow. When Groq refuses a request for its daily limit, which
+ * only promptfoo's debug log records in Groq's words (`dayRefusal`), no further
+ * config starts; a day already spent is caught before the first (`daySpent`). `--shard k/n` (or EVAL_SHARD) takes the k-th of n contiguous
+ * slices of the discovered config list by hand; it never shapes an explicit
+ * config list — that combination is refused as ambiguous rather than quietly
+ * running a subset of what the caller named.
  *
  * Config and output paths are validated before they are placed in the `npm run`
  * argv, which a shell receives.
@@ -69,15 +76,17 @@
  *   --work-dir <d>       where the sidecars, verdicts, and summary go
  *   --config-dir <d>     where the eval configs live (default evals/prompts)
  *
- * Env: EVAL_CONFIG_MINUTES, EVAL_BUDGET_MINUTES, EVAL_WORK_DIR, EVAL_SHARD,
- * INPUT_CONFIGS, INPUT_BASELINE. The workflow sets the two bounds in YAML so
- * they are visible and tunable there; the defaults here match.
+ * Env: EVAL_CONFIG_MINUTES, EVAL_BUDGET_MINUTES, EVAL_WORK_DIR,
+ * EVAL_TOKENS_PER_DAY, EVAL_SHARD, INPUT_CONFIGS, INPUT_BASELINE, GROQ_API_KEY. The workflow sets the bounds and the plan's
+ * settings in YAML so they are visible and tunable there; the defaults here
+ * match.
  */
 import { spawn as spawnChild } from 'node:child_process';
 import {
   appendFileSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync
 } from 'node:fs';
@@ -94,9 +103,17 @@ import {
 } from './lib/eval-verdicts.js';
 import { setOutputs } from './lib/github-output.js';
 import { countTokens, limitsFrom } from '../evals/prompts/lib/request-size.mjs';
+import { passCost, sizeConfig } from './lib/prompt-budget.js';
+import { lastGraded } from './lib/results-history.js';
 
 const CONFIG_MINUTES_DEFAULT = 30;
 const BUDGET_MINUTES_DEFAULT = 240;
+
+// How many generator tokens one day of the Groq key holds: its free tier's
+// published daily limit, which Groq reports in no response header. eval.yml
+// sets it, and this matches. A run that finds the day spent sooner, because
+// Groq refuses a request for its daily limit, stops there and says so.
+const TOKENS_PER_DAY_DEFAULT = 200000;
 
 // How many more times a test that did not pass is run. Two re-runs after one
 // failure is a best of three: the failure stands unless both re-runs pass.
@@ -245,11 +262,70 @@ export function buildCommand({
   };
 }
 
-export function childEnv({ boundMs, env = process.env }) {
-  return { ...env, PROMPTFOO_MAX_EVAL_TIME_MS: String(boundMs) };
+export function childEnv({ boundMs, env = process.env, logDir = null }) {
+  return {
+    ...env,
+    PROMPTFOO_MAX_EVAL_TIME_MS: String(boundMs),
+    ...(logDir === null ? {} : { PROMPTFOO_LOG_DIR: logDir })
+  };
+}
+
+/**
+ * The last refusal for the key's daily limit in Groq's own words, with the
+ * limit and usage it states, or null. promptfoo files such a refusal as "timed
+ * out ... in queue" once its retries give up, so the wording survives only in
+ * the response body Groq sent, which promptfoo's debug log keeps.
+ */
+export function dayRefusal(text) {
+  const all = [
+    ...String(text ?? '').matchAll(
+      /tokens per day \(TPD\): Limit (\d+), Used (\d+)/g
+    )
+  ];
+  if (all.length === 0) return null;
+  const [, limit, used] = all.at(-1);
+  return { tokensPerDay: Number(limit), used: Number(used) };
+}
+
+/** Every promptfoo debug log a child left in `dir`, as one text. */
+function readDebugLogs(dir) {
+  try {
+    return readdirSync(dir)
+      .filter((name) => /^promptfoo-debug-.*\.log$/.test(name))
+      .map((name) => readFileSync(join(dir, name), 'utf8'))
+      .join('\n');
+  } catch {
+    return '';
+  }
 }
 
 const GROQ_CHAT = 'https://api.groq.com/openai/v1/chat/completions';
+const PROBE = [
+  { role: 'system', content: 'x' },
+  { role: 'user', content: 'y' }
+];
+
+/** One minimal request to the pinned Groq model, or null when none can be made. */
+async function probe({ pin, apiKey, fetch }) {
+  if (!pin?.startsWith('groq:') || !apiKey) return null;
+  try {
+    return await fetch(GROQ_CHAT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: pin.slice('groq:'.length),
+        messages: PROBE,
+        max_completion_tokens: 1,
+        temperature: 0
+      })
+    });
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The generator's limits as Groq reports them now, so a run never sizes its
@@ -265,35 +341,33 @@ export async function measureLimits({
   fetch = globalThis.fetch,
   count = countTokens
 }) {
-  if (!pin?.startsWith('groq:') || !apiKey) return null;
-  const messages = [
-    { role: 'system', content: 'x' },
-    { role: 'user', content: 'y' }
-  ];
+  const response = await probe({ pin, apiKey, fetch });
+  if (!response?.ok) return null;
   try {
-    const response = await fetch(GROQ_CHAT, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: pin.slice('groq:'.length),
-        messages,
-        max_completion_tokens: 1,
-        temperature: 0
-      })
-    });
-    if (!response.ok) return null;
     const tokensPerMinute = Number(
       response.headers.get('x-ratelimit-limit-tokens')
     );
     const usage = (await response.json())?.usage;
     const templateTokens =
       usage?.prompt_tokens -
-      messages.reduce((total, message) => total + count(message.content), 0);
+      PROBE.reduce((total, message) => total + count(message.content), 0);
     if (!(tokensPerMinute > 0) || !(templateTokens >= 0)) return null;
     return { tokensPerMinute, templateTokens };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What Groq says when the key's day is spent: one minimal request refused for
+ * its tokens per day, with the limit and the usage the refusal states. Null
+ * when the request goes through or is refused for anything else.
+ */
+export async function daySpent({ pin, apiKey, fetch = globalThis.fetch }) {
+  const response = await probe({ pin, apiKey, fetch });
+  if (response?.status !== 429) return null;
+  try {
+    return dayRefusal(await response.text());
   } catch {
     return null;
   }
@@ -388,6 +462,28 @@ export function shouldRetry({ baseline = false, killed = false, verdict }) {
   if (verdict.signatures.includes('max-duration')) return false;
   const down = verdict.counts.fail + verdict.counts.error;
   return down > 0 && down <= MAX_RETRIED_TESTS;
+}
+
+/**
+ * The most one config can spend of the generator key's day: its first pass at
+ * every request's full size, plus the re-runs shouldRetry allows at its largest
+ * request. `cost` is what `passCost` measured.
+ */
+export function dayCost(cost) {
+  return cost.firstPass + MAX_RETRIED_TESTS * RETRY_REPEATS * cost.largest;
+}
+
+/**
+ * Every config, the longest-waiting first: those that never got a verdict,
+ * then by the day they last got one (`lastGraded`), oldest first. How often a
+ * config is graded is whatever this order and the day's tokens make it; there
+ * is no cadence for the set of configs to outgrow.
+ */
+export function longestWaiting({ configs, graded }) {
+  const since = (config) => graded.get(skillOf(config)) ?? '';
+  return [...configs].sort(
+    (a, b) => since(a).localeCompare(since(b)) || a.localeCompare(b)
+  );
 }
 
 function sumTokenUsage(a, b) {
@@ -615,6 +711,9 @@ export async function runEvals({
   capMinutes = CONFIG_MINUTES_DEFAULT,
   budgetMinutes = BUDGET_MINUTES_DEFAULT,
   limits = null,
+  costs = null,
+  tokensPerDay = TOKENS_PER_DAY_DEFAULT,
+  logsDir = null,
   env = process.env,
   spawn = spawnEval,
   now = () => Date.now(),
@@ -645,7 +744,10 @@ export async function runEvals({
     ...(shard === null ? {} : { shard }),
     bounds: { configMinutes: capMinutes, budgetMinutes },
     ...(limits === null ? {} : { limits }),
-    planned: configs.map(skillOf),
+    // Filled in as the run goes: a config joins `planned` when it starts, and
+    // one the day could not hold is `waiting`, so it is never reported missing.
+    day: { tokensPerDay, spent: 0, waiting: [] },
+    planned: [],
     configs: []
   };
   writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
@@ -653,6 +755,18 @@ export async function runEvals({
   const started = now();
   for (const config of configs) {
     const skill = skillOf(config);
+    // The longest-waiting config whose worst case fits in what the day has
+    // left runs next; one that does not is first in line tomorrow.
+    const need = costs?.get(config) ? dayCost(costs.get(config)) : 0;
+    if (summary.day.spentByGroq || summary.day.spent + need > tokensPerDay) {
+      log(
+        `${skill}: waits for another day; it may need ${need} generator tokens and the day has ${tokensPerDay - summary.day.spent} left.`
+      );
+      summary.day.waiting.push(skill);
+      writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
+      continue;
+    }
+    summary.planned.push(skill);
     const bound = boundFor({
       elapsedMs: now() - started,
       budgetMs,
@@ -660,6 +774,7 @@ export async function runEvals({
     });
 
     let record;
+    let refused = null;
     if (bound.skip) {
       log(
         `${skill}: not run — the ${budgetMinutes}-minute run budget is spent.`
@@ -693,7 +808,11 @@ export async function runEvals({
       const sidecarPath = join(workDir, `${name}-${skill}.json`);
       rmSync(sidecarPath, { force: true });
       const outcome = await spawn(command, args, {
-        env: childEnv({ boundMs: bound.boundMs, env }),
+        env: childEnv({
+          boundMs: bound.boundMs,
+          env,
+          logDir: logsDir && join(logsDir, `${name}-${skill}`)
+        }),
         killAfterMs: bound.boundMs + KILL_GRACE_MS
       });
       const sidecarText = readSidecar(sidecarPath);
@@ -709,9 +828,13 @@ export async function runEvals({
         budgetMs,
         capMs
       });
+      // A first attempt Groq refused for the day would only be refused again.
+      refused =
+        logsDir && dayRefusal(readDebugLogs(join(logsDir, `${name}-${skill}`)));
       if (
         shouldRetry({ baseline, killed: outcome.killed === true, verdict }) &&
-        !retryBound.skip
+        !retryBound.skip &&
+        !refused
       ) {
         const down = verdict.counts.fail + verdict.counts.error;
         log(
@@ -728,7 +851,11 @@ export async function runEvals({
         const retryPath = join(workDir, `${name}-${skill}-retry.json`);
         rmSync(retryPath, { force: true });
         const retryOutcome = await spawn(rerun.command, rerun.args, {
-          env: childEnv({ boundMs: retryBound.boundMs, env }),
+          env: childEnv({
+            boundMs: retryBound.boundMs,
+            env,
+            logDir: logsDir && join(logsDir, `${name}-${skill}-retry`)
+          }),
           killAfterMs: retryBound.boundMs + KILL_GRACE_MS
         });
         const combined = combineAttempts({
@@ -765,6 +892,20 @@ export async function runEvals({
       for (const error of verdict.errors ?? []) {
         log(`  ${error.signature}: ${error.description} — ${error.message}`);
       }
+    }
+
+    summary.day.spent += record.tokenUsage?.total ?? 0;
+    // Groq may refuse a request for a daily limit lower than the configured one,
+    // or for tokens spent elsewhere today; then no further config starts.
+    const said =
+      refused ||
+      (logsDir &&
+        dayRefusal(readDebugLogs(join(logsDir, `${name}-${skill}-retry`))));
+    if (said) {
+      summary.day.spentByGroq = said;
+      log(
+        `Groq refused a request for the key's daily limit (${said.used} of ${said.tokensPerDay} tokens used); the rest wait for another day.`
+      );
     }
 
     log(`${skill}: ${record.verdict}`);
@@ -856,10 +997,62 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(1);
   }
 
+  const pin = /^id:\s*(\S+)/m.exec(
+    readFileSync('evals/prompts/lib/providers.yaml', 'utf8')
+  )?.[1];
+  const measured = args.dryRun
+    ? null
+    : await measureLimits({ pin, apiKey: process.env.GROQ_API_KEY });
+  const limits = measured ?? limitsFrom({});
+  console.log(
+    measured
+      ? `Generator limits, measured: ${limits.tokensPerMinute} tokens a minute, ${limits.templateTokens}-token chat template.`
+      : `Generator limits not measured; using ${limits.tokensPerMinute} tokens a minute and a ${limits.templateTokens}-token template.`
+  );
+
+  // The day's order: longest-waiting first, by the day each config last got a
+  // verdict, unless the caller named configs. runEvals then runs each one whose
+  // worst case fits in what the day has left, so how often a config is graded
+  // follows from how many there are and how big they are.
+  const tokensPerDay = Number(
+    process.env.EVAL_TOKENS_PER_DAY || TOKENS_PER_DAY_DEFAULT
+  );
+  const costs = new Map();
+  for (const config of configs) {
+    try {
+      costs.set(config, passCost(sizeConfig(config, { limits })));
+    } catch (error) {
+      console.log(
+        `${skillOf(config)}: not sized (${error.message}), so planned at no cost.`
+      );
+    }
+  }
+  let resultFiles = [];
+  try {
+    resultFiles = readdirSync(resultsDir);
+  } catch {
+    // No results yet: no config has had a verdict.
+  }
+  const order =
+    explicit === null
+      ? longestWaiting({
+          configs,
+          graded: lastGraded(resultFiles, (fileName) =>
+            readFileSync(join(resultsDir, fileName), 'utf8')
+          )
+        })
+      : configs;
+
   if (args.dryRun) {
+    for (const config of order) {
+      const cost = costs.get(config);
+      console.log(
+        `${skillOf(config)}: may need ${cost ? dayCost(cost) : 'an unknown number of'} of the day's ${tokensPerDay} generator tokens.`
+      );
+    }
     console.log(
       dryRunLines({
-        configs,
+        configs: order,
         name,
         baseline,
         resultsDir,
@@ -873,25 +1066,24 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   // The publish job names its committed CSVs from this.
   setOutputs({ name });
+  // A refused probe may mean the day is already spent, by a dispatch earlier
+  // today or by a limit lower than configured: then every config waits.
+  const spentAtStart =
+    measured === null
+      ? await daySpent({ pin, apiKey: process.env.GROQ_API_KEY })
+      : null;
+  if (spentAtStart) {
+    console.log(
+      `Groq says the key's day is already spent (${spentAtStart.used} of ${spentAtStart.tokensPerDay} tokens); every config waits for another day.`
+    );
+    setOutputs({ ran: 'false' });
+    process.exit(0);
+  }
   if (shardSpec !== '') console.log(`Shard ${shardSpec} of the config list.`);
-  console.log(`Evaluating: ${configs.join(' ')}`);
+  console.log(`In order: ${order.join(' ')}`);
 
-  const pin = /^id:\s*(\S+)/m.exec(
-    readFileSync('evals/prompts/lib/providers.yaml', 'utf8')
-  )?.[1];
-  const measured = await measureLimits({
-    pin,
-    apiKey: process.env.GROQ_API_KEY
-  });
-  const limits = measured ?? limitsFrom({});
-  console.log(
-    measured
-      ? `Generator limits, measured: ${limits.tokensPerMinute} tokens a minute, ${limits.templateTokens}-token chat template.`
-      : `Generator limits could not be measured; using ${limits.tokensPerMinute} tokens a minute and a ${limits.templateTokens}-token template.`
-  );
-
-  const { failed } = await runEvals({
-    configs,
+  const { summary, failed } = await runEvals({
+    configs: order,
     name,
     baseline,
     shard: shardSpec === '' ? null : shardSpec,
@@ -899,7 +1091,22 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     workDir,
     capMinutes,
     budgetMinutes,
-    limits: { ...limits, measured: measured !== null }
+    limits: { ...limits, measured: measured !== null },
+    costs,
+    tokensPerDay,
+    // Beside the work dir, not in it: the work dir is uploaded as an artifact,
+    // and these logs hold every request and response in full.
+    logsDir: `${workDir}-logs`
   });
-  process.exit(failed ? 1 : 0);
+  // A day that graded nothing has nothing for the publish job.
+  setOutputs({ ran: String(summary.planned.length > 0) });
+  // Unreachable while `npm run lint:prompt-budget` passes, which checks that
+  // every config fits in a day on its own.
+  const stuck = summary.planned.length === 0 && order.length > 0;
+  if (stuck) {
+    console.error(
+      `::error::No config fits in a day of ${tokensPerDay} generator tokens; run npm run lint:prompt-budget.`
+    );
+  }
+  process.exit(failed || stuck ? 1 : 0);
 }

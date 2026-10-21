@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Turns the weekly run's own record into the two things the drift issue needs:
+ * Turns a run's own record into the two things the drift issue needs:
  * a `headline` for its title, and a `classification` block for the top of its
  * body. The triage checklist below that block stays as written — this only says
  * what happened first, so the reader is not asked to rediscover it from the log.

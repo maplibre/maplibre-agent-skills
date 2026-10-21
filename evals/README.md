@@ -122,7 +122,7 @@ npm run eval:graded -- --config evals/prompts/<skill-name>.yaml --grader <provid
 ```
 
 Name the judge you used in the results doc's `Run:` line, so the record says which model
-graded it. The weekly CI run re-grades everything with the pinned pair.
+graded it. The scheduled CI run re-grades every config with the pinned pair.
 
 ## Proving tests fail without the skill
 
@@ -188,7 +188,7 @@ Two workflows run in CI, and only one of them gates a merge:
 - **`check.yml`** — the deterministic gate: formatting, spelling, markdown lint,
   terminology, model pins, and skill validation. It runs on every PR including forks,
   needs no secrets, and is the only workflow that blocks merge.
-- **`eval.yml`** — the judge-graded eval: a weekly drift check against the default branch, run as three scheduled slices (Sunday, Wednesday, and Friday, 10:17 UTC) because a full pass needs more generator tokens than the Groq key's free-tier day holds ([#108](https://github.com/maplibre/maplibre-agent-skills/issues/108)); plus `workflow_dispatch` (`ref`, `configs`, `baseline`) for a maintainer to validate a branch or PR by hand, pre- or post-merge.
+- **`eval.yml`** — the judge-graded eval: a drift check against the default branch that runs every day at 10:17 UTC and grades the configs that have waited longest for a verdict, as many as the Groq key's daily tokens hold, since a full pass needs more than one day has ([#108](https://github.com/maplibre/maplibre-agent-skills/issues/108)); plus `workflow_dispatch` (`ref`, `configs`, `baseline`) for a maintainer to validate a branch or PR by hand, pre- or post-merge.
 
 **It never runs automatically on `pull_request`.** GitHub withholds secrets from a
 fork's `pull_request`, so an automatic job there couldn't reach the generator or
@@ -203,7 +203,7 @@ a malicious lifecycle script, not a modified `eval:graded` command.
 
 **A test that does not pass runs twice more before its verdict stands.** The runner hands the first attempt's JSON to `--filter-failing --repeat 2`, and the failure stands unless both re-runs pass. Baseline runs are never re-run, and neither is a config the time bound cut off or one with more than two tests down. The re-run's `-retry` CSV is committed beside the first.
 
-**Each scheduled run grades one slice of the configs.** The cron that fired sets `EVAL_SHARD` (`1/3`, `2/3`, or `3/3` — the mapping sits beside the cron strings in `eval.yml`), and the shard is the matching contiguous slice of the sorted config list, sizes within one of each other; `node scripts/run-evals.js --shard k/n` takes the same slice locally. The status sync reads the run's plan from its own `summary.json`, so the skills a shard never planned are not reported missing. A shard never shapes an explicit config list — a dispatch with `configs` set runs exactly those, and passing both is refused. The slices are positional and recomputed per run, so merging or removing a config midweek can shift a config across a day boundary: at worst its verdict waits for the next week's slices or lands twice, the same one-week wait the sync already accepts for a rate-limited run, and never a status flip.
+**Each day's run plans itself.** `scripts/run-evals.js` orders the configs by the day each last got a verdict, read from the CSVs in `evals/results/`; a day that left any test in `ERROR` doesn't count, so an errored config stays first in line. It runs each config, in that order, whose worst case (every request at full size, every allowed re-run) fits in what `EVAL_TOKENS_PER_DAY` has left after the run's actual spend, and the rest go first the next day. How often a config is graded follows from how many configs there are and how big they are; `npm run lint:prompt-budget` reports how many days a full round takes. If Groq refuses a request for its daily limit, which promptfoo records in Groq's words only in its debug log, no further config starts and the drift issue quotes Groq's figures. A dispatch runs the configs it names, in that order, or every config longest-waiting first, and `--shard k/n` still takes a slice by hand.
 
 `npm run lint:model-pins` fails on any provider id that drifts from the [Setup](#setup)
 pins (the generator in `providers.yaml`, the judge in the `eval:graded` script).

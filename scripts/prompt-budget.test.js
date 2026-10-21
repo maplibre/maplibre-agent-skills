@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   PINNED_PROVIDER,
   SKILL_PROMPT,
-  sizeTests
+  passCost,
+  sizeTests,
+  workflowSetting
 } from './lib/prompt-budget.js';
 
 // One token per character, so each sum below can be checked by eye.
@@ -80,5 +82,32 @@ describe('sizeTests', () => {
         }),
       /expected providers/
     );
+  });
+});
+
+describe('passCost', () => {
+  it('adds up the requests and keeps the largest', () => {
+    assert.deepEqual(
+      passCost([{ request: 7000 }, { request: 7900 }, { request: 6500 }]),
+      { firstPass: 21400, largest: 7900 }
+    );
+    assert.deepEqual(passCost([]), { firstPass: 0, largest: 0 });
+  });
+});
+
+describe('workflowSetting', () => {
+  const workflow = [
+    '        env:',
+    '          EVAL_CONFIG_MINUTES: 30',
+    '          EVAL_TOKENS_PER_DAY: 200000'
+  ].join('\n');
+
+  it('reads a whole-number setting of the Run evals step', () => {
+    assert.equal(workflowSetting(workflow, 'EVAL_TOKENS_PER_DAY'), 200000);
+    assert.equal(workflowSetting(workflow, 'EVAL_CONFIG_MINUTES'), 30);
+  });
+
+  it('says null for a setting the workflow does not have', () => {
+    assert.equal(workflowSetting(workflow, 'EVAL_TOKENS_PER_WEEK'), null);
   });
 });

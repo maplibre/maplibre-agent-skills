@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnChild } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -11,7 +11,11 @@ import {
   buildCommand,
   childEnv,
   combineAttempts,
+  dayCost,
+  dayRefusal,
+  daySpent,
   dryRunLines,
+  longestWaiting,
   measureLimits,
   parseShard,
   runEvals,
@@ -237,6 +241,12 @@ describe('childEnv', () => {
     const env = childEnv({ boundMs: 1800000, env: { GROQ_API_KEY: 'x' } });
     assert.equal(env.PROMPTFOO_MAX_EVAL_TIME_MS, '1800000');
     assert.equal(env.GROQ_API_KEY, 'x');
+    assert.equal('PROMPTFOO_LOG_DIR' in env, false);
+  });
+
+  it("points promptfoo's debug log at the folder it is given", () => {
+    const env = childEnv({ boundMs: 1, env: {}, logDir: '/tmp/eval-logs/x' });
+    assert.equal(env.PROMPTFOO_LOG_DIR, '/tmp/eval-logs/x');
   });
 });
 
@@ -643,6 +653,53 @@ describe('measureLimits', () => {
   });
 });
 
+describe('dayRefusal', () => {
+  it("reads the last refusal for the day out of Groq's own words", () => {
+    const log = [
+      'on tokens per day (TPD): Limit 200000, Used 195468, Requested 5469.',
+      'on tokens per minute (TPM): Limit 8000, Used 7900, Requested 120.',
+      'on tokens per day (TPD): Limit 200000, Used 198049, Requested 4937.'
+    ].join('\n');
+    assert.deepEqual(dayRefusal(log), { tokensPerDay: 200000, used: 198049 });
+  });
+
+  it('says nothing without one', () => {
+    assert.equal(dayRefusal('timed out after 300000ms in queue'), null);
+    assert.equal(dayRefusal(undefined), null);
+  });
+});
+
+describe('daySpent', () => {
+  const pin = 'groq:openai/gpt-oss-120b';
+  const respond = (status, text) => async () => ({
+    status,
+    ok: status === 200,
+    text: async () => text
+  });
+
+  it("reads the limit and the usage out of Groq's refusal for the day", async () => {
+    const refusal =
+      '{"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` in organization `org_…` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199923, Requested 77. Please try again in 33s.","type":"tokens","code":"rate_limit_exceeded"}}';
+    assert.deepEqual(
+      await daySpent({ pin, apiKey: 'k', fetch: respond(429, refusal) }),
+      { tokensPerDay: 200000, used: 199923 }
+    );
+  });
+
+  it('says nothing for a request that goes through or a per-minute refusal', async () => {
+    const perMinute =
+      '{"error":{"message":"Rate limit reached ... on tokens per minute (TPM): Limit 8000, Used 7900, Requested 120."}}';
+    assert.equal(
+      await daySpent({ pin, apiKey: 'k', fetch: respond(200, '{}') }),
+      null
+    );
+    assert.equal(
+      await daySpent({ pin, apiKey: 'k', fetch: respond(429, perMinute) }),
+      null
+    );
+  });
+});
+
 describe('runEvals', () => {
   it('records every config and leaves a complete summary', async () => {
     const { resultsDir, workDir } = workspace();
@@ -722,6 +779,101 @@ describe('runEvals', () => {
     assert.equal(envs[0].EVAL_TEMPLATE_TOKENS, '80');
     assert.equal(envs[0].GROQ_API_KEY, 'k');
     assert.deepEqual(summary.limits, limits);
+  });
+
+  it('runs the longest-waiting configs that fit what the day has left, and makes the rest wait', async () => {
+    const { resultsDir, workDir } = workspace();
+    const ran = [];
+    const spawn = async (command, args) => {
+      const jsonPath = args[args.indexOf('--output') + 2];
+      ran.push(jsonPath);
+      // Each config spends 90 tokens (the fixture's tokenUsage).
+      writeFileSync(jsonPath, sidecar([row(0)]));
+      return { exitCode: 0, durationMs: 1000 };
+    };
+    const a = 'evals/prompts/maplibre-a.yaml';
+    const b = 'evals/prompts/maplibre-b.yaml';
+    const c = 'evals/prompts/maplibre-c.yaml';
+    // Worst cases: a 120, b 140, c 100, against a day of 230.
+    const costs = new Map([
+      [a, { firstPass: 120, largest: 0 }],
+      [b, { firstPass: 140, largest: 0 }],
+      [c, { firstPass: 100, largest: 0 }]
+    ]);
+
+    const { summary } = await runEvals({
+      configs: [a, b, c],
+      name: '2026-10-22',
+      resultsDir,
+      workDir,
+      capMinutes: 30,
+      budgetMinutes: 240,
+      costs,
+      tokensPerDay: 230,
+      spawn,
+      log: () => {}
+    });
+
+    // a ran and spent 90, which left 140 for b; then 50 left, so c waits.
+    assert.deepEqual(summary.planned, ['maplibre-a', 'maplibre-b']);
+    assert.deepEqual(summary.day, {
+      tokensPerDay: 230,
+      spent: 180,
+      waiting: ['maplibre-c']
+    });
+    assert.equal(ran.length, 2);
+  });
+
+  it("stops starting configs once a child's debug log holds Groq's refusal for the day", async () => {
+    const { resultsDir, workDir } = workspace();
+    const logsDir = mkdtempSync(join(tmpdir(), 'eval-logs-'));
+    const ran = [];
+    const spawn = async (command, args, { env }) => {
+      const jsonPath = args[args.indexOf('--output') + 2];
+      ran.push(jsonPath);
+      // What promptfoo leaves: a queue timeout in the sidecar, Groq's words in the log.
+      mkdirSync(env.PROMPTFOO_LOG_DIR, { recursive: true });
+      writeFileSync(
+        join(
+          env.PROMPTFOO_LOG_DIR,
+          'promptfoo-debug-2026-10-21_19-48-38-062Z.log'
+        ),
+        '"message":"Rate limit reached ... on tokens per day (TPD): Limit 200000, Used 198049, Requested 4937."'
+      );
+      writeFileSync(
+        jsonPath,
+        sidecar([
+          row(
+            2,
+            'Request groq:openai/gpt-oss-120b timed out after 300000ms in queue'
+          )
+        ])
+      );
+      return { exitCode: 100, durationMs: 1000 };
+    };
+
+    const { summary } = await runEvals({
+      configs: [
+        'evals/prompts/maplibre-cartography.yaml',
+        'evals/prompts/maplibre-fonts-glyphs.yaml'
+      ],
+      name: '2026-10-22',
+      resultsDir,
+      workDir,
+      capMinutes: 30,
+      budgetMinutes: 240,
+      logsDir,
+      spawn,
+      log: () => {}
+    });
+
+    assert.equal(ran.length, 1);
+    assert.deepEqual(summary.planned, ['maplibre-cartography']);
+    assert.deepEqual(summary.day.spentByGroq, {
+      tokensPerDay: 200000,
+      used: 198049
+    });
+    assert.deepEqual(summary.day.waiting, ['maplibre-fonts-glyphs']);
   });
 
   it('records the shard in the summary when the run is one slice of the week', async () => {
@@ -856,6 +1008,35 @@ describe('runEvals', () => {
       assert.deepEqual(config.signatures, ['not-run']);
       assert.match(config.reason, /budget exhausted/);
     }
+  });
+});
+
+describe('dayCost', () => {
+  it('adds every allowed re-run, at the largest request, to the first pass', () => {
+    // MAX_RETRIED_TESTS (2) tests, RETRY_REPEATS (2) times each.
+    assert.equal(
+      dayCost({ firstPass: 30000, largest: 7900 }),
+      30000 + 4 * 7900
+    );
+  });
+});
+
+describe('longestWaiting', () => {
+  const config = (skill) => `evals/prompts/maplibre-${skill}.yaml`;
+  const graded = new Map([
+    ['maplibre-a', '2026-10-16'],
+    ['maplibre-b', '2026-10-21'],
+    ['maplibre-c', '2026-10-16']
+  ]);
+
+  it('puts the never-graded first, then the oldest verdict, names breaking ties', () => {
+    assert.deepEqual(
+      longestWaiting({
+        configs: [config('b'), config('c'), config('new'), config('a')],
+        graded
+      }),
+      [config('new'), config('a'), config('c'), config('b')]
+    );
   });
 });
 

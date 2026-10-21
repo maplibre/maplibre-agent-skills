@@ -68,6 +68,29 @@ export function sizeTests(
   });
 }
 
+/**
+ * The most one pass over these tests can spend, since Groq stops each answer at
+ * its cap, and the largest single request.
+ */
+export function passCost(sizes) {
+  const requests = sizes.map((size) => size.request);
+  return {
+    firstPass: requests.reduce((total, request) => total + request, 0),
+    largest: Math.max(0, ...requests)
+  };
+}
+
+/**
+ * A whole-number setting of eval.yml's "Run evals" step, such as
+ * `EVAL_TOKENS_PER_DAY: 200000`, or null when the workflow does not set it.
+ */
+export function workflowSetting(workflowText, name) {
+  const match = new RegExp(`^\\s+${name}:\\s*(\\d+)\\s*$`, 'm').exec(
+    workflowText
+  );
+  return match ? Number(match[1]) : null;
+}
+
 /** Every test of one eval config file, rendered as the eval renders it, and sized. */
 export function sizeConfig(
   path,

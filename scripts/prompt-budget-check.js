@@ -2,6 +2,8 @@
 /**
  * Reports how much answer room every eval request has, and fails when a skill
  * or a test prompt has grown so far that its answers would mostly be cut off.
+ * Then it reports how many days of the generator key a full round of every
+ * config takes, and fails only for a config no single day could grade.
  *
  * No request can exceed the generator's per-minute limit: the prompt function
  * gives each one an answer cap of whatever the limit leaves after its prompt,
@@ -11,8 +13,10 @@
  * runs the median used 2,822 tokens and 92% used more than 1,536, half the
  * 3,072-token budget.
  */
+import { readFileSync } from 'node:fs';
 import { listEvalConfigs, skillOf } from './lib/eval-verdicts.js';
-import { sizeConfig } from './lib/prompt-budget.js';
+import { passCost, sizeConfig, workflowSetting } from './lib/prompt-budget.js';
+import { dayCost } from './run-evals.js';
 import {
   answerBudget,
   limitsFrom
@@ -32,6 +36,7 @@ console.log(
 );
 
 let failed = false;
+const costs = new Map();
 for (const configPath of listEvalConfigs()) {
   const skill = skillOf(configPath);
   let sizes;
@@ -42,6 +47,7 @@ for (const configPath of listEvalConfigs()) {
     failed = true;
     continue;
   }
+  costs.set(skill, passCost(sizes));
   if (sizes.length === 0) {
     console.log(`✅ ${skill}: no tests to size`);
     continue;
@@ -68,5 +74,35 @@ for (const configPath of listEvalConfigs()) {
   }
 }
 
+// Each day's run grades the longest-waiting configs as far as
+// EVAL_TOKENS_PER_DAY holds them, so a full round takes as many days as the
+// configs need. Only a config too big for any one day can never be graded.
+const workflow = readFileSync('.github/workflows/eval.yml', 'utf8');
+const tokensPerDay = workflowSetting(workflow, 'EVAL_TOKENS_PER_DAY');
+console.log('');
+if (tokensPerDay === null) {
+  console.error(
+    '❌ .github/workflows/eval.yml sets no EVAL_TOKENS_PER_DAY for the "Run evals" step.'
+  );
+  failed = true;
+} else {
+  let round = 0;
+  for (const [skill, cost] of costs) {
+    const need = dayCost(cost);
+    round += need;
+    if (need > tokensPerDay) {
+      console.error(
+        `❌ ${skill}: its tests and their allowed re-runs can spend ${thousands(need)} generator tokens, more than a day's ${thousands(tokensPerDay)}, so no day can grade it. Split the config, or shorten the SKILL.md.`
+      );
+      failed = true;
+    }
+  }
+  console.log(
+    `✅ A full round of every config, every allowed re-run included, can spend ${thousands(round)} generator tokens: about ${(round / tokensPerDay).toFixed(1)} days of the key's ${thousands(tokensPerDay)} a day, longest-waiting first.`
+  );
+}
+
 if (failed) process.exit(1);
-console.log('\n✅ Every eval request keeps at least half its answer budget');
+console.log(
+  '\n✅ Every eval request keeps at least half its answer budget, and every config fits in a day'
+);
