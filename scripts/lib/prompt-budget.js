@@ -1,0 +1,81 @@
+/**
+ * Every request an eval config makes, sized the way Groq will see it: the
+ * prompt evals/prompts/lib/skill-prompt.mjs renders, and the answer cap it
+ * gives that prompt (see evals/prompts/lib/request-size.mjs). A request never
+ * exceeds the generator's per-minute limit; what a growing skill costs is
+ * answer room, so that is what this reports.
+ */
+import { readFileSync } from 'node:fs';
+import { load } from 'js-yaml';
+import render from '../../evals/prompts/lib/skill-prompt.mjs';
+import {
+  answerBudget,
+  answerCap,
+  countTokens,
+  limitsFrom,
+  promptTokens
+} from '../../evals/prompts/lib/request-size.mjs';
+
+// The one prompt function and the one provider every config uses. A config
+// with anything else is sized by rules nothing here measured.
+export const SKILL_PROMPT = 'file://lib/skill-prompt.mjs';
+export const PINNED_PROVIDER = 'file://lib/providers.yaml';
+
+/**
+ * Every test of one parsed eval config: its prompt, its answer cap, and the
+ * request the two make. Vars merge the way promptfoo merges them, a test's
+ * own over `defaultTest`'s. Throws for a config that does not use the shared
+ * prompt and the pinned provider.
+ */
+export function sizeTests(
+  config,
+  { render, limits, answerTokens, count = countTokens }
+) {
+  const prompts = JSON.stringify(config?.prompts);
+  const providers = JSON.stringify(config?.providers);
+  if (prompts !== JSON.stringify([SKILL_PROMPT])) {
+    throw new Error(`expected prompts: [${SKILL_PROMPT}], found ${prompts}`);
+  }
+  if (providers !== JSON.stringify([PINNED_PROVIDER])) {
+    throw new Error(
+      `expected providers: [${PINNED_PROVIDER}], found ${providers}`
+    );
+  }
+  return (config.tests ?? []).map((test, index) => {
+    const vars = { ...config.defaultTest?.vars, ...test.vars };
+    const rendered = render({ vars });
+    const messages = JSON.parse(
+      typeof rendered === 'string' ? rendered : rendered.prompt
+    );
+    const prompt = promptTokens(messages, {
+      templateTokens: limits.templateTokens,
+      count
+    });
+    const answer = Math.max(
+      0,
+      answerCap(prompt, {
+        answerTokens,
+        tokensPerMinute: limits.tokensPerMinute
+      })
+    );
+    return {
+      test: index + 1,
+      description: test.description ?? `test ${index + 1}`,
+      prompt,
+      answer,
+      request: prompt + answer
+    };
+  });
+}
+
+/** Every test of one eval config file, rendered as the eval renders it, and sized. */
+export function sizeConfig(
+  path,
+  { limits = limitsFrom(), answerTokens = answerBudget() } = {}
+) {
+  return sizeTests(load(readFileSync(path, 'utf8')), {
+    render,
+    limits,
+    answerTokens
+  });
+}

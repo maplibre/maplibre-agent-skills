@@ -35,8 +35,9 @@ const ASSERT = 1;
 const ERROR = 2;
 
 // Signatures a config's verdict can carry. The first four come from the failure
-// text in the run log of 2026-08-30, and `judge-unavailable` from the sidecars
-// of 2026-09-13 and 2026-09-27; the last three are the runner's own.
+// text in the run log of 2026-08-30, `judge-unavailable` from the sidecars of
+// 2026-09-13 and 2026-09-27, and `request-too-large` from the one of
+// 2026-10-21; the last three are the runner's own.
 const CUT_OFF_SIGNATURES = new Set(['max-duration', 'not-run', 'killed']);
 
 /** Every skill's eval config, sorted, template excluded. */
@@ -123,6 +124,12 @@ export function runName(date, baseline) {
  * promptfoo's Google provider, and of the pinned pair only the judge is Google.
  * An ASSERT row carries whatever name a flagged grader reason earns; see
  * graderErrorOf.
+ *
+ * `request-too-large` is Groq refusing a request bigger than the organization's
+ * tokens per minute. Each request's answer cap is sized to fit, so this means a
+ * prompt that fills the minute on its own, which fails the same way every run
+ * and which `npm run lint:prompt-budget` names. Its body carries the code
+ * `rate_limit_exceeded`, so it is matched before `rate-limit`.
  */
 export function signatureOf(message) {
   const text = String(message ?? '');
@@ -136,6 +143,12 @@ export function signatureOf(message) {
     (/\b503\b/.test(text) || /"UNAVAILABLE"/.test(text))
   ) {
     return 'judge-unavailable';
+  }
+  if (
+    /\b413 Payload Too Large\b/.test(text) ||
+    /Request too large/.test(text)
+  ) {
+    return 'request-too-large';
   }
   if (/\b429\b/.test(text) || /Rate limit exceeded/.test(text)) {
     return 'rate-limit';
@@ -278,6 +291,10 @@ export function headlineFor({ summary, evalResult }) {
   // per-config bound did is beside the point.
   if (evalResult === 'cancelled') return 'cancelled before finishing';
   if (cutOff) return 'cut off by the time bound';
+  // Not transient like the rest of infrastructure: it fails again next run.
+  if (configs.some((c) => c.signatures?.includes('request-too-large'))) {
+    return 'request too large';
+  }
   // Everything recorded either passed or errored, and the job still did not
   // succeed: whatever went wrong was not a graded verdict on skill content.
   return evalResult === 'success' ? 'graded failure' : 'infrastructure';

@@ -64,6 +64,11 @@ const MAX_DURATION = 'Evaluation exceeded max duration of 2700000ms';
 // that component.
 const JUDGE_UNAVAILABLE =
   'Error: No candidates returned in API response.\n\nGot response: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}';
+// Groq refusing a request over the organization's tokens per minute, verbatim
+// from the 2026-10-21 maplibre-sprites-icons sidecar (run 39585050825, test 2),
+// organization id elided.
+const REQUEST_TOO_LARGE =
+  'API error: 413 Payload Too Large\n{"error":{"message":"Request too large for model `openai/gpt-oss-120b` in organization `org_…` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8008, please reduce your message size and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}';
 // A rubric the judge did grade, from the 2026-09-06 maplibre-pmtiles-patterns
 // sidecar (the addProtocol anti-pattern test).
 const RUBRIC_FAILURE =
@@ -292,6 +297,10 @@ describe('signatureOf', () => {
       ),
       'other'
     );
+  });
+
+  it('names a request too large for the minute, though its body says rate_limit_exceeded', () => {
+    assert.equal(signatureOf(REQUEST_TOO_LARGE), 'request-too-large');
   });
 
   it('names a generator rate limit from a 429 or its text', () => {
@@ -530,6 +539,21 @@ describe('headlineFor', () => {
     assert.equal(
       headlineFor({ summary, evalResult: 'failure' }),
       'infrastructure'
+    );
+  });
+
+  it('says request too large when a request can never fit the minute', () => {
+    const summary = withConfigs([
+      { skill: 'maplibre-cartography', verdict: 'pass', signatures: [] },
+      {
+        skill: 'maplibre-fonts-glyphs',
+        verdict: 'error',
+        signatures: ['request-too-large']
+      }
+    ]);
+    assert.equal(
+      headlineFor({ summary, evalResult: 'failure' }),
+      'request too large'
     );
   });
 

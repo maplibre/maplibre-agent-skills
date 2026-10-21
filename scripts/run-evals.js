@@ -93,6 +93,7 @@ import {
   skillOf
 } from './lib/eval-verdicts.js';
 import { setOutputs } from './lib/github-output.js';
+import { countTokens, limitsFrom } from '../evals/prompts/lib/request-size.mjs';
 
 const CONFIG_MINUTES_DEFAULT = 30;
 const BUDGET_MINUTES_DEFAULT = 240;
@@ -246,6 +247,56 @@ export function buildCommand({
 
 export function childEnv({ boundMs, env = process.env }) {
   return { ...env, PROMPTFOO_MAX_EVAL_TIME_MS: String(boundMs) };
+}
+
+const GROQ_CHAT = 'https://api.groq.com/openai/v1/chat/completions';
+
+/**
+ * The generator's limits as Groq reports them now, so a run never sizes its
+ * requests by numbers that have since changed: tokens per minute from the
+ * `x-ratelimit-limit-tokens` header of one minimal request, and the chat
+ * template as that request's `usage.prompt_tokens` minus its two one-token
+ * messages. Costs about 77 tokens. Null when the pin is not a Groq model or
+ * Groq cannot be reached; the run then keeps the last measured defaults.
+ */
+export async function measureLimits({
+  pin,
+  apiKey,
+  fetch = globalThis.fetch,
+  count = countTokens
+}) {
+  if (!pin?.startsWith('groq:') || !apiKey) return null;
+  const messages = [
+    { role: 'system', content: 'x' },
+    { role: 'user', content: 'y' }
+  ];
+  try {
+    const response = await fetch(GROQ_CHAT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: pin.slice('groq:'.length),
+        messages,
+        max_completion_tokens: 1,
+        temperature: 0
+      })
+    });
+    if (!response.ok) return null;
+    const tokensPerMinute = Number(
+      response.headers.get('x-ratelimit-limit-tokens')
+    );
+    const usage = (await response.json())?.usage;
+    const templateTokens =
+      usage?.prompt_tokens -
+      messages.reduce((total, message) => total + count(message.content), 0);
+    if (!(tokensPerMinute > 0) || !(templateTokens >= 0)) return null;
+    return { tokensPerMinute, templateTokens };
+  } catch {
+    return null;
+  }
 }
 
 /** How long this config may take: the cap, or whatever budget is left. */
@@ -563,11 +614,21 @@ export async function runEvals({
   workDir,
   capMinutes = CONFIG_MINUTES_DEFAULT,
   budgetMinutes = BUDGET_MINUTES_DEFAULT,
+  limits = null,
   env = process.env,
   spawn = spawnEval,
   now = () => Date.now(),
   log = console.log
 }) {
+  // The children size every request's answer cap by these, so they get the
+  // limits this run measured rather than whatever their own defaults say.
+  if (limits !== null) {
+    env = {
+      ...env,
+      EVAL_TOKENS_PER_MINUTE: String(limits.tokensPerMinute),
+      EVAL_TEMPLATE_TOKENS: String(limits.templateTokens)
+    };
+  }
   mkdirSync(resultsDir, { recursive: true });
   mkdirSync(workDir, { recursive: true });
   const verdictsPath = join(workDir, 'verdicts.txt');
@@ -583,6 +644,7 @@ export async function runEvals({
     // `planned` below is already only this slice's skills.
     ...(shard === null ? {} : { shard }),
     bounds: { configMinutes: capMinutes, budgetMinutes },
+    ...(limits === null ? {} : { limits }),
     planned: configs.map(skillOf),
     configs: []
   };
@@ -814,6 +876,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (shardSpec !== '') console.log(`Shard ${shardSpec} of the config list.`);
   console.log(`Evaluating: ${configs.join(' ')}`);
 
+  const pin = /^id:\s*(\S+)/m.exec(
+    readFileSync('evals/prompts/lib/providers.yaml', 'utf8')
+  )?.[1];
+  const measured = await measureLimits({
+    pin,
+    apiKey: process.env.GROQ_API_KEY
+  });
+  const limits = measured ?? limitsFrom({});
+  console.log(
+    measured
+      ? `Generator limits, measured: ${limits.tokensPerMinute} tokens a minute, ${limits.templateTokens}-token chat template.`
+      : `Generator limits could not be measured; using ${limits.tokensPerMinute} tokens a minute and a ${limits.templateTokens}-token template.`
+  );
+
   const { failed } = await runEvals({
     configs,
     name,
@@ -822,7 +898,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     resultsDir,
     workDir,
     capMinutes,
-    budgetMinutes
+    budgetMinutes,
+    limits: { ...limits, measured: measured !== null }
   });
   process.exit(failed ? 1 : 0);
 }

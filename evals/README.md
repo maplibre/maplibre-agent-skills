@@ -167,7 +167,13 @@ question and does NOT recommend the skill's solution where it doesn't apply.
 
 Write prompts based on real developer or AI confusion: evidenced in GitHub issues, Stack Overflow questions, or Slack threads where AI assistants are known to fail.
 
-**Important:** Let the YAML choose the provider on any run you record or cite. Passing `--providers` replaces the pinned generator, and unless the value matches a configured provider's `id` or `label`, Promptfoo builds a bare provider with none of `providers.yaml`'s config — no `temperature`, no `max_tokens`, no label — which unpins the model on a run you are about to cite, and mislabels the results. Ad-hoc probes are a different matter and the flag is useful there: `--providers echo` renders the prompts back to you.
+**Important:** Let the YAML choose the provider on any run you record or cite. Passing `--providers` replaces the pinned generator, and unless the value matches a configured provider's `id` or `label`, Promptfoo builds a bare provider with none of `providers.yaml`'s config — no `temperature`, no `max_completion_tokens`, no label — which unpins the model on a run you are about to cite, and mislabels the results. Ad-hoc probes are a different matter and the flag is useful there: `--providers echo` renders the prompts back to you.
+
+## Request size
+
+Groq counts each request as its prompt plus the answer cap it reserves, and refuses one over the generator's tokens per minute before the model reads it. So `lib/skill-prompt.mjs` gives every request the cap `providers.yaml` sets, or whatever the limit leaves after the prompt if that is less. No request is refused for its size, and a longer `SKILL.md` costs its answers room instead.
+
+`npm run lint:prompt-budget`, part of `npm run check` and `check.yml`, reports that room for every test: it warns when a prompt takes some of the answer budget and fails when it takes more than half, since most answers would then be cut off. Each eval run measures the per-minute limit and the chat template from Groq, so the caps follow any change Groq makes.
 
 ## Example results
 

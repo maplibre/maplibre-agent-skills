@@ -12,6 +12,7 @@ import {
   childEnv,
   combineAttempts,
   dryRunLines,
+  measureLimits,
   parseShard,
   runEvals,
   shardOf,
@@ -584,6 +585,64 @@ describe('spawnEval', () => {
   });
 });
 
+describe('measureLimits', () => {
+  const pin = 'groq:openai/gpt-oss-120b';
+  // A response shaped like Groq's: the minute in a header, the prompt in usage.
+  const groq =
+    ({ ok = true, limit = '8000', promptTokens = 76 } = {}, seen = []) =>
+    async (url, request) => {
+      seen.push({ url, body: JSON.parse(request.body) });
+      return {
+        ok,
+        headers: new Headers(
+          limit === null ? {} : { 'x-ratelimit-limit-tokens': limit }
+        ),
+        json: async () => ({ usage: { prompt_tokens: promptTokens } })
+      };
+    };
+
+  it('reads the minute from its header and the template from usage', async () => {
+    assert.deepEqual(await measureLimits({ pin, apiKey: 'k', fetch: groq() }), {
+      tokensPerMinute: 8000,
+      templateTokens: 74
+    });
+  });
+
+  it('asks the pinned model for one token', async () => {
+    const seen = [];
+    await measureLimits({ pin, apiKey: 'k', fetch: groq({}, seen) });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].body.model, 'openai/gpt-oss-120b');
+    assert.equal(seen[0].body.max_completion_tokens, 1);
+  });
+
+  it('follows a limit that has changed', async () => {
+    const limits = await measureLimits({
+      pin,
+      apiKey: 'k',
+      fetch: groq({ limit: '6000', promptTokens: 90 })
+    });
+    assert.deepEqual(limits, { tokensPerMinute: 6000, templateTokens: 88 });
+  });
+
+  it('gives up rather than guess', async () => {
+    const refused = groq({ ok: false });
+    const headerless = groq({ limit: null });
+    const offline = async () => {
+      throw new Error('ENOTFOUND');
+    };
+    for (const options of [
+      { pin, apiKey: 'k', fetch: refused },
+      { pin, apiKey: 'k', fetch: headerless },
+      { pin, apiKey: 'k', fetch: offline },
+      { pin, apiKey: undefined, fetch: groq() },
+      { pin: 'google:gemini-2.5-flash-lite', apiKey: 'k', fetch: groq() }
+    ]) {
+      assert.equal(await measureLimits(options), null);
+    }
+  });
+});
+
 describe('runEvals', () => {
   it('records every config and leaves a complete summary', async () => {
     const { resultsDir, workDir } = workspace();
@@ -629,6 +688,40 @@ describe('runEvals', () => {
     assert.equal(written.configs[1].verdict, 'fail');
     assert.equal(written.configs[1].exitCode, 100);
     assert.deepEqual(summary.planned, written.planned);
+  });
+
+  it('hands every child the limits the run measured, and records them', async () => {
+    const { resultsDir, workDir } = workspace();
+    const envs = [];
+    const spawn = async (command, args, { env }) => {
+      envs.push(env);
+      const jsonPath = args[args.indexOf('--output') + 2];
+      writeFileSync(jsonPath, sidecar([row(0)]));
+      return { exitCode: 0, durationMs: 1000 };
+    };
+    const limits = {
+      tokensPerMinute: 6000,
+      templateTokens: 80,
+      measured: true
+    };
+
+    const { summary } = await runEvals({
+      configs: ['evals/prompts/maplibre-cartography.yaml'],
+      name: '2026-10-22',
+      resultsDir,
+      workDir,
+      capMinutes: 30,
+      budgetMinutes: 240,
+      limits,
+      env: { GROQ_API_KEY: 'k' },
+      spawn,
+      log: () => {}
+    });
+
+    assert.equal(envs[0].EVAL_TOKENS_PER_MINUTE, '6000');
+    assert.equal(envs[0].EVAL_TEMPLATE_TOKENS, '80');
+    assert.equal(envs[0].GROQ_API_KEY, 'k');
+    assert.deepEqual(summary.limits, limits);
   });
 
   it('records the shard in the summary when the run is one slice of the week', async () => {
