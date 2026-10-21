@@ -61,6 +61,7 @@ console.log('The pre-push hook will run before every push to ensure:');
 console.log('  - Code is properly formatted');
 console.log('  - No spelling errors');
 console.log('  - Markdown is valid');
+console.log('  - Proper nouns and model pins are correct');
 console.log('  - Skills are valid');
 console.log('');
 console.log('To bypass the hook (not recommended), use: git push --no-verify');
