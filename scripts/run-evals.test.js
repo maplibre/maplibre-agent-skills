@@ -17,7 +17,10 @@ import {
   dryRunLines,
   longestWaiting,
   measureLimits,
+  paceMs,
   parseShard,
+  rateLimitWaits,
+  reserveAfter,
   runEvals,
   shardOf,
   shouldRetry,
@@ -146,6 +149,21 @@ describe('buildCommand', () => {
     );
   });
 
+  it("adds the config's pace after the script's own delay, so it is the one promptfoo keeps", () => {
+    const { args } = buildCommand({
+      config: 'evals/prompts/maplibre-cartography.yaml',
+      name: '2026-10-22',
+      resultsDir: 'evals/results',
+      workDir: '/tmp/eval',
+      delayMs: 46163
+    });
+    assert.deepEqual(
+      args.slice(args.indexOf('--delay'), args.indexOf('--delay') + 2),
+      ['--delay', '46163']
+    );
+    assert.ok(args.indexOf('--delay') > args.indexOf('--'));
+  });
+
   it('refuses a config or output path the shell could read', () => {
     assert.throws(
       () =>
@@ -251,37 +269,101 @@ describe('childEnv', () => {
 });
 
 describe('boundFor', () => {
-  it('bounds a config at the cap while the budget is wide open', () => {
+  it('gives a config what the budget has left after the reserve', () => {
     assert.deepEqual(
-      boundFor({ elapsedMs: 0, budgetMs: 240 * 60000, capMs: 30 * 60000 }),
-      { skip: false, boundMs: 30 * 60000 }
+      boundFor({
+        elapsedMs: 20 * 60000,
+        budgetMs: 240 * 60000,
+        reserveMs: 40 * 60000
+      }),
+      { skip: false, boundMs: 180 * 60000 }
     );
   });
 
-  it('shrinks the last config to whatever budget is left', () => {
+  it('gives the last config whatever budget is left', () => {
     assert.deepEqual(
-      boundFor({
-        elapsedMs: 225 * 60000,
-        budgetMs: 240 * 60000,
-        capMs: 30 * 60000
-      }),
+      boundFor({ elapsedMs: 225 * 60000, budgetMs: 240 * 60000 }),
       { skip: false, boundMs: 15 * 60000 }
     );
   });
 
   it('skips a config it cannot give five minutes', () => {
     assert.equal(
-      boundFor({
-        elapsedMs: 237 * 60000,
-        budgetMs: 240 * 60000,
-        capMs: 30 * 60000
-      }).skip,
+      boundFor({ elapsedMs: 237 * 60000, budgetMs: 240 * 60000 }).skip,
       true
     );
     assert.equal(
-      boundFor({ elapsedMs: 0, budgetMs: 0, capMs: 60000 }).skip,
+      boundFor({
+        elapsedMs: 0,
+        budgetMs: 240 * 60000,
+        reserveMs: 236 * 60000
+      }).skip,
       true
     );
+    assert.equal(boundFor({ elapsedMs: 0, budgetMs: 0 }).skip, true);
+  });
+});
+
+describe('paceMs', () => {
+  it("spaces requests by the largest one's share of the minute", () => {
+    assert.equal(paceMs({ largest: 8000, tokensPerMinute: 8000 }), 60000);
+    assert.equal(paceMs({ largest: 6155, tokensPerMinute: 8000 }), 46163);
+    assert.equal(paceMs({ largest: 6155, tokensPerMinute: 30000 }), 12310);
+  });
+});
+
+describe('reserveAfter', () => {
+  const costs = new Map([
+    ['b.yaml', { firstPass: 300, largest: 120, requests: 3 }],
+    ['c.yaml', { firstPass: 100, largest: 60, requests: 2 }]
+  ]);
+
+  it('adds up the paced requests of the configs the day still holds', () => {
+    // b needs 300 + 4 * 120 = 780 tokens, c 100 + 4 * 60 = 340.
+    assert.equal(
+      reserveAfter({
+        rest: ['b.yaml', 'c.yaml'],
+        costs,
+        tokensLeft: 1120,
+        tokensPerMinute: 120
+      }),
+      3 * 60000 + 2 * 30000
+    );
+  });
+
+  it('leaves out a config the day cannot hold, and one it cannot size', () => {
+    assert.equal(
+      reserveAfter({
+        rest: ['b.yaml', 'unsized.yaml', 'c.yaml'],
+        costs,
+        tokensLeft: 400,
+        tokensPerMinute: 120
+      }),
+      2 * 30000
+    );
+  });
+});
+
+describe('rateLimitWaits', () => {
+  it('sums the waits a debug log records, by host', () => {
+    const log = [
+      '2026-10-22T17:53:33.438Z [DEBUG] [logger-B9f-j62Q.js:1215]: Rate limited on URL https://api.groq.com/openai/v1/chat/completions: HTTP 429 Too Many Requests, attempt 1/5, waiting before retry...',
+      '2026-10-22T17:53:33.438Z [DEBUG] [logger-B9f-j62Q.js:1215]: Rate limited, waiting 518720ms (base 518400ms + 320ms jitter) before retry',
+      'Rate limited on URL https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=***: HTTP 429 Too Many Requests, attempt 1/5, waiting before retry...',
+      'Rate limited, waiting 60000ms (base 60000ms + 0ms jitter) before retry',
+      'Rate limited on URL https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=***: HTTP 429 Too Many Requests, attempt 2/5, waiting before retry...',
+      'Rate limited, waiting 61000ms (base 60000ms + 1000ms jitter) before retry'
+    ].join('\n');
+    assert.deepEqual(rateLimitWaits(log), [
+      { host: 'api.groq.com', count: 1, ms: 518720 },
+      { host: 'generativelanguage.googleapis.com', count: 2, ms: 121000 }
+    ]);
+  });
+
+  it('finds nothing in a log without waits, or no log at all', () => {
+    assert.deepEqual(rateLimitWaits('Running 5 test cases'), []);
+    assert.deepEqual(rateLimitWaits(''), []);
+    assert.deepEqual(rateLimitWaits(null), []);
   });
 });
 
@@ -723,7 +805,6 @@ describe('runEvals', () => {
       name: '2026-09-06',
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 240,
       spawn,
       log: () => {}
@@ -767,7 +848,6 @@ describe('runEvals', () => {
       name: '2026-10-22',
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 240,
       limits,
       env: { GROQ_API_KEY: 'k' },
@@ -806,7 +886,6 @@ describe('runEvals', () => {
       name: '2026-10-22',
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 240,
       costs,
       tokensPerDay: 230,
@@ -860,7 +939,6 @@ describe('runEvals', () => {
       name: '2026-10-22',
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 240,
       logsDir,
       spawn,
@@ -890,7 +968,6 @@ describe('runEvals', () => {
       shard: '1/2',
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 240,
       spawn,
       log: () => {}
@@ -926,7 +1003,6 @@ describe('runEvals', () => {
       name: '2026-10-18',
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 240,
       spawn,
       log: () => {}
@@ -966,7 +1042,6 @@ describe('runEvals', () => {
       baseline: true,
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 240,
       spawn,
       log: () => {}
@@ -991,7 +1066,6 @@ describe('runEvals', () => {
       name: '2026-09-06',
       resultsDir,
       workDir,
-      capMinutes: 30,
       budgetMinutes: 0,
       spawn,
       log: () => {}
@@ -1040,24 +1114,126 @@ describe('longestWaiting', () => {
   });
 });
 
+describe('runEvals pacing and bounds', () => {
+  it("paces each config's requests and bounds it by what the budget leaves after the configs planned behind it", async () => {
+    const { resultsDir, workDir } = workspace();
+    const calls = [];
+    const spawn = async (command, args, { env }) => {
+      calls.push({ args, bound: env.PROMPTFOO_MAX_EVAL_TIME_MS });
+      writeFileSync(args[args.indexOf('--output') + 2], sidecar([row(0)]));
+      return { exitCode: 0, durationMs: 1000 };
+    };
+
+    const { summary } = await runEvals({
+      configs: ['evals/prompts/a.yaml', 'evals/prompts/b.yaml'],
+      name: '2026-10-22',
+      resultsDir,
+      workDir,
+      budgetMinutes: 10,
+      limits: { tokensPerMinute: 120, templateTokens: 10, measured: true },
+      costs: new Map([
+        ['evals/prompts/a.yaml', { firstPass: 100, largest: 60, requests: 2 }],
+        ['evals/prompts/b.yaml', { firstPass: 300, largest: 120, requests: 3 }]
+      ]),
+      spawn,
+      now: () => 0,
+      log: () => {}
+    });
+
+    assert.deepEqual(
+      calls.map(({ args }) => args[args.indexOf('--delay') + 1]),
+      ['30000', '60000']
+    );
+    // a keeps b's three requests, a minute apart, in reserve; b gets the rest.
+    assert.deepEqual(
+      calls.map(({ bound }) => Number(bound)),
+      [10 * 60000 - 3 * 60000, 10 * 60000]
+    );
+    assert.deepEqual(
+      summary.configs.map(({ delayMs, boundMs }) => [delayMs, boundMs]),
+      [
+        [30000, 7 * 60000],
+        [60000, 10 * 60000]
+      ]
+    );
+  });
+
+  it("names the rate-limit waits a child's debug log records, in the run log and the summary", async () => {
+    const { resultsDir, workDir } = workspace();
+    const logsDir = mkdtempSync(join(tmpdir(), 'run-evals-logs-'));
+    const spawn = async (command, args) => {
+      const dir = join(logsDir, '2026-10-22-maplibre-cartography');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'promptfoo-debug-1.log'),
+        [
+          'Rate limited on URL https://generativelanguage.googleapis.com/v1beta/models/x:generateContent: HTTP 429 Too Many Requests, attempt 1/5, waiting before retry...',
+          'Rate limited, waiting 90000ms (base 90000ms + 0ms jitter) before retry'
+        ].join('\n')
+      );
+      writeFileSync(args[args.indexOf('--output') + 2], sidecar([row(0)]));
+      return { exitCode: 0, durationMs: 1000 };
+    };
+    const lines = [];
+
+    const { summary } = await runEvals({
+      configs: ['evals/prompts/maplibre-cartography.yaml'],
+      name: '2026-10-22',
+      resultsDir,
+      workDir,
+      budgetMinutes: 240,
+      logsDir,
+      spawn,
+      log: (line) => lines.push(line)
+    });
+
+    assert.ok(
+      lines.includes(
+        '  rate-limit waits: generativelanguage.googleapis.com 1 time, 1m 30s'
+      )
+    );
+    assert.deepEqual(summary.configs[0].waits, [
+      { host: 'generativelanguage.googleapis.com', count: 1, ms: 90000 }
+    ]);
+  });
+});
+
 describe('dryRunLines', () => {
-  it('prints the command, the bound, and both output paths per config', () => {
+  it('prints each command at its pace, both output paths, and the budget', () => {
     const lines = dryRunLines({
       configs: ['evals/prompts/maplibre-cartography.yaml'],
       name: '2026-09-06',
       baseline: false,
       resultsDir: 'evals/results',
       workDir: '/tmp/eval',
-      capMinutes: 30,
-      budgetMinutes: 240
+      budgetMinutes: 240,
+      costs: new Map([
+        [
+          'evals/prompts/maplibre-cartography.yaml',
+          { firstPass: 18000, largest: 6000, requests: 3 }
+        ]
+      ]),
+      tokensPerMinute: 8000
     });
     const command = lines.find((line) => line.includes('eval:graded'));
-    assert.match(command, /PROMPTFOO_MAX_EVAL_TIME_MS=1800000/);
+    assert.match(command, /--delay 45000 /);
     assert.match(
       command,
       /--output evals\/results\/2026-09-06-maplibre-cartography\.csv \/tmp\/eval\/2026-09-06-maplibre-cartography\.json/
     );
-    assert.ok(lines.some((line) => line.includes('240')));
+    assert.ok(lines.some((line) => line.includes('240 minutes')));
+  });
+
+  it('leaves the pinned delay alone for a config it cannot size', () => {
+    const lines = dryRunLines({
+      configs: ['evals/prompts/maplibre-cartography.yaml'],
+      name: '2026-09-06',
+      baseline: false,
+      resultsDir: 'evals/results',
+      workDir: '/tmp/eval',
+      budgetMinutes: 240
+    });
+    assert.ok(lines.every((line) => !line.includes('--delay')));
   });
 });
 

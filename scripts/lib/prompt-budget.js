@@ -70,13 +70,14 @@ export function sizeTests(
 
 /**
  * The most one pass over these tests can spend, since Groq stops each answer at
- * its cap, and the largest single request.
+ * its cap, the largest single request, and how many requests the pass makes.
  */
 export function passCost(sizes) {
   const requests = sizes.map((size) => size.request);
   return {
     firstPass: requests.reduce((total, request) => total + request, 0),
-    largest: Math.max(0, ...requests)
+    largest: Math.max(0, ...requests),
+    requests: requests.length
   };
 }
 

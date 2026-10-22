@@ -60,6 +60,21 @@
  * config list — that combination is refused as ambiguous rather than quietly
  * running a subset of what the caller named.
  *
+ * Each config's requests are paced: promptfoo gets a `--delay` long enough
+ * (`paceMs`) that Groq's per-minute limit has room for the config's largest
+ * request again before the next one goes out. Without it nearly every request
+ * after a config's first drew a 429 for the minute, and promptfoo 0.122 sizes
+ * its wait after one from Groq's daily-request refill header
+ * (`x-ratelimit-reset-requests`, read first by `parseRateLimitHeaders` in
+ * node_modules/promptfoo/dist/src/fetch-DTVomFtf.js) rather than from the
+ * seconds Groq states: 86 s or more per request from 2026-10-16 to 10-22. Each
+ * child's bound is whatever the run's budget has left after the least time the
+ * configs planned after it need at their pace (`boundFor`, `reserveAfter`), so
+ * a config that meets a slow judge uses slack the others do not need, and no
+ * per-config cap is left for a bigger config to outgrow. After every child, the
+ * rate-limit waits its debug log records go into the run log by host
+ * (`rateLimitWaits`).
+ *
  * Config and output paths are validated before they are placed in the `npm run`
  * argv, which a shell receives.
  *
@@ -76,10 +91,10 @@
  *   --work-dir <d>       where the sidecars, verdicts, and summary go
  *   --config-dir <d>     where the eval configs live (default evals/prompts)
  *
- * Env: EVAL_CONFIG_MINUTES, EVAL_BUDGET_MINUTES, EVAL_WORK_DIR,
- * EVAL_TOKENS_PER_DAY, EVAL_SHARD, INPUT_CONFIGS, INPUT_BASELINE, GROQ_API_KEY. The workflow sets the bounds and the plan's
- * settings in YAML so they are visible and tunable there; the defaults here
- * match.
+ * Env: EVAL_BUDGET_MINUTES, EVAL_WORK_DIR, EVAL_TOKENS_PER_DAY, EVAL_SHARD,
+ * INPUT_CONFIGS, INPUT_BASELINE, GROQ_API_KEY. The workflow sets the budget and
+ * the plan's settings in YAML so they are visible and tunable there; the
+ * defaults here match.
  */
 import { spawn as spawnChild } from 'node:child_process';
 import {
@@ -99,14 +114,14 @@ import {
   isSafeConfigPath,
   listEvalConfigs,
   runName,
-  skillOf
+  skillOf,
+  waitsLine
 } from './lib/eval-verdicts.js';
 import { setOutputs } from './lib/github-output.js';
 import { countTokens, limitsFrom } from '../evals/prompts/lib/request-size.mjs';
 import { passCost, sizeConfig } from './lib/prompt-budget.js';
 import { lastGraded } from './lib/results-history.js';
 
-const CONFIG_MINUTES_DEFAULT = 30;
 const BUDGET_MINUTES_DEFAULT = 240;
 
 // How many generator tokens one day of the Groq key holds: its free tier's
@@ -209,6 +224,9 @@ export function shardOf(configs, { index, count }) {
  *
  * `retryOf` is the first attempt's sidecar. The re-run it builds writes its own
  * `-retry` files beside the first attempt's, so the publish job commits both.
+ *
+ * `delayMs` is the config's pace (`paceMs`). It follows the script's own
+ * `--delay`, and promptfoo keeps the last value it is given.
  */
 export function buildCommand({
   config,
@@ -216,7 +234,8 @@ export function buildCommand({
   resultsDir,
   workDir,
   baseline = false,
-  retryOf = null
+  retryOf = null,
+  delayMs = null
 }) {
   const skill = skillOf(config);
   const stem = `${name}-${skill}${retryOf === null ? '' : '-retry'}`;
@@ -255,6 +274,7 @@ export function buildCommand({
       ...(retryOf === null
         ? []
         : ['--filter-failing', retryOf, '--repeat', String(RETRY_REPEATS)]),
+      ...(delayMs === null ? [] : ['--delay', String(delayMs)]),
       '--output',
       csvPath,
       jsonPath
@@ -285,6 +305,34 @@ export function dayRefusal(text) {
   if (all.length === 0) return null;
   const [, limit, used] = all.at(-1);
   return { tokensPerDay: Number(limit), used: Number(used) };
+}
+
+/**
+ * The rate-limit waits a child's debug log records, by host: how many and how
+ * long in all. promptfoo logs each one as "Rate limited on URL <url>: HTTP
+ * <status>" and then "Rate limited, waiting <n>ms" (fetchWithRetries,
+ * node_modules/promptfoo/dist/src/fetch-DTVomFtf.js:1094 and :1264), and only
+ * at debug level, so the CI log never shows them otherwise.
+ */
+export function rateLimitWaits(text) {
+  const waits = new Map();
+  let host = 'unknown host';
+  for (const line of String(text ?? '').split('\n')) {
+    const url = /Rate limited on URL (\S+): HTTP/.exec(line);
+    if (url) {
+      try {
+        host = new URL(url[1]).host;
+      } catch {
+        host = 'unknown host';
+      }
+      continue;
+    }
+    const wait = /Rate limited, waiting (\d+)ms/.exec(line);
+    if (!wait) continue;
+    const total = waits.get(host) ?? { count: 0, ms: 0 };
+    waits.set(host, { count: total.count + 1, ms: total.ms + Number(wait[1]) });
+  }
+  return [...waits].map(([name, total]) => ({ host: name, ...total }));
 }
 
 /** Every promptfoo debug log a child left in `dir`, as one text. */
@@ -373,11 +421,43 @@ export async function daySpent({ pin, apiKey, fetch = globalThis.fetch }) {
   }
 }
 
-/** How long this config may take: the cap, or whatever budget is left. */
-export function boundFor({ elapsedMs, budgetMs, capMs }) {
-  const remaining = budgetMs - elapsedMs;
+/**
+ * How far apart one config's requests go so that none meets Groq's per-minute
+ * limit: the limit refills in a minute, and the largest request needs this
+ * share of it back before the next one is sent.
+ */
+export function paceMs({ largest, tokensPerMinute }) {
+  return Math.ceil((60000 * largest) / tokensPerMinute);
+}
+
+/**
+ * The least time the configs after this one need, of those the day's tokens
+ * still hold: each one's requests at its pace. `rest` is the remaining run
+ * order; `tokensLeft` is what the day has once this config's worst case is
+ * spent, and the configs are taken the way `runEvals` will take them.
+ */
+export function reserveAfter({ rest, costs, tokensLeft, tokensPerMinute }) {
+  let reserve = 0;
+  for (const config of rest) {
+    const cost = costs?.get(config);
+    if (!cost) continue;
+    const need = dayCost(cost);
+    if (need > tokensLeft) continue;
+    tokensLeft -= need;
+    reserve +=
+      cost.requests * paceMs({ largest: cost.largest, tokensPerMinute });
+  }
+  return reserve;
+}
+
+/**
+ * How long this config may take: whatever the run's budget has left after
+ * `reserveMs`, the least time the configs planned after it need.
+ */
+export function boundFor({ elapsedMs, budgetMs, reserveMs = 0 }) {
+  const remaining = budgetMs - elapsedMs - reserveMs;
   if (remaining < MIN_CONFIG_MS) return { skip: true, boundMs: 0 };
-  return { skip: false, boundMs: Math.min(capMs, remaining) };
+  return { skip: false, boundMs: remaining };
 }
 
 /**
@@ -672,31 +752,40 @@ export function spawnEval(
   });
 }
 
+/**
+ * Each config's command at its pace. A child's bound depends on how long the
+ * children before it took, so the dry run names the budget it comes from.
+ */
 export function dryRunLines({
   configs,
   name,
   baseline,
   resultsDir,
   workDir,
-  capMinutes,
-  budgetMinutes
+  budgetMinutes,
+  costs = null,
+  tokensPerMinute = null
 }) {
-  const capMs = capMinutes * 60000;
   const lines = [
     `Run name: ${name}`,
-    `Bounds: ${capMinutes} minutes per config, ${budgetMinutes} minutes for the run.`,
+    `Budget: ${budgetMinutes} minutes for the run; each config may use what is left after the least time the configs planned after it need.`,
     `Verdicts: ${join(workDir, 'verdicts.txt')}; summary: ${join(workDir, 'summary.json')}`,
     ''
   ];
   for (const config of configs) {
+    const cost = costs?.get(config);
     const { args } = buildCommand({
       config,
       name,
       resultsDir,
       workDir,
-      baseline
+      baseline,
+      delayMs:
+        cost && tokensPerMinute
+          ? paceMs({ largest: cost.largest, tokensPerMinute })
+          : null
     });
-    lines.push(`PROMPTFOO_MAX_EVAL_TIME_MS=${capMs} npm ${args.join(' ')}`);
+    lines.push(`npm ${args.join(' ')}`);
   }
   return lines;
 }
@@ -708,7 +797,6 @@ export async function runEvals({
   shard = null,
   resultsDir,
   workDir,
-  capMinutes = CONFIG_MINUTES_DEFAULT,
   budgetMinutes = BUDGET_MINUTES_DEFAULT,
   limits = null,
   costs = null,
@@ -734,7 +822,6 @@ export async function runEvals({
   const summaryPath = join(workDir, 'summary.json');
   writeFileSync(verdictsPath, '');
 
-  const capMs = capMinutes * 60000;
   const budgetMs = budgetMinutes * 60000;
   const summary = {
     name,
@@ -742,7 +829,7 @@ export async function runEvals({
     // Which slice of the week this run is, so the artifact says so itself;
     // `planned` below is already only this slice's skills.
     ...(shard === null ? {} : { shard }),
-    bounds: { configMinutes: capMinutes, budgetMinutes },
+    bounds: { budgetMinutes },
     ...(limits === null ? {} : { limits }),
     // Filled in as the run goes: a config joins `planned` when it starts, and
     // one the day could not hold is `waiting`, so it is never reported missing.
@@ -753,11 +840,12 @@ export async function runEvals({
   writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
 
   const started = now();
-  for (const config of configs) {
+  for (const [index, config] of configs.entries()) {
     const skill = skillOf(config);
     // The longest-waiting config whose worst case fits in what the day has
     // left runs next; one that does not is first in line tomorrow.
-    const need = costs?.get(config) ? dayCost(costs.get(config)) : 0;
+    const cost = costs?.get(config) ?? null;
+    const need = cost ? dayCost(cost) : 0;
     if (summary.day.spentByGroq || summary.day.spent + need > tokensPerDay) {
       log(
         `${skill}: waits for another day; it may need ${need} generator tokens and the day has ${tokensPerDay - summary.day.spent} left.`
@@ -767,10 +855,27 @@ export async function runEvals({
       continue;
     }
     summary.planned.push(skill);
+    const delayMs =
+      cost && limits
+        ? paceMs({
+            largest: cost.largest,
+            tokensPerMinute: limits.tokensPerMinute
+          })
+        : null;
+    // What the configs after this one need at the least, so a slow config
+    // cannot take the time they would need to run at all.
+    const reserveMs = limits
+      ? reserveAfter({
+          rest: configs.slice(index + 1),
+          costs,
+          tokensLeft: tokensPerDay - summary.day.spent - need,
+          tokensPerMinute: limits.tokensPerMinute
+        })
+      : 0;
     const bound = boundFor({
       elapsedMs: now() - started,
       budgetMs,
-      capMs
+      reserveMs
     });
 
     let record;
@@ -798,10 +903,11 @@ export async function runEvals({
         name,
         resultsDir,
         workDir,
-        baseline
+        baseline,
+        delayMs
       });
       log(
-        `${skill}: running with a ${Math.round(bound.boundMs / 60000)}-minute bound.`
+        `${skill}: running${delayMs === null ? '' : ` with requests ${Math.round(delayMs / 1000)}s apart`} and a ${Math.round(bound.boundMs / 60000)}-minute bound.`
       );
       // A sidecar left by an earlier run must not stand in for one the child
       // never wrote.
@@ -826,11 +932,15 @@ export async function runEvals({
       const retryBound = boundFor({
         elapsedMs: now() - started,
         budgetMs,
-        capMs
+        reserveMs
       });
+      const debugLog = logsDir
+        ? readDebugLogs(join(logsDir, `${name}-${skill}`))
+        : '';
+      const waits = rateLimitWaits(debugLog);
+      if (waits.length > 0) log(`  rate-limit waits: ${waitsLine(waits)}`);
       // A first attempt Groq refused for the day would only be refused again.
-      refused =
-        logsDir && dayRefusal(readDebugLogs(join(logsDir, `${name}-${skill}`)));
+      refused = logsDir && dayRefusal(debugLog);
       if (
         shouldRetry({ baseline, killed: outcome.killed === true, verdict }) &&
         !retryBound.skip &&
@@ -846,7 +956,8 @@ export async function runEvals({
           resultsDir,
           workDir,
           baseline,
-          retryOf: sidecarPath
+          retryOf: sidecarPath,
+          delayMs
         });
         const retryPath = join(workDir, `${name}-${skill}-retry.json`);
         rmSync(retryPath, { force: true });
@@ -863,10 +974,18 @@ export async function runEvals({
           retryText: readSidecar(retryPath)
         });
         verdict = { ...combined, reason: null };
+        const retryWaits = rateLimitWaits(
+          logsDir ? readDebugLogs(join(logsDir, `${name}-${skill}-retry`)) : ''
+        );
+        if (retryWaits.length > 0) {
+          log(`  rate-limit waits in the re-run: ${waitsLine(retryWaits)}`);
+        }
         retry = {
           exitCode: retryOutcome.exitCode ?? null,
           killed: retryOutcome.killed === true,
           durationMs: retryOutcome.durationMs ?? null,
+          boundMs: retryBound.boundMs,
+          waits: retryWaits,
           tests: combined.retried
         };
         for (const test of combined.retried) {
@@ -885,6 +1004,9 @@ export async function runEvals({
         signatures: verdict.signatures,
         reason: verdict.reason ?? outcome.spawnError ?? null,
         durationMs: outcome.durationMs ?? null,
+        delayMs,
+        boundMs: bound.boundMs,
+        waits,
         exitCode: outcome.exitCode ?? null,
         tokenUsage: verdict.tokenUsage ?? null,
         retry
@@ -979,9 +1101,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const resultsDir = args.resultsDir ?? 'evals/results';
   const workDir =
     args.workDir ?? process.env.EVAL_WORK_DIR ?? join(tmpdir(), 'eval');
-  const capMinutes = Number(
-    process.env.EVAL_CONFIG_MINUTES || CONFIG_MINUTES_DEFAULT
-  );
   const budgetMinutes = Number(
     process.env.EVAL_BUDGET_MINUTES || BUDGET_MINUTES_DEFAULT
   );
@@ -1057,8 +1176,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         baseline,
         resultsDir,
         workDir,
-        capMinutes,
-        budgetMinutes
+        budgetMinutes,
+        costs,
+        tokensPerMinute: limits.tokensPerMinute
       }).join('\n')
     );
     process.exit(0);
@@ -1089,7 +1209,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     shard: shardSpec === '' ? null : shardSpec,
     resultsDir,
     workDir,
-    capMinutes,
     budgetMinutes,
     limits: { ...limits, measured: measured !== null },
     costs,

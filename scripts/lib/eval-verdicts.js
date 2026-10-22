@@ -304,6 +304,36 @@ function thousands(value) {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
+function minutesSeconds(ms) {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60
+    ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+/** Rate-limit waits from several attempts, summed by host. */
+export function mergeWaits(...lists) {
+  const byHost = new Map();
+  for (const wait of lists.flat()) {
+    const total = byHost.get(wait.host) ?? { count: 0, ms: 0 };
+    byHost.set(wait.host, {
+      count: total.count + wait.count,
+      ms: total.ms + wait.ms
+    });
+  }
+  return [...byHost].map(([host, total]) => ({ host, ...total }));
+}
+
+/** Rate-limit waits by host, how many and how long, as one line. */
+export function waitsLine(waits) {
+  return waits
+    .map(
+      (wait) =>
+        `${wait.host} ${wait.count} time${wait.count === 1 ? '' : 's'}, ${minutesSeconds(wait.ms)}`
+    )
+    .join('; ');
+}
+
 function publishLines(publish = {}) {
   const commit =
     publish.commit === 'success'
@@ -356,9 +386,11 @@ export function classificationBlock({ summary, evalResult, publish }) {
       const config = bySkill.get(skill);
       const verdict = config?.verdict ?? 'not recorded';
       const rerun = config?.retry?.tests?.length ?? 0;
+      const waits = mergeWaits(config?.waits ?? [], config?.retry?.waits ?? []);
       const signalList = [
         ...(config?.signatures ?? []),
-        ...(rerun > 0 ? [`re-ran ${rerun} test${rerun === 1 ? '' : 's'}`] : [])
+        ...(rerun > 0 ? [`re-ran ${rerun} test${rerun === 1 ? '' : 's'}`] : []),
+        ...(waits.length > 0 ? [`rate-limit waits: ${waitsLine(waits)}`] : [])
       ];
       const signals = signalList.length ? signalList.join(', ') : '—';
       lines.push(`| ${skill} | ${verdict} | ${signals} |`);

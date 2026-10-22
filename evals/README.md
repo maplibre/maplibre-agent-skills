@@ -83,7 +83,7 @@ npm run eval:graded -- --config evals/prompts/<skill-name>.yaml
 
 `eval:graded` (see `package.json`) is the one place the judge (`--grader`), `--delay`, and
 concurrency are pinned — CI calls the same script. Don't hand-roll those flags in a
-second location; a value copied here would drift the moment `package.json` changes.
+second location; a value copied here would drift the moment `package.json` changes. CI adds one flag, a `--delay` per config that it computes from the measured per-minute limit (see [CI](#ci)).
 
 A bare `npm run eval` is not a Groq-judged run. With no `--grader`, Promptfoo picks a
 default judge from whichever credentials it finds in the environment — `GROQ_API_KEY` is
@@ -202,11 +202,13 @@ context with its secrets regardless of whose ref it checks out.
 harness (`evals/prompts/lib/`) as a reason to look closer — `--ignore-scripts` blocks
 a malicious lifecycle script, not a modified `eval:graded` command.
 
-**Three verdicts, and only two of them move a status.** `scripts/run-evals.js` runs one `npm run eval:graded` per config and records `pass`, `fail`, or `error` for each. `error` means the run reached no graded verdict — a provider or judge failure, a config the per-config time bound cut off, or one the run budget never reached — and `scripts/sync-skill-status.js` leaves those skills' `status:` fields exactly as they were, in either direction, so a rate-limited Sunday cannot demote a skill. A skill the run planned but produced no line for is reported with a `::warning::` and makes the run partial. The two bounds are `EVAL_CONFIG_MINUTES` and `EVAL_BUDGET_MINUTES` on the "Run evals" step in `eval.yml`; the run's verdict artifact holds `verdicts.txt`, a `summary.json` with per-config counts, error signatures, and token usage, and one JSON sidecar per config.
+**Three verdicts, and only two of them move a status.** `scripts/run-evals.js` runs one `npm run eval:graded` per config and records `pass`, `fail`, or `error` for each. `error` means the run reached no graded verdict — a provider or judge failure, a config its time bound cut off, or one the run budget never reached — and `scripts/sync-skill-status.js` leaves those skills' `status:` fields exactly as they were, in either direction, so a rate-limited Sunday cannot demote a skill. A skill the run planned but produced no line for is reported with a `::warning::` and makes the run partial. The time comes from `EVAL_BUDGET_MINUTES` on the "Run evals" step in `eval.yml`: each config may use what the budget has left after the least time the configs planned after it need. The run's verdict artifact holds `verdicts.txt`, a `summary.json` with per-config counts, error signatures, and token usage, and one JSON sidecar per config.
 
 **A test that does not pass runs twice more before its verdict stands.** The runner hands the first attempt's JSON to `--filter-failing --repeat 2`, and the failure stands unless both re-runs pass. Baseline runs are never re-run, and neither is a config the time bound cut off or one with more than two tests down. The re-run's `-retry` CSV is committed beside the first.
 
 **Each day's run plans itself.** `scripts/run-evals.js` orders the configs by the day each last got a verdict, read from the CSVs in `evals/results/`; a day that left any test in `ERROR` doesn't count, so an errored config stays first in line. It runs each config, in that order, whose worst case (every request at full size, every allowed re-run) fits in what `EVAL_TOKENS_PER_DAY` has left after the run's actual spend, and the rest go first the next day. How often a config is graded follows from how many configs there are and how big they are; `npm run lint:prompt-budget` reports how many days a full round takes. If Groq refuses a request for its daily limit, which promptfoo records in Groq's words only in its debug log, no further config starts and the drift issue quotes Groq's figures. A dispatch runs the configs it names, in that order, or every config longest-waiting first, and `--shard k/n` still takes a slice by hand.
+
+**Requests are paced, so none meets the per-minute limit.** The runner gives each config a `--delay` of its largest request's share of a minute at the measured limit, so the limit has room for each request when it is sent. After a per-minute 429, promptfoo 0.122 waits as long as Groq's daily-request header says rather than the seconds Groq states, so each one cost 86 s or more. After every config the run log names the rate-limit waits promptfoo's debug log recorded, by host, and the drift issue lists them under Signals.
 
 `npm run lint:model-pins` fails on any provider id that drifts from the [Setup](#setup)
 pins (the generator in `providers.yaml`, the judge in the `eval:graded` script).

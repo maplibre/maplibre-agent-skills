@@ -10,11 +10,13 @@ import {
   isSafeCliPath,
   isSafeConfigPath,
   listEvalConfigs,
+  mergeWaits,
   missingVerdicts,
   parseVerdicts,
   runName,
   signatureOf,
-  skillOf
+  skillOf,
+  waitsLine
 } from './lib/eval-verdicts.js';
 
 // Shaped like a real `promptfoo eval --output x.json` file: the top level is
@@ -675,6 +677,50 @@ describe('classificationBlock', () => {
     });
     assert.match(block, /\| maplibre-cartography \| fail \| re-ran 1 test \|/);
     assert.match(block, /\| maplibre-fonts-glyphs \| pass \| — \|/);
+  });
+
+  it('names the rate-limit waits of both attempts, by host', () => {
+    const summary = withConfigs([
+      {
+        skill: 'maplibre-cartography',
+        verdict: 'pass',
+        signatures: [],
+        waits: [
+          { host: 'generativelanguage.googleapis.com', count: 4, ms: 1080000 }
+        ],
+        retry: {
+          tests: [],
+          waits: [
+            { host: 'generativelanguage.googleapis.com', count: 1, ms: 60000 },
+            { host: 'api.groq.com', count: 1, ms: 86400 }
+          ]
+        }
+      }
+    ]);
+    const block = classificationBlock({
+      summary,
+      evalResult: 'success',
+      publish: { commit: 'success', sync: 'success', statusCommit: 'success' }
+    });
+    assert.match(
+      block,
+      /\| maplibre-cartography \| pass \| rate-limit waits: generativelanguage\.googleapis\.com 5 times, 19m 0s; api\.groq\.com 1 time, 1m 26s \|/
+    );
+  });
+
+  it('sums waits by host across attempts and reads them as one line', () => {
+    const waits = mergeWaits(
+      [{ host: 'api.groq.com', count: 2, ms: 172800 }],
+      [{ host: 'api.groq.com', count: 1, ms: 30000 }],
+      []
+    );
+    assert.deepEqual(waits, [{ host: 'api.groq.com', count: 3, ms: 202800 }]);
+    assert.equal(waitsLine(waits), 'api.groq.com 3 times, 3m 23s');
+    assert.equal(
+      waitsLine([{ host: 'api.groq.com', count: 1, ms: 8000 }]),
+      'api.groq.com 1 time, 8s'
+    );
+    assert.equal(waitsLine([]), '');
   });
 
   it('says which configs wait for another day, and when Groq said the day was spent', () => {
