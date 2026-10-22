@@ -188,7 +188,8 @@ Run `npm run check` frequently while developing, not just before pushing — it 
 4. **Terminology** — proper noun capitalization (e.g. `MapLibre` not `Maplibre`)
 5. **Model pins** — provider ids must match the pinned generator/judge
 6. **Eval request sizes** — every eval answer keeps at least half its token budget, and every config fits in a day's generator tokens ([details](evals/README.md#request-size))
-7. **Skills validation** — YAML frontmatter and structure
+7. **Eval tripwires** — no `not-icontains` check matches the skill its test injects ([details](evals/README.md#writing-eval-prompts))
+8. **Skills validation** — YAML frontmatter and structure
 
 All checks pass when the output ends with:
 

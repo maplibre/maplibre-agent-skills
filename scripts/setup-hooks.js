@@ -63,6 +63,7 @@ console.log('  - No spelling errors');
 console.log('  - Markdown is valid');
 console.log('  - Proper nouns and model pins are correct');
 console.log('  - Every eval answer keeps room to finish');
+console.log('  - No eval tripwire matches the skill it tests');
 console.log('  - Skills are valid');
 console.log('');
 console.log('To bypass the hook (not recommended), use: git push --no-verify');

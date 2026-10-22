@@ -25,9 +25,10 @@ then the user prompt.
 Passing `--var injectSkill=false` on the CLI omits the system message, leaving the model
 to answer from training data alone. This is used for the baseline check.
 
-Two assertion types are used:
+Three assertion types are used:
 
 - **`icontains`** — deterministic substring check for a required term (an API name, CLI command, or config key) whose absence makes the response wrong. Pair with `llm-rubric` for the broader correctness check.
+- **`not-icontains`** — tripwire for a term only a wrong answer contains, such as a property MapLibre does not define. Never one the skill itself uses; see [Writing eval prompts](#writing-eval-prompts).
 - **`llm-rubric`** — qualitative check evaluated by a judge model; the `value` field
   describes what a correct answer must include — keep items specific and checkable,
   not "gives good advice"
@@ -158,6 +159,8 @@ artifact, in its own clause: "must do X rather than Y" is satisfied by an answer
 
 Describe only the symptom in the prompt. A prompt that names the API, property, or value the
 rubric wants grades the harness, not the model.
+
+**Tripwires:** a `not-icontains` must not name anything the skill says, including the mistakes it warns against, because an answer that follows the skill can repeat them. Grade those in the `llm-rubric`, where the judge can tell a warning from a recommendation. `npm run lint:tripwires` fails on a tripwire that matches its skill, except in negative tests.
 
 **Negative tests:** The question should be adjacent to the skill's topic — close enough
 that an over-eager agent might wrongly push the new skill information, but where doing so
