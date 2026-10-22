@@ -14,6 +14,8 @@ test doesn't need the other seven re-run. Test 8's raw CSVs:
 [with-skill](latest/maplibre-v6-migration-setworkerurl-with-skill_2026-08-25.csv),
 [baseline](latest/maplibre-v6-migration-setworkerurl-baseline_2026-08-25.csv).
 
+Test 1 re-run 2026-10-22, three runs each way, after its rubric took over the `/dist/maplibre-gl.js` check from a tripwire the skill's own v5 example matched: with skill 3/3 PASS, baseline 3/3 FAIL. Raw CSVs: [with-skill](latest/maplibre-v6-migration-with-skill-test1_2026-10-22.csv), [baseline](latest/maplibre-v6-migration-baseline-test1_2026-10-22.csv).
+
 | #   | Test                                            | Type         | Baseline (no skill)                                           | With skill                                                            |
 | --- | ----------------------------------------------- | ------------ | ------------------------------------------------------------- | --------------------------------------------------------------------- |
 | 1   | CDN script tag, no bundler (ESM-only)           | Explicit     | FAIL — loads the dead v5 UMD bundle via `<script src>`        | PASS — `<script type="module">` against the `.mjs` build, pinned      |

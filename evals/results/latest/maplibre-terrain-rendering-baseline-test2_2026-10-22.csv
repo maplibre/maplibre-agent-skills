@@ -1,0 +1,696 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"implicit — runtime contour generation, off-the-shelf vs DIY",skills/maplibre-terrain-rendering/SKILL.md,false,"I want contour lines on my MapLibre GL JS map, generated at runtime from a raster-dem elevation source, rather than pre-rendering a separate vector contour tileset ahead of time. Is this possible, and how would I approach it?
+","## TL;DR  
+Yes – you can generate contour lines **on the fly** from a raster-DEM source in a MapLibre GL JS map, but you have to do the heavy lifting yourself (or in a tiny server-less helper). The typical recipe is:
+
+1. **Grab the raw elevation values** from the DEM tiles (e.g. Mapbox Terrain-RGB or a GeoTIFF tile service).  
+2. **Run a contouring algorithm** (Marching Squares / Marching Cubes) on that grid in a Web Worker.  
+3. **Emit GeoJSON LineStrings** (or a `FeatureCollection`) for the desired contour intervals.  
+4. **Add the GeoJSON as a source** and draw it with a normal `line` layer.  
+5. **Cache / reuse** the generated contours per tile/zoom so you don’t recompute on every frame.
+
+Below is a step-by-step guide, code snippets, and a few “gotchas” to keep in mind.
+
+---
+
+## 1. Why MapLibre can’t do it for you out-of-the-box  
+
+MapLibre GL JS knows how to:
+
+* render raster-DEM tiles for hill-shade or terrain-exaggeration (`raster-dem` source)  
+* query the *interpolated* terrain height at a point (`map.queryTerrainElevation`)  
+
+But it **does not expose the raw elevation grid** and it has no built-in contour generator.  
+Therefore you must extract the DEM data yourself (or ask a tiny backend to do it) and then turn that grid into vector contours.
+
+---
+
+## 2. Choose a DEM source that gives you raw values  
+
+| Source | How to read the values | Typical URL pattern |
+|--------|-----------------------|---------------------|
+| **Mapbox Terrain-RGB** (or any “terrain-rgb” tileset) | Decode the 24-bit RGB → elevation (meters) using the formula `e = (R * 256 * 256 + G * 256 + B) / 10 - 10000` | `https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token=…` |
+| **Cloud-Optimized GeoTIFF (COG)** | Use `geotiff.js` (or `georaster`) to read the raster band directly | `https://myserver/tiles/{z}/{x}/{y}.cog.tif` |
+| **Custom PNG/WEBP DEM** | If you already have a single-band PNG where pixel value = elevation (or scaled), just read the image data. | `https://myserver/dem/{z}/{x}/{y}.png` |
+
+> **Tip:** Terrain-RGB is the easiest to plug into a MapLibre style because you can already use it for hill-shade. If you have a COG you get higher precision (16-bit or 32-bit) and you can read the data directly with `geotiff.js`.
+
+---
+
+## 3. Pull a tile’s elevation grid in the browser  
+
+Below is a minimal example using **Terrain-RGB** + **`fetch` + `createImageBitmap`**.  
+If you use a COG, replace the image-bitmap part with `geotiff.fromUrl(...).then(t => t.readRasters(...))`.
+
+```js
+/**
+ * Load a Terrain-RGB tile and return a Float32Array of elevations (meters)
+ *   size = 256 × 256 (MapLibre raster tiles are 256×256)
+ */
+async function loadTerrainTile(z, x, y) {
+  const url = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.pngraw?access_token=${MAPBOX_TOKEN}`;
+  const resp = await fetch(url);
+  const blob = await resp.blob();
+  const bitmap = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(256, 256);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0);
+  const imgData = ctx.getImageData(0, 0, 256, 256).data; // Uint8ClampedArray RGBA
+
+  const elevations = new Float32Array(256 * 256);
+  for (let i = 0, j = 0; i < imgData.length; i += 4, j++) {
+    const r = imgData[i];
+    const g = imgData[i + 1];
+    const b = imgData[i + 2];
+    const elevation = (r * 256 * 256 + g * 256 + b) / 10 - 10000; // Mapbox formula
+    elevations[j] = elevation;
+  }
+  return elevations; // row-major order, 0 = top-left
+}
+```
+
+> **Why an OffscreenCanvas?**  
+> It works in a Web Worker (no DOM) and is fast. If you need to support older browsers, fall back to a normal `<canvas>`.
+
+---
+
+## 4. Turn the grid into contour lines  
+
+### 4.1 Choose a contouring library  
+
+| Library | Language | Pros | Cons |
+|---------|----------|------|------|
+| **d3-contour** | JavaScript (ESM) | Very easy API, works on a simple 2-D array, already bundled with D3 if you use it. | Works only on *regular* grids (no nodata handling out-of-the-box). |
+| **marchingsquares.js** | JavaScript | Small, pure-JS implementation of Marching Squares, supports “holes”. | No built-in simplification. |
+| **contour-gen** (npm) | JavaScript | Fast, supports custom thresholds, returns GeoJSON directly. | Slightly larger bundle. |
+| **GDAL / mapshaper** (server-side) | C++/Node | Super-accurate, can handle huge rasters. | Requires a backend. |
+
+For a **pure-client** solution, `d3-contour` is the most straightforward.
+
+### 4.2 Generate contours for a single tile  
+
+```js
+import {contours} from ""d3-contour"";
+
+/**
+ * Generate GeoJSON FeatureCollection of contour lines for a tile.
+ *
+ * @param {Float32Array} elevGrid   - 256×256 elevation values (row-major)
+ * @param {number[]} thresholds    - e.g. [0, 100, 200, …] meters
+ * @param {object} tileBBox        - {west, south, east, north} in EPSG:3857
+ * @returns {GeoJSON.FeatureCollection}
+ */
+function tileContours(elevGrid, thresholds, tileBBox) {
+  // d3-contour expects a *flat* array of values ordered left-to-right, top-to-bottom.
+  const width = 256;
+  const height = 256;
+
+  // Build the contour generator once
+  const gen = contours()
+    .size([width, height])
+    .thresholds(thresholds);
+
+  const rawContours = gen(elevGrid); // array of {type:""MultiPolygon"", value, coordinates}
+
+  // Convert each MultiPolygon to a set of LineString features (simpler to render)
+  const features = [];
+
+  // Helper to map pixel → mercator coordinate
+  const xScale = (px) => tileBBox.west + (px / (width - 1)) * (tileBBox.east - tileBBox.west);
+  const yScale = (py) => tileBBox.north - (py / (height - 1)) * (tileBBox.north - tileBBox.south);
+  // (note: y is flipped because image origin is top-left)
+
+  rawContours.forEach(contour => {
+    const {value, coordinates} = contour; // coordinates = array of rings (each ring = array of [x,y] pixel pairs)
+
+    coordinates.forEach(polygon => {
+      // polygon is an array of rings; first ring = exterior, others = holes.
+      // For contour lines we usually want the exterior ring only.
+      const exterior = polygon[0];
+      const lineCoords = exterior.map(([px, py]) => [xScale(px), yScale(py)]);
+
+      features.push({
+        type: ""Feature"",
+        properties: {elevation: value},
+        geometry: {
+          type: ""LineString"",
+          coordinates: lineCoords
+        }
+      });
+    });
+  });
+
+  return {
+    type: ""FeatureCollection"",
+    features
+  };
+}
+```
+
+> **Why convert to `LineString`?**  
+> A `MultiPolygon` works, but MapLibre draws filled polygons (which you don’t want). Converting to `LineString` gives you crisp contour lines and lets you style them with `line-width`, `line-color`, `line-dasharray`, etc.
+
+### 4.3 Run the heavy work in a **Web Worker**  
+
+Generating contours for many tiles can freeze the UI. Wrap the above in a worker:
+
+```js
+// contour-worker.js
+self.onmessage = async (e) => {
+  const {z, x, y, thresholds, token} = e.data;
+  try {
+    const elevations = await loadTerrainTile(z, x, y, token);
+    const tileBBox = tileBounds3857(z, x, y); // helper (see below)
+    const geojson = tileContours(elevations, thresholds, tileBBox);
+    self.postMessage({z, x, y, geojson});
+  } catch (err) {
+    self.postMessage({error: err.message, z, x, y});
+  }
+};
+```
+
+In the main thread:
+
+```js
+const worker = new Worker('contour-worker.js');
+worker.onmessage = (e) => {
+  const {z, x, y, geojson, error} = e.data;
+  if (error) return console.error(error);
+  const sourceId = `contours-${z}-${x}-${y}`;
+  if (map.getSource(sourceId)) {
+    map.getSource(sourceId).setData(geojson);
+  } else {
+    map.addSource(sourceId, {type: ""geojson"", data: geojson});
+    map.addLayer({
+      id: sourceId,
+      type: ""line"",
+      source: sourceId,
+      paint: {
+        ""line-color"": ""#555"",
+        ""line-width"": 1,
+        ""line-dasharray"": [2, 2]
+      }
+    });
+  }
+};
+```
+
+---
+
+## 5. When to generate / update contours  
+
+### 5.1 Tile-based approach (recommended)
+
+* **On `moveend`** (or `idle`) compute the set of raster-DEM tiles that are currently visible at the *current zoom*.
+* For each tile that **doesn’t already have a contour source**, fire a worker request.
+* **Cache** the resulting GeoJSON in a `Map<string, GeoJSON>` keyed by `z/x/y`.  
+  * Optionally store in `IndexedDB` for long-term caching across sessions.
+
+### 5.2 Level-of-detail (LOD)
+
+* **High zoom (≥ 12)** – use the native 256×256 DEM tiles (full resolution).  
+* **Medium zoom (8-11)** – you can **downsample** the DEM (e.g., 64×64) before contouring to keep the number of vertices low.  
+* **Low zoom (≤ 7)** – either skip contours or generate a *single* coarse-resolution contour set for the whole viewport (e.g., using a lower-zoom DEM tile).
+
+### 5.3 Simplify the output
+
+Even after marching squares you may end up with thousands of vertices per contour. Run a simplification step (e.g., **Ramer-Douglas-Peucker**) before adding to the map:
+
+```js
+import simplify from ""@turf/simplify"";
+
+function simplifyFeature(feature, tolerance = 0.0005)",FAIL,0.00,,"The output explains how to generate contour lines on the fly using MapLibre GL JS by manually fetching DEM tiles, running contouring algorithms in a Web Worker, and converting the output to GeoJSON. It does not mention or demonstrate the use of a specific library like `maplibre-contour` or a protocol-based approach for integrating DEM sources directly for contour generation.",
+"implicit — runtime contour generation, off-the-shelf vs DIY",skills/maplibre-terrain-rendering/SKILL.md,false,"I want contour lines on my MapLibre GL JS map, generated at runtime from a raster-dem elevation source, rather than pre-rendering a separate vector contour tileset ahead of time. Is this possible, and how would I approach it?
+","## TL;DR  
+Yes – you can generate contour lines **on the fly** from a raster-DEM source in a MapLibre GL JS map, but you have to do the heavy lifting yourself (or in a tiny server-less helper). The typical recipe is:
+
+1. **Grab the raw elevation values** from the DEM tiles (e.g. Mapbox Terrain-RGB or a GeoTIFF tile service).  
+2. **Run a contouring algorithm** (Marching Squares / Marching Cubes) on that grid in a Web Worker.  
+3. **Emit GeoJSON LineStrings** (or a `FeatureCollection`) for the desired contour intervals.  
+4. **Add the GeoJSON as a source** and draw it with a normal `line` layer.  
+5. **Cache / reuse** the generated contours per tile/zoom so you don’t recompute on every frame.
+
+Below is a step-by-step guide, code snippets, and a few “gotchas” to keep in mind.
+
+---
+
+## 1. Why MapLibre can’t do it for you out-of-the-box  
+
+MapLibre GL JS knows how to:
+
+* render raster-DEM tiles for hill-shade or terrain-exaggeration (`raster-dem` source)  
+* query the *interpolated* terrain height at a point (`map.queryTerrainElevation`)  
+
+But it **does not expose the raw elevation grid** and it has no built-in contour generator.  
+Therefore you must extract the DEM data yourself (or ask a tiny backend to do it) and then turn that grid into vector contours.
+
+---
+
+## 2. Choose a DEM source that gives you raw values  
+
+| Source | How to read the values | Typical URL pattern |
+|--------|-----------------------|---------------------|
+| **Mapbox Terrain-RGB** (or any “terrain-rgb” tileset) | Decode the 24-bit RGB → elevation (meters) using the formula `e = (R * 256 * 256 + G * 256 + B) / 10 - 10000` | `https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token=…` |
+| **Cloud-Optimized GeoTIFF (COG)** | Use `geotiff.js` (or `georaster`) to read the raster band directly | `https://myserver/tiles/{z}/{x}/{y}.cog.tif` |
+| **Custom PNG/WEBP DEM** | Same as Terrain-RGB if you encode elevation yourself | any tile URL that returns an image you control |
+
+> **Tip:** If you already have a `raster-dem` source in your style, you can reuse its URL template – just fetch the tile yourself with `fetch()` and decode it.
+
+---
+
+## 3. Turn a DEM tile into a numeric grid  
+
+Below is a minimal example using **Terrain-RGB** and **geotiff.js** (the same approach works for a COG).
+
+```js
+import GeoTIFF from 'geotiff';
+import {contour} from 'd3-contour';   // Marching Squares implementation
+import {FeatureCollection, LineString} from '@turf/helpers';
+
+// ---------------------------------------------------
+// 1️⃣  Fetch & decode a single DEM tile (z/x/y)
+// ---------------------------------------------------
+async function getElevationGrid(z, x, y) {
+  const url = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.pngraw?access_token=YOUR_TOKEN`;
+  const response = await fetch(url);
+  const arrayBuffer = await response.arrayBuffer();
+
+  // Decode PNG → Uint8Array (R,G,B per pixel)
+  const img = await createImageBitmap(new Blob([arrayBuffer]));
+  const canvas = new OffscreenCanvas(img.width, img.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const {data} = ctx.getImageData(0, 0, img.width, img.height);
+
+  const width = img.width, height = img.height;
+  const grid = new Float32Array(width * height);
+
+  // Convert RGB → elevation (meters)
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    const R = data[i];
+    const G = data[i + 1];
+    const B = data[i + 2];
+    const elevation = (R * 256 * 256 + G * 256 + B) / 10 - 10000;
+    grid[j] = elevation;
+  }
+
+  return {grid, width, height};
+}
+```
+
+> **Why an OffscreenCanvas?**  
+> It runs in a Web Worker (no UI thread) and works in all modern browsers. If you stay on the main thread you can use a normal `<canvas>`.
+
+---
+
+## 4. Generate contours with **d3-contour** (or any Marching-Squares lib)
+
+`d3-contour` expects a **flat array** of values and the grid dimensions. It returns GeoJSON-compatible `MultiLineString`s for each threshold you ask for.
+
+```js
+// ---------------------------------------------------
+// 2️⃣  Run the contour algorithm
+// ---------------------------------------------------
+function makeContours({grid, width, height}, interval = 100, min = 0, max = 3000) {
+  const thresholds = [];
+  for (let v = min; v <= max; v += interval) thresholds.push(v);
+
+  // d3-contour works in pixel space (0..width, 0..height)
+  const contours = contour()
+    .size([width, height])
+    .thresholds(thresholds)
+    (grid);
+
+  // Convert each contour to GeoJSON in EPSG:3857 (Web Mercator)
+  const features = contours.map(c => ({
+    type: 'Feature',
+    properties: {elevation: c.value},
+    geometry: c.geometry   // already a MultiLineString
+  }));
+
+  return {
+    type: 'FeatureCollection',
+    features
+  };
+}
+```
+
+### 4.1. Re-project pixel coordinates to **Lng/Lat**
+
+The contour geometry is still in **pixel coordinates** relative to the tile. We need to map each `(x, y)` back to geographic coordinates.
+
+```js
+function pixelToLngLat(x, y, z, tileX, tileY) {
+  const n = Math.pow(2, z);
+  const lon = (tileX + x / 256) / n * 360 - 180;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (tileY + y / 256) / n)));
+  const lat = latRad * 180 / Math.PI;
+  return [lon, lat];
+}
+
+function reprojectFeatureCollection(fc, z, tileX, tileY) {
+  fc.features = fc.features.map(f => {
+    const geom = f.geometry;
+    // MultiLineString: [[[x,y],...], ...]
+    geom.coordinates = geom.coordinates.map(ring =>
+      ring.map(([px, py]) => pixelToLngLat(px, py, z, tileX, tileY))
+    );
+    return f;
+  });
+  return fc;
+}
+```
+
+Now you have a **GeoJSON FeatureCollection** of contour lines in WGS-84 that can be fed straight into MapLibre.
+
+---
+
+## 5. Put it together in a **Web Worker**  
+
+Running the above on the UI thread will freeze the map. A tiny worker does the job:
+
+```js
+// worker.js
+self.onmessage = async e => {
+  const {z, x, y, interval, min, max} = e.data;
+  const dem = await getElevationGrid(z, x, y);
+  let fc = makeContours(dem, interval, min, max);
+  fc = reprojectFeatureCollection(fc, z, x, y);
+  self.postMessage({z, x, y, geojson: fc});
+};
+```
+
+In the main thread:
+
+```js
+const worker = new Worker('worker.js');
+
+function requestContours(z, x, y) {
+  worker.postMessage({z, x, y, interval: 100, min: 0, max: 3000});
+}
+
+// Listen for results
+worker.onmessage = e => {
+  const {z, x, y, geojson} = e.data;
+  const sourceId = `contours-${z}-${x}-${y}`;
+
+  // Add / replace source
+  if (map.getSource(sourceId)) {
+    map.getSource(sourceId).setData(geojson);
+  } else {
+    map.addSource(sourceId, {type: 'geojson', data: geojson});
+    map.addLayer({
+      id: `${sourceId}-line`,
+      type: 'line',
+      source: sourceId,
+      paint: {
+        'line-color': '#000',
+        'line-width': 1,
+        'line-opacity': 0.6
+      }
+    });
+  }
+};
+```
+
+### When to request?
+
+* **On `moveend`** – iterate over all tiles that are currently visible at the current zoom (or a lower zoom for performance) and request contours for each.
+* **Cache** the GeoJSON per tile (`z/x/y`) in `IndexedDB` or an in-memory `Map` so you never recompute the same tile twice.
+* **Simplify** the lines (e.g., `turf.simplify`) before adding them if you need to keep the payload small.
+
+---
+
+## 6. Full “contour-on-the-fly” workflow  
+
+```
++-------------------+   fetch tile   +-------------------+   decode   +-------------------+
+| MapLibre view     | --------------> | DEM tile (PNG/  | ---------> | Elevation grid    |
+| (move/zoom)       |                | GeoTIFF)         |            | (Float32Array)    |
++-------------------+                +-------------------+            +-------------------+
+        |                                   |                               |
+        |                                   |                               |
+        |                                   v                               v
+        |                         +-------------------+            +-------------------+
+        |                         | Web Worker        |            | d3-contour        |
+        |                         | (grid → contours) | ----------> | (thresholds)      |
+        |                         +-------------------+            +-------------------+
+        |                                   |                               |
+        |                                   v                               v
+        |                         +-------------------+            +-------------------+
+        |                         | Re-project to    |            | GeoJSON Feature   |
+        |                         | EPSG:4326 (lng/lat) | ------> | Collection        |
+        |                         +-------------------+            +-------------------+
+        |                                   |
+        |                                   v
+        |                         +-------------------+
+        |                         | postMessage back  |
+        |                         +-------------------+
+        |                                   |
+        |                                   v
+        |                         +-------------------+
+        |                         | Add/Update source |
+        |                         | + line layer      |
+        |                         +-------------------+
+        +---------------------------------------------------------------+
+```
+
+---
+
+## 7. Performance & Practical Tips  
+
+| Issue | Recommendation |
+|-------|----------------|
+| **Tile boundaries** – contours may be cut at tile edges. | **Stitch** a 2-tile buffer (fetch a 1-pixel overlap) or generate contours on a *parent* tile (e.g., zoom-1 lower) and then clip to the child tiles. |
+| **Too many points** – high-resolution DEM → huge GeoJSON. | Down-sample the DEM grid before contouring (e.g., `grid.filter` or `canvas` scaling). Use `turf.simplify` on the resulting lines. |
+| **Re-projecting every point** can be costly. | Pre-compute a lookup table for the tile’s pixel-to-lng/lat conversion, or use `proj4` only once per tile. |
+| **Repeated requests on fast pans** | Deb",FAIL,0.00,,"The output describes how to generate contour lines on the fly from a raster-DEM source in MapLibre GL JS, but it does not mention or demonstrate the use of an existing library like `maplibre-contour`. Instead, it provides a detailed step-by-step guide on how to build this functionality manually, including fetching DEM tiles, decoding pixels, running contouring algorithms (like Marching Squares), re-projecting coordinates, and integrating with Web Workers. The rubric specifically asks for the use of an existing library and minimal setup, which is not what the output demonstrates. The output also directs the developer to build the pipeline themselves, which is contrary to the rubric's requirement.",
+"implicit — runtime contour generation, off-the-shelf vs DIY",skills/maplibre-terrain-rendering/SKILL.md,false,"I want contour lines on my MapLibre GL JS map, generated at runtime from a raster-dem elevation source, rather than pre-rendering a separate vector contour tileset ahead of time. Is this possible, and how would I approach it?
+","## TL;DR  
+Yes – you can generate contour lines **on the fly** from a raster-DEM source in a MapLibre GL JS map, but you have to do the heavy lifting yourself (or in a tiny server-less helper). The typical recipe is:
+
+1. **Pull the raw elevation values** from the DEM tiles (e.g. Mapbox Terrain-RGB or a GeoTIFF tile service).  
+2. **Run a contouring algorithm** (Marching Squares / Marching Cubes) on that grid in a Web Worker.  
+3. **Emit GeoJSON LineStrings** (or a `FeatureCollection`) and add them to the map as a `geojson` source + a `line` layer.  
+4. **Cache & update** the contours as the user pans/zooms, respecting the current zoom-level (coarser contours at low zoom, finer at high zoom).
+
+Below is a step-by-step guide, a working code sketch, and a list of tools & gotchas to keep in mind.
+
+---
+
+## 1. Why MapLibre can’t do it for you out-of-the-box  
+
+MapLibre GL JS knows how to:
+
+* render raster-DEM tiles for hill-shade or terrain-exaggeration (`raster-dem` source)  
+* request vector tiles that already contain contour lines (if you pre-generate them)
+
+But it **does not** expose the raw elevation values to the style engine, nor does it have a built-in “contour” renderer. So you have to:
+
+* **Read the DEM data yourself** (decode the RGB → elevation or read a GeoTIFF)  
+* **Run a contour algorithm** in JavaScript (or a tiny serverless function)  
+* **Feed the result back to MapLibre** as a normal `geojson` source.
+
+---
+
+## 2. High-level workflow
+
+```
++-------------------+        +-------------------+        +-------------------+
+|  MapLibre view    |  <---> |  DEM tile fetch   |  <---> |  DEM decoder      |
+|  (raster-dem)     |        |  (png/geoTIFF)    |        |  (geotiff.js)     |
++-------------------+        +-------------------+        +-------------------+
+        ^                               |                         |
+        |                               v                         v
+        |                     +-------------------+   +-------------------+
+        |                     |  Elevation grid   |   |  Contour worker   |
+        |                     +-------------------+   +-------------------+
+        |                               |                         |
+        |                               v                         |
+        |                     +-------------------+   +-------------------+
+        |                     |  d3-contour /     |   |  GeoJSON output   |
+        |                     |  marching-squares|   +-------------------+
+        |                     +-------------------+            |
+        |                               |                     v
+        |                               v            +-------------------+
+        |                     +-------------------+ |  MapLibre add    |
+        |                     |  GeoJSON Feature  | |  source + layer  |
+        |                     +-------------------+ +-------------------+
+        +---------------------------------------------------------------+
+```
+
+* **Step 1 – Tile fetch** – Use the same URL pattern you already use for the `raster-dem` source (e.g. `https://example.com/terrain/{z}/{x}/{y}.png`).  
+* **Step 2 – Decode** – Convert the RGB values to meters (or read a GeoTIFF).  
+* **Step 3 – Grid** – Build a 2-D array of elevation values for the tile (or a stitched block of adjacent tiles).  
+* **Step 4 – Contour** – Run a contouring algorithm at the desired interval(s).  
+* **Step 5 – GeoJSON** – Turn each contour line into a `LineString` Feature, re-project the pixel coordinates to WGS-84 (or Web Mercator).  
+* **Step 6 – Render** – Add the GeoJSON as a source and style it with a `line` layer.
+
+---
+
+## 3. Picking the right tools
+
+| Task | Recommended library / API | Why |
+|------|---------------------------|-----|
+| **Fetch raster tiles** | `fetch()` + `Response.arrayBuffer()` | Simple, works in browsers. |
+| **Decode Terrain-RGB** | **No library needed** – just bit-shifts (`(R*256*256 + G*256 + B) / 10`) | Terrain-RGB spec is trivial. |
+| **Decode GeoTIFF** | **geotiff.js** (v2+) | Reads arbitrary GeoTIFFs, gives you a Float32Array of elevations. |
+| **Contour generation** | **d3-contour** (Marching Squares) or **marchingsquares.js** | Fast, works on a regular grid, returns GeoJSON-compatible contours. |
+| **Heavy lifting off-main-thread** | **Web Worker** (or **Comlink** wrapper) | Keeps UI responsive. |
+| **Simplify / smooth** | **simplify-geojson** or **turf.simplify** | Reduces vertex count for high-zoom tiles. |
+| **Cache** | IndexedDB (`idb-keyval`) or in-memory `Map` | Avoid re-computing the same tile. |
+
+> **Tip:** If you already have a server that can run GDAL, you could expose a tiny “contour-as-GeoJSON” endpoint (`/contour/{z}/{x}/{y}?interval=10`). That offloads the CPU from the client and works even on low-powered phones. The client-only approach below works completely offline.
+
+---
+
+## 4. Detailed implementation (client-only)
+
+Below is a **complete, minimal example** that you can copy-paste into a page that already loads MapLibre GL JS (v2.x). It assumes you are using the **Mapbox Terrain-RGB** tiles (or any other 256-pixel PNG tiles that follow the same encoding).
+
+### 4.1. HTML skeleton
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre Contours on the Fly</title>
+  <script src=""https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <script src=""https://unpkg.com/d3-contour@3""></script>
+  <style>
+    body, html { margin:0; height:100%; }
+    #map { width:100%; height:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+<script src=""contour-worker.js"" type=""module""></script>
+<script src=""main.js"" type=""module""></script>
+</body>
+</html>
+```
+
+* `contour-worker.js` – the Web Worker that does the heavy lifting.  
+* `main.js` – the MapLibre glue code.
+
+### 4.2. The Web Worker (`contour-worker.js`)
+
+```js
+// contour-worker.js
+// ---------------------------------------------------
+// This worker receives a message:
+//   { tileKey, elevationGrid, width, height, intervals }
+// and returns GeoJSON contours for those intervals.
+// ---------------------------------------------------
+importScripts('https://unpkg.com/d3-contour@3/dist/d3-contour.min.js');
+
+self.onmessage = async (e) => {
+  const { tileKey, elevationGrid, width, height, intervals, bbox } = e.data;
+  // d3-contour expects a flat Float32Array (row-major order)
+  const contours = [];
+
+  intervals.forEach((interval) => {
+    const iso = d3.contours()
+      .size([width, height])
+      .thresholds([interval])
+      (elevationGrid)[0]; // only one threshold → first element
+
+    // iso.coordinates is an array of rings (each ring = array of [x,y] pixel coords)
+    iso.coordinates.forEach((ring) => {
+      // Convert pixel → lng/lat using the tile bbox (Web Mercator)
+      const line = ring.map(([px, py]) => {
+        const x = bbox[0] + (px / width) * (bbox[2] - bbox[0]); // lng
+        const y = bbox[3] - (py / height) * (bbox[3] - bbox[1]); // lat (note Y flip)
+        return [x, y];
+      });
+
+      contours.push({
+        type: 'Feature',
+        properties: { interval },
+        geometry: {
+          type: 'LineString',
+          coordinates: line,
+        },
+      });
+    });
+  });
+
+  self.postMessage({ tileKey, geojson: { type: 'FeatureCollection', features: contours } });
+};
+```
+
+**Explanation of the worker**
+
+* **Input**  
+  * `elevationGrid` – a `Float32Array` of size `width * height`.  
+  * `bbox` – `[west, south, east, north]` of the tile in **WGS-84** (Web Mercator lat/lng).  
+* **Processing**  
+  * `d3.contours()` runs Marching Squares for each requested interval.  
+  * The resulting polygon rings are turned into `LineString`s.  
+* **Output** – a `FeatureCollection` that can be fed straight into a MapLibre `geojson` source.
+
+> **Performance note:** `d3-contour` is fast for a single 256×256 tile (≈ 5 ms). If you stitch 2×2 tiles together you’ll still be under 30 ms on a modern desktop. Use a worker to keep the UI smooth.
+
+### 4.3. Main thread (`main.js`)
+
+```js
+// main.js
+import { fromUrl } from 'https://cdn.skypack.dev/geotiff'; // optional, if you use GeoTIFFs
+
+// ---------------------------------------------------
+// 1️⃣ Initialise the map
+// ---------------------------------------------------
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      // Base raster (e.g. OpenStreetMap)
+      osm: {
+        type: 'raster',
+        tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+      },
+      // DEM source – we will also fetch the same tiles ourselves
+      terrain: {
+        type: 'raster-dem',
+        tiles: ['https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token=YOUR_TOKEN'],
+        tileSize: 256,
+        // optional: exaggeration
+        // terrainExaggeration: 1.5,
+      },
+    },
+    layers: [
+      { id: 'osm', type: 'raster', source: 'osm' },
+      // The hillshade layer (optional)
+      {
+        id: 'hillshade',
+        type: 'hillshade',
+        source: 'terrain',
+        paint: { 'hillshade-exaggeration': 0.5 },
+      },
+    ],
+  },
+  center: [-122.447303, 37.753574],
+  zoom: 12,
+});
+
+map.on('load', () => {
+  // Add an empty GeoJSON source for contours
+  map.addSource('contours', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
+  // Style the contour lines
+  map.addLayer({
+    id: 'contour-lines',
+    type: 'line',
+    source: 'contours',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color': '#000',
+      'line-width': [
+        '",FAIL,0.00,,"The output explains how to generate contour lines on the fly from a raster-DEM source in MapLibre GL JS, but it does not mention `maplibre-contour` as an existing library. Instead, it guides the user through building the pipeline themselves, including decoding DEM pixels, implementing contouring algorithms, and using generic geometry libraries.",

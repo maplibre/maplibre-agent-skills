@@ -1,0 +1,931 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"implicit — runtime contour generation, off-the-shelf vs DIY",skills/maplibre-terrain-rendering/SKILL.md,"I want contour lines on my MapLibre GL JS map, generated at runtime from a raster-dem elevation source, rather than pre-rendering a separate vector contour tileset ahead of time. Is this possible, and how would I approach it?
+","## Yes – you can draw contour lines **directly from a `raster-dem` source at runtime**  
+MapLibre GL JS does not have a built-in “contour” layer type, but the **`maplibre-contour`** library does the heavy lifting for you:
+
+* It reads the same DEM tiles you already use for hillshade / 3-D terrain.  
+* In a Web-Worker it extracts elevation values, runs a marching-squares algorithm and emits **vector tiles** that contain the contour geometry.  
+* Those vector tiles are then added to the map like any other `vector` source and styled with a normal `line` (or `symbol`) layer.
+
+Below is a step-by-step guide, a complete working example, and a few gotchas to keep in mind.
+
+---
+
+## 1️⃣ Install the library
+
+```bash
+# npm / yarn / pnpm
+npm install maplibre-contour   # or: yarn add maplibre-contour
+```
+
+> **Why a separate library?**  
+> The contour extraction is CPU-intensive. `maplibre-contour` runs it in a Web-Worker so the UI stays smooth, and it follows the same style-spec conventions as native MapLibre layers.
+
+---
+
+## 2️⃣ Prepare your DEM source
+
+Your DEM must already be usable by MapLibre (i.e. a `raster-dem` source).  
+Make sure you know the **encoding** that the tiles use – the two most common are:
+
+| Encoding | What the pixel values mean |
+|----------|----------------------------|
+| `terrarium` | `R*256 + G + B/256 – 32768` (meters) |
+| `mapbox`    | `((R*256 + G)*256 + B) / 10 – 10000` (meters) |
+
+If you are not sure, check the provider’s documentation or the TileJSON you are loading.
+
+```js
+// Example DEM source (same one you’ll use for hillshade / terrain)
+map.addSource('terrain-dem', {
+  type: 'raster-dem',
+  url: 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp', // any raster-dem endpoint
+  tileSize: 256,
+  // optional: maxzoom, attribution, etc.
+});
+```
+
+---
+
+## 3️⃣ Create a `DemSource` from `maplibre-contour`
+
+```js
+import mlcontour from 'maplibre-contour';
+
+// 1️⃣  Build the DEM wrapper – it knows how to fetch tiles and decode them.
+const demSource = new mlcontour.DemSource({
+  // URL pattern must match the raster-dem source above
+  url: 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp',
+  // Must match the DEM encoding you are using
+  encoding: 'terrarium',   // ← change if your DEM uses Mapbox encoding
+  maxzoom: 12,             // highest zoom you want contours for
+  // Set to true to run the worker in a separate thread (recommended)
+  worker: true
+});
+
+// 2️⃣  Register the wrapper with the MapLibre instance.
+//     This adds a custom protocol (`mlcontour://`) that the map can request.
+demSource.setupMaplibre(maplibregl);
+```
+
+> **What `setupMaplibre` does**  
+> It registers a `mlcontour://` URL scheme that resolves to on-the-fly generated vector tiles. You never have to host a separate vector tileset.
+
+---
+
+## 4️⃣ Add a *virtual* vector source that points to the contour protocol
+
+```js
+// The protocol URL is built for each zoom level you care about.
+// `thresholds` tells the worker how often to emit lines (in metres).
+// `elevationKey` is the property name that will hold the raw elevation value.
+// `levelKey` is the property that tells you whether a line is a “major” contour.
+map.addSource('contours', {
+  type: 'vector',
+  // The protocol URL is a *template* – the worker will replace {z}/{x}/{y}
+  // with the tile coordinates it is asked for.
+  tiles: [
+    demSource.contourProtocolUrl({
+      thresholds: {
+        // zoom : [minor interval, major interval]
+        11: [200, 1000],
+        12: [100, 500],
+        14: [50, 200]
+      },
+      elevationKey: 'ele',   // name of the property that holds the height (m)
+      levelKey: 'level',     // 1 = major contour, 0 = minor
+      contourLayer: 'contours' // name of the internal vector layer
+    })
+  ],
+  // The worker can generate tiles up to this zoom; beyond that MapLibre will
+  // fall back to the highest-resolution tiles it has.
+  maxzoom: 15
+});
+```
+
+### How the `thresholds` work
+
+* At a given zoom the worker will generate **two** sets of lines:
+  * **Minor** (e.g. every 100 m) – usually drawn thin and faint.
+  * **Major** (e.g. every 500 m) – drawn thicker or labelled.
+* You can change the intervals per zoom to keep the map readable at different scales.
+
+---
+
+## 5️⃣ Style the contour lines
+
+Now treat the source like any other vector source:
+
+```js
+// Minor contours – thin, semi-transparent
+map.addLayer({
+  id: 'contour-minor',
+  type: 'line',
+  source: 'contours',
+  'source-layer': 'contours', // matches the `contourLayer` name above
+  filter: ['==', ['get', 'level'], 0], // only minor lines
+  paint: {
+    'line-color': 'rgba(0,0,0,0.4)',
+    'line-width': 0.8,
+    'line-dasharray': [2, 2] // optional dash for minor lines
+  }
+});
+
+// Major contours – thicker, solid
+map.addLayer({
+  id: 'contour-major',
+  type: 'line',
+  source: 'contours',
+  'source-layer': 'contours',
+  filter: ['==', ['get', 'level'], 1],
+  paint: {
+    'line-color': 'rgba(0,0,0,0.7)',
+    'line-width': 1.5
+  }
+});
+```
+
+### Optional: label the major contours
+
+```js
+map.addLayer({
+  id: 'contour-labels',
+  type: 'symbol',
+  source: 'contours',
+  'source-layer': 'contours',
+  filter: ['==', ['get', 'level'], 1],
+  layout: {
+    'text-field': ['format',
+      ['get', 'ele'], { 'font-scale': 0.9 }, // elevation value
+      '\n', {},                               // line break
+      ['get', 'level'], { 'font-scale': 0.6 } // optional “major” flag
+    ],
+    'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+    'text-size': 12,
+    'text-offset': [0, 0.5],
+    'text-anchor': 'top'
+  },
+  paint: {
+    'text-color': '#222',
+    'text-halo-color': '#fff',
+    'text-halo-width': 1
+  }
+});
+```
+
+---
+
+## 6️⃣ Full Minimal Example (HTML + JS)
+
+```html
+<!doctype html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre runtime contours</title>
+  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <script type=""module"">
+    import mlcontour from 'https://cdn.jsdelivr.net/npm/maplibre-contour@2.0.0/+esm';
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: {
+        version: 8,
+        sources: {},
+        layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#e0e0e0' } }]
+      },
+      center: [-122.447303, 37.753574],
+      zoom: 12,
+      pitch: 45,
+      bearing: -17
+    });
+
+    map.on('load', () => {
+      // 1️⃣ DEM source (used for terrain & hillshade if you want)
+      map.addSource('terrain-dem', {
+        type: 'raster-dem',
+        url: 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp',
+        tileSize: 256
+      });
+
+      // 2️⃣ Optional: 3-D terrain so you can see the relief underneath
+      map.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+      map.setSky({ 'sky-color': '#88c0d0', 'horizon-color': '#fff', 'fog-color': '#c0d0ff' });
+
+      // 3️⃣ Build the contour generator
+      const demSource = new mlcontour.DemSource({
+        url: 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp',
+        encoding: 'terrarium',
+        maxzoom: 12,
+        worker: true
+      });
+      demSource.setupMaplibre(maplibregl);
+
+      // 4️⃣ Add the virtual vector source
+      map.addSource('contours', {
+        type: 'vector',
+        tiles: [
+          demSource.contourProtocolUrl({
+            thresholds: { 11: [200, 1000], 12: [100, 500], 14: [50, 200] },
+            elevationKey: 'ele',
+            levelKey: 'level',
+            contourLayer: 'contours'
+          })
+        ],
+        maxzoom: 15
+      });
+
+      // 5️⃣ Style the lines
+      map.addLayer({
+        id: 'contour-minor',
+        type: 'line',
+        source: 'contours',
+        'source-layer': 'contours',
+        filter: ['==', ['get', 'level'], 0],
+        paint: {
+          'line-color': 'rgba(0,0,0,0.4)',
+          'line-width': 0.8,
+          'line-dasharray': [2, 2]
+        }
+      });
+
+      map.addLayer({
+        id: 'contour-major',
+        type: 'line',
+        source: 'contours',
+        'source-layer': 'contours',
+        filter: ['==', ['get', 'level'], 1],
+        paint: {
+          'line-color': 'rgba(0,0,0,0.7)',
+          'line-width': 1.5
+        }
+      });
+
+      // 6️⃣ Optional labels
+      map.addLayer({
+        id: 'contour-labels',
+        type: 'symbol',
+        source: 'contours',
+        'source-layer': 'contours',
+        filter: ['==', ['get', 'level'], 1],
+        layout: {
+          'text-field': ['format', ['get', 'ele'], { 'font-scale': 0.9 }],
+          'text-size': 12,
+          'text-offset': [0, 0.5],
+          'text-anchor': 'top'
+        },
+        paint: {
+          'text-color': '#222',
+          'text-halo-color': '#fff',
+          'text-halo-width': 1
+        }
+      });
+    });
+  </script>
+  <style>
+    body { margin:0; padding:0; }
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+</body>
+</html>
+```
+
+Open the file in a browser (or serve it via a local web server) and you’ll see:
+
+* 3-D terrain (optional) with a sky.
+* Contour lines generated **on-the-fly** from the same DEM tiles.
+* Minor/major styling that adapts as you zoom.
+
+---
+
+## 7️⃣ Things to Keep in Mind
+
+| Issue | Why it matters | How to address |
+|-------|----------------|----------------|
+| **Performance** | Contour extraction is CPU-heavy, especially at high zooms. | • Keep `maxzoom` modest (e.g. 12-13). <br>• Use the Web-Worker (`worker: true`). <br>• Limit the number of zoom levels in `thresholds`. |
+| **Encoding mismatch** | If you tell the library the wrong encoding, elevations will be garbage → wrong contour spacing. | Verify the DEM provider’s docs. Test a single tile with `map.queryTerrainElevation([lng,lat])` and compare to known values. |
+| **Tile-size / format** | `raster-dem` can be `png`, `webp`, `jpeg`, etc. The library can decode all common formats, but some browsers may not support WebP in workers. | Use PNG/WEBP that the browser can decode; fallback to PNG if you see “no contours”. |
+| **CORS** | The DEM tiles must be CORS-enabled (or served from the same origin) because the worker fetches them directly. | Ensure the tile server sends `Access-Control-Allow-Origin: *` (or your domain). |
+|",PASS,1.00,,All assertions passed,
+"implicit — runtime contour generation, off-the-shelf vs DIY",skills/maplibre-terrain-rendering/SKILL.md,"I want contour lines on my MapLibre GL JS map, generated at runtime from a raster-dem elevation source, rather than pre-rendering a separate vector contour tileset ahead of time. Is this possible, and how would I approach it?
+","## Yes – you can draw contour lines **directly from a `raster-dem` source at runtime**  
+MapLibre GL JS does not have a built-in “contour” layer type, but the **`maplibre-contour`** library does the heavy lifting for you:
+
+* It reads the same DEM tiles you already use for hillshade / 3-D terrain.  
+* In a Web-Worker it extracts elevation values, runs a marching-squares algorithm and emits **vector tiles** that contain the contour geometry.  
+* Those vector tiles are then added to the map like any other `vector` source and styled with a normal `line` (or `symbol`) layer.
+
+Below is a step-by-step guide, a complete working example, and a few gotchas to keep in mind.
+
+---
+
+## 1️⃣ Install the library
+
+```bash
+# npm / yarn / pnpm
+npm install maplibre-contour   # or: yarn add maplibre-contour
+```
+
+> **Why a separate library?**  
+> The contour extraction is CPU-intensive. `maplibre-contour` runs it in a Web-Worker so the UI stays smooth, and it follows the same style-spec conventions as native MapLibre layers.
+
+---
+
+## 2️⃣ Prepare your DEM source
+
+Your DEM must already be usable by MapLibre (i.e. a `raster-dem` source).  
+Make sure you know the **encoding** that the tiles use – the two most common are:
+
+| Encoding | How the elevation is packed | Typical source |
+|----------|----------------------------|----------------|
+| `terrarium` |  (R × 256 + G + B/256) − 32768  | MapTiler, Terrarium DEMs |
+| `mapbox`    |  (R × 256 + G + B) × 0.1 − 10000 | Mapbox Terrain-RGB |
+
+You’ll need to pass the same string to `DemSource` (see step 3).
+
+```js
+// Example DEM source – you probably already have this in your style
+map.addSource('terrain-dem', {
+  type: 'raster-dem',
+  url: 'https://tiles.example.com/terrain/{z}/{x}/{y}.png',
+  // optional: tileSize, maxzoom, etc.
+});
+```
+
+---
+
+## 3️⃣ Create a `DemSource` (the contour generator)
+
+```js
+import mlcontour from 'maplibre-contour';
+
+// 1️⃣  Create the DEM-to-contour helper
+const demSource = new mlcontour.DemSource({
+  // URL pattern must match the raster-dem tiles you use above
+  url: 'https://tiles.example.com/terrain/{z}/{x}/{y}.png',
+  // Must match the encoding of those tiles
+  encoding: 'terrarium',          // or 'mapbox'
+  maxzoom: 12,                    // highest zoom you want contours for
+  // Set to true to run the worker in a separate thread (recommended)
+  worker: true
+});
+
+// 2️⃣  Register the helper with the MapLibre instance
+demSource.setupMaplibre(maplibregl);
+```
+
+### What `DemSource` does
+
+| Step | What happens |
+|------|--------------|
+| **Tile fetch** | The same DEM tiles are requested (cached by the browser). |
+| **Decode** | The worker decodes the RGB values into meters using the chosen `encoding`. |
+| **Contour extraction** | For each zoom you request, the worker runs marching-squares and creates a **vector tile** (MVT) with two properties: <br>• `ele` – the elevation of the line (in meters) <br>• `level` – `1` for major (e.g. 100 m) lines, `0` for minor (e.g. 20 m) lines. |
+| **Protocol URL** | The generated tiles are served through a custom protocol (`mlcontour://…`) that MapLibre can read as a normal vector source. |
+
+---
+
+## 4️⃣ Add a *virtual* vector source that points at the contour protocol
+
+```js
+// The protocol URL is built for each zoom level you care about.
+// You can change the thresholds (spacing) per zoom – see the docs.
+map.addSource('contours', {
+  type: 'vector',
+  // The protocol URL is a *template*; the library expands {z}/{x}/{y}
+  // when the map asks for a tile.
+  tiles: [
+    demSource.contourProtocolUrl({
+      // Zoom → [minorSpacing, majorSpacing] (both in meters)
+      thresholds: {
+        11: [200, 1000],
+        12: [100, 500],
+        13: [50, 200],
+        14: [20, 100],
+        15: [10, 50]
+      },
+      // Property names that will appear on each feature
+      elevationKey: 'ele',   // elevation value (meters)
+      levelKey: 'level',     // 0 = minor, 1 = major
+      // Optional: give the layer a name (used in source-layer)
+      contourLayer: 'contours'
+    })
+  ],
+  // The vector source must know its maxzoom (same as the DEM)
+  maxzoom: 15
+});
+```
+
+> **Why a custom protocol?**  
+> The library creates the vector tiles on-the-fly, so there is no real URL to fetch. The protocol (`mlcontour://…`) tells MapLibre “hand this request to the worker and give me back a tile”.
+
+---
+
+## 5️⃣ Style the contour lines
+
+Now you can add a normal `line` layer (or a `symbol` layer for labels) that reads from the virtual source.
+
+```js
+// 1️⃣  Simple line styling
+map.addLayer({
+  id: 'contour-lines',
+  type: 'line',
+  source: 'contours',
+  'source-layer': 'contours',   // matches the `contourLayer` name above
+  paint: {
+    // Dark thin lines for minor contours, thicker/brighter for majors
+    'line-color': 'rgba(0,0,0,0.6)',
+    'line-width': [
+      'match',
+      ['get', 'level'],   // 1 = major, 0 = minor
+      1, 1.5,              // major → 1.5px
+      0, 0.8,              // minor → 0.8px
+      0.5                  // fallback
+    ],
+    'line-dasharray': [
+      'match',
+      ['get', 'level'],
+      1, [2, 2],   // major = solid
+      0, [1, 2],   // minor = dashed
+      [1, 2]       // fallback
+    ]
+  }
+});
+```
+
+### Optional: label the major contours
+
+```js
+map.addLayer({
+  id: 'contour-labels',
+  type: 'symbol',
+  source: 'contours',
+  'source-layer': 'contours',
+  filter: ['==', ['get', 'level'], 1],   // only major lines
+  layout: {
+    'symbol-placement': 'line',
+    'text-field': ['to-string', ['get', 'ele']],
+    'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+    'text-size': 12,
+    'text-allow-overlap': false,
+    'text-ignore-placement': false
+  },
+  paint: {
+    'text-color': '#222',
+    'text-halo-color': '#fff',
+    'text-halo-width': 1
+  }
+});
+```
+
+---
+
+## 6️⃣ Full Minimal Example (HTML + JS)
+
+```html
+<!doctype html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – Runtime Contours</title>
+  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <script type=""module"">
+    import mlcontour from 'https://cdn.jsdelivr.net/npm/maplibre-contour@2.0.0/+esm';
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: {
+        version: 8,
+        sources: {
+          // 1️⃣  DEM source (used for terrain, hillshade, etc.)
+          'terrain-dem': {
+            type: 'raster-dem',
+            url: 'https://tiles.example.com/terrain/{z}/{x}/{y}.png',
+            tileSize: 256,
+            maxzoom: 12
+          },
+          // 2️⃣  Basemap (any raster or vector source you like)
+          'basemap': {
+            type: 'raster',
+            url: 'https://tiles.example.com/satellite/{z}/{x}/{y}.jpg',
+            tileSize: 256
+          }
+        },
+        layers: [
+          { id: 'sat', type: 'raster', source: 'basemap' }
+        ]
+      },
+      center: [-122.447, 37.753],
+      zoom: 12,
+      pitch: 45,
+      bearing: -17
+    });
+
+    map.on('load', async () => {
+      // -------------------------------------------------
+      // 3️⃣  Set up the contour generator
+      const demSource = new mlcontour.DemSource({
+        url: 'https://tiles.example.com/terrain/{z}/{x}/{y}.png',
+        encoding: 'terrarium',
+        maxzoom: 12,
+        worker: true
+      });
+      demSource.setupMaplibre(maplibregl);
+
+      // -------------------------------------------------
+      // 4️⃣  Add the virtual vector source
+      map.addSource('contours', {
+        type: 'vector',
+        tiles: [
+          demSource.contourProtocolUrl({
+            thresholds: {
+              11: [200, 1000],
+              12: [100, 500],
+              13: [50, 200],
+              14: [20, 100],
+              15: [10, 50]
+            },
+            elevationKey: 'ele',
+            levelKey: 'level',
+            contourLayer: 'contours'
+          })
+        ],
+        maxzoom: 15
+      });
+
+      // -------------------------------------------------
+      // 5️⃣  Add line layer
+      map.addLayer({
+        id: 'contour-lines',
+        type: 'line',
+        source: 'contours',
+        'source-layer': 'contours',
+        paint: {
+          'line-color': 'rgba(0,0,0,0.6)',
+          'line-width': [
+            'match',
+            ['get', 'level'],
+            1, 1.5,
+            0, 0.8,
+            0.5
+          ]
+        }
+      });
+
+      // -------------------------------------------------
+      // 6️⃣  (Optional) Add labels for major contours
+      map.addLayer({
+        id: 'contour-labels',
+        type: 'symbol',
+        source: 'contours',
+        'source-layer': 'contours',
+        filter: ['==', ['get', 'level'], 1],
+        layout: {
+          'symbol-placement': 'line',
+          'text-field': ['to-string', ['get', 'ele']],
+          'text-size': 12,
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold']
+        },
+        paint: {
+          'text-color': '#222',
+          'text-halo-color': '#fff',
+          'text-halo-width': 1
+        }
+      });
+    });
+  </script>
+  <style>
+    body { margin:0; padding:0; }
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+</body>
+</html>
+```
+
+> **Result:** As you pan/zoom the map, the worker generates vector tiles on-the-fly, and you see crisp contour lines that follow the DEM exactly—no pre-generated contour tileset needed.
+
+---
+
+## 7️⃣ Things to Keep in Mind
+
+| Issue | Why it matters | How to address |
+|-------|----------------|----------------|
+| **Performance** | Contour extraction is CPU-heavy, especially at high zooms. | • Use `worker: true` (default). <br>• Limit `maxzoom` to the highest zoom you actually need contours for (e.g. 14-15). <br>• Choose coarser `thresholds` at low zooms (larger spacing). |
+| **Encoding mismatch** | If you tell the library the wrong encoding, elevations will be garbage → wrong contour spacing. | Verify the DEM source’s documentation (Terrarium vs Mapbox). Test a single tile with `console.log(demSource.decodeTile(...))` if you’re unsure. |
+| **Cache** | The same DEM tile may be decoded many times (once per zoom level). | The library internally caches decoded DEM tiles; you can also enable HTTP caching on the tile server. |
+| **Styling limits** | Only the two properties (`elevationKey`, `levelKey`) are guaranteed. | If you need more (e.g. slope, aspect) you’d have to fork the library and add extra attributes in the worker. |
+| **Browser support** | Web-Workers + `fetch` + `ArrayBuffer",PASS,1.00,,All assertions passed,
+"implicit — runtime contour generation, off-the-shelf vs DIY",skills/maplibre-terrain-rendering/SKILL.md,"I want contour lines on my MapLibre GL JS map, generated at runtime from a raster-dem elevation source, rather than pre-rendering a separate vector contour tileset ahead of time. Is this possible, and how would I approach it?
+","## Yes – you can draw contour lines **directly from a `raster-dem` source at runtime**  
+MapLibre GL JS does not have a built-in “contour” layer type, but the **`maplibre-contour`** library does the heavy lifting for you:
+
+* It reads the same DEM tiles you already use for hillshade / 3-D terrain.  
+* In a Web-Worker it extracts elevation values, runs a marching-squares algorithm and emits **vector tiles** that contain the contour geometry.  
+* Those vector tiles are then added to the map like any other `vector` source and styled with a normal `line` (or `symbol`) layer.
+
+Below is a step-by-step guide, a complete working example, and a few gotchas to keep in mind.
+
+---
+
+## 1️⃣ Install the library
+
+```bash
+# npm / yarn / pnpm
+npm install maplibre-contour   # or: yarn add maplibre-contour
+```
+
+> **Why a separate library?**  
+> The contour extraction is CPU-intensive. `maplibre-contour` runs it in a Web-Worker so the UI stays smooth, and it follows the same style-spec conventions as native MapLibre layers.
+
+---
+
+## 2️⃣ Prepare your DEM source
+
+Your DEM must already be usable by MapLibre (i.e. a `raster-dem` source).  
+Make sure you know the **encoding** that the tiles use – the two most common are:
+
+| Encoding | How the elevation is packed | Typical source |
+|----------|----------------------------|----------------|
+| `terrarium` |  (R × 256 + G + B/256) − 32768  | Mapbox-style DEMs |
+| `mapbox`    |  (R × 256 + G + B) / 10          | Mapbox DEM tiles |
+
+You will pass this same string to `maplibre-contour` so it can decode the values correctly.
+
+```js
+const demSource = new maplibreContour.DemSource({
+  // URL pattern for the DEM tiles (same as you use for hillshade/terrain)
+  url: 'https://tiles.example.com/dem/{z}/{x}/{y}.webp',
+  // Must match the source’s encoding
+  encoding: 'terrarium',   // or 'mapbox'
+  maxzoom: 12,             // highest zoom you have DEM tiles for
+  // Optional: run the worker in a separate thread (highly recommended)
+  worker: true
+});
+```
+
+> **Tip:** If you already added the DEM as a `raster-dem` source in the style, you can reuse the same URL pattern – you don’t need a second source in the style.
+
+---
+
+## 3️⃣ Hook the library into MapLibre
+
+```js
+// `map` is your MapLibre GL JS Map instance
+demSource.setupMaplibre(maplibregl);
+```
+
+`setupMaplibre` registers a custom protocol (`mlcontour://`) that the library uses to serve the generated contour tiles.
+
+---
+
+## 4️⃣ Add a *virtual* vector source that points to the contour protocol
+
+```js
+map.addSource('contours', {
+  type: 'vector',
+  // The protocol URL is built by the library; you can pass options here.
+  tiles: [
+    demSource.contourProtocolUrl({
+      // ── Contour generation options ────────────────────────
+      // Elevation value that will be stored on each feature (default: 'ele')
+      elevationKey: 'ele',
+      // Property name for the contour level (major/minor) – used for styling
+      levelKey: 'level',
+      // The name of the source-layer that will appear in the vector tiles
+      contourLayer: 'contours',
+      // ── Zoom-dependent contour spacing (in metres) ────────
+      //   { zoom: [minorInterval, majorInterval] }
+      thresholds: {
+        11: [200, 1000],
+        12: [100, 500],
+        14: [50, 200],
+        15: [20, 100]
+      }
+    })
+  ],
+  // The highest zoom you want to request contour tiles for.
+  // (Usually a few levels higher than the DEM maxzoom so the lines stay crisp.)
+  maxzoom: 15
+});
+```
+
+**What the options mean**
+
+| Option | Description |
+|--------|-------------|
+| `elevationKey` | Property that holds the raw elevation (in metres) for each contour feature. |
+| `levelKey` | Property that tells whether the line is a *major* contour (usually `1`) or a *minor* one (`0`). Useful for styling different widths or labels. |
+| `contourLayer` | The name of the source-layer inside the generated vector tiles. You’ll reference this in `source-layer` when you add a layer. |
+| `thresholds` | Controls how dense the contours are at each zoom. The first number is the **minor** interval, the second the **major** interval. Adjust to your data’s vertical resolution and visual preference. |
+| `maxzoom` (source) | The highest zoom you’ll request from the protocol. Keep it modest (≤ 15) – higher values generate a lot of work for the worker. |
+
+---
+
+## 5️⃣ Style the contour lines
+
+Now add a normal `line` layer (or a `symbol` layer for labels) that reads from the virtual source:
+
+```js
+// Simple line styling – thin minor lines, thicker major lines
+map.addLayer({
+  id: 'contour-lines',
+  type: 'line',
+  source: 'contours',
+  'source-layer': 'contours',   // matches the `contourLayer` name above
+  paint: {
+    // Dark semi-transparent lines
+    'line-color': 'rgba(0,0,0,0.6)',
+    // Vary width based on whether it’s a major contour (level === 1)
+    'line-width': [
+      'match',
+      ['get', 'level'],
+      1, 2.0,   // major contour → 2 px
+      0, 0.8,   // minor contour → 0.8 px
+      0.5       // fallback
+    ]
+  }
+});
+```
+
+### Optional: label the major contours
+
+```js
+map.addLayer({
+  id: 'contour-labels',
+  type: 'symbol',
+  source: 'contours',
+  'source-layer': 'contours',
+  filter: ['==', ['get', 'level'], 1],   // only major contours
+  layout: {
+    'symbol-placement': 'line',
+    'text-field': ['format',
+      ['get', 'ele'], { 'text-font': ['Open Sans Bold'] },
+      '\n', {} ,
+      ['concat', ['to-string', ['/', ['get', 'ele'], 1000]], ' km'],
+      { 'text-font': ['Open Sans Regular'], 'text-size': 10 }
+    ],
+    'text-size': 12,
+    'text-allow-overlap': false,
+    'text-ignore-placement': false
+  },
+  paint: {
+    'text-color': '#222',
+    'text-halo-color': '#fff',
+    'text-halo-width': 1
+  }
+});
+```
+
+> **Why use `filter`?**  
+> The label layer only needs the *major* contours (the ones you want to read). Filtering reduces the number of label candidates and improves performance.
+
+---
+
+## 6️⃣ Full minimal example (HTML + JS)
+
+```html
+<!doctype html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre runtime contours</title>
+  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <script type=""module"">
+    import maplibreContour from 'https://cdn.jsdelivr.net/npm/maplibre-contour@2.0.0/+esm';
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: {
+        version: 8,
+        sources: {
+          // The DEM source that will also feed the contour generator
+          'terrain-dem': {
+            type: 'raster-dem',
+            url: 'https://tiles.example.com/dem/{z}/{x}/{y}.webp',
+            tileSize: 256,
+            maxzoom: 12
+          },
+          // A simple raster imagery source (optional)
+          'sat': {
+            type: 'raster',
+            url: 'https://tiles.example.com/sat/{z}/{x}/{y}.png',
+            tileSize: 256
+          }
+        },
+        layers: [
+          { id: 'sat', type: 'raster', source: 'sat' }
+        ]
+      },
+      center: [-122.447303, 37.753574],
+      zoom: 12,
+      pitch: 45,
+      bearing: -17,
+      antialias: true
+    });
+
+    map.on('load', async () => {
+      // 1️⃣ Create the DEM source for the contour worker
+      const demSource = new maplibreContour.DemSource({
+        url: 'https://tiles.example.com/dem/{z}/{x}/{y}.webp',
+        encoding: 'terrarium',
+        maxzoom: 12,
+        worker: true
+      });
+      demSource.setupMaplibre(maplibregl);
+
+      // 2️⃣ Add the virtual vector source that serves contour tiles
+      map.addSource('contours', {
+        type: 'vector',
+        tiles: [
+          demSource.contourProtocolUrl({
+            elevationKey: 'ele',
+            levelKey: 'level',
+            contourLayer: 'contours',
+            thresholds: {
+              11: [200, 1000],
+              12: [100, 500],
+              14: [50, 200],
+              15: [20, 100]
+            }
+          })
+        ],
+        maxzoom: 15
+      });
+
+      // 3️⃣ Draw the lines
+      map.addLayer({
+        id: 'contour-lines',
+        type: 'line',
+        source: 'contours',
+        'source-layer': 'contours',
+        paint: {
+          'line-color': 'rgba(0,0,0,0.6)',
+          'line-width': [
+            'match',
+            ['get', 'level'],
+            1, 2,
+            0, 0.8,
+            0.5
+          ]
+        }
+      });
+
+      // 4️⃣ (Optional) Labels for major contours
+      map.addLayer({
+        id: 'contour-labels',
+        type: 'symbol',
+        source: 'contours',
+        'source-layer': 'contours',
+        filter: ['==', ['get', 'level'], 1],
+        layout: {
+          'symbol-placement': 'line',
+          'text-field': ['format',
+            ['to-string', ['get', 'ele']],
+            { 'text-font': ['Open Sans Bold'] },
+            '\n', {},
+            ['concat', ['to-string', ['/', ['get', 'ele'], 1000]], ' km'],
+            { 'text-font': ['Open Sans Regular'], 'text-size': 10 }
+          ],
+          'text-size': 12,
+          'text-allow-overlap': false
+        },
+        paint: {
+          'text-color': '#222',
+          'text-halo-color': '#fff',
+          'text-halo-width': 1
+        }
+      });
+    });
+  </script>
+  <style>
+    body { margin:0; padding:0; }
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+</body>
+</html>
+```
+
+*Open the page in a modern browser (Chrome, Edge, Firefox, Safari) and you’ll see the raster imagery draped over the DEM, with contour lines generated on-the-fly.*  
+
+---
+
+## 7️⃣ Things to watch out for
+
+| Issue | Why it happens | Fix / Mitigation |
+|-------|----------------|------------------|
+| **No contours appear** | The DEM encoding (`terrarium` vs `mapbox`) is wrong, or the DEM tiles are missing at the requested zoom. | Verify the DEM source works for hillshade/terrain first. Use the same `encoding` string in `DemSource`. |
+| **Very slow initial load** | The worker must decode many DEM tiles and run marching-squares for each zoom level. | • Keep `maxzoom` for the DEM modest (≤ 12). <br>• Use `worker: true` (default) to off-load to a background thread. <br>• Cache the generated vector tiles by setting `map.setMaxTileCacheSize()` if you need repeated pans/zooms. |
+| **Contours look “jagged” at high zoom** | The algorithm works on the DEM resolution; if the DEM is coarse, the contour geometry inherits that coarseness. | Use a higher-resolution DEM (or a higher `maxzoom`) or accept a smoother look by increasing the `exaggeration` of the terrain (does not affect contour geometry, only visual perception). |
+| **Too many lines clutter the map** | `thresholds` are too fine (e.g., 10 m intervals",PASS,1.00,,All assertions passed,
