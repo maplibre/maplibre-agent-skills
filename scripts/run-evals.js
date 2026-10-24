@@ -75,13 +75,28 @@
  * rate-limit waits its debug log records go into the run log by host
  * (`rateLimitWaits`).
  *
+ * The judge has a day too, and planning by the generator's day alone met it
+ * at the end of the runs of 2026-10-22, 10-23 and 10-24: Google refused the
+ * judge after 21 to 24 gradings each day. Google reports the judge's limits in
+ * no header and states a daily quota only in a refusal's body, which promptfoo
+ * does not keep, and promptfoo retries each refused grading for about twenty
+ * minutes before it files an ERROR row. So after a child whose grading met
+ * rate limits and left its config short of a pass, the run asks the judge once
+ * itself (`judgeDaySpent`). When Google refuses that for a daily quota, nothing
+ * is re-run and no further config starts. A config either provider's day cut
+ * off is an `error` with `dayCut`: its CSVs go to the verdict artifact rather
+ * than to the results the publish job commits (`setAside`), so it is first in
+ * line the next day, and it does not fail the run. A run that graded no config
+ * at all fails.
+ *
  * Config and output paths are validated before they are placed in the `npm run`
  * argv, which a shell receives.
  *
  *   node scripts/run-evals.js --dry-run
  *   node scripts/run-evals.js evals/prompts/maplibre-cartography.yaml
  *
- * Exit status is 1 when any config did not pass.
+ * Exit status is 1 when a config failed, or errored for any reason but its
+ * day ending, and when no config got a verdict.
  *
  * Flags:
  *   --baseline           withhold the skill (--var injectSkill=false)
@@ -99,6 +114,7 @@
 import { spawn as spawnChild } from 'node:child_process';
 import {
   appendFileSync,
+  copyFileSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -282,10 +298,18 @@ export function buildCommand({
   };
 }
 
+/**
+ * A child's environment. `PROMPTFOO_RETRY_5XX` has promptfoo retry a 5xx with
+ * backoff (`fetchWithRetries`, node_modules/promptfoo/dist/src/fetch-DTVomFtf.js:1288)
+ * instead of filing it as an ERROR row: the judge's "This model is currently
+ * experiencing high demand" 503 cost a test its grade on 2026-10-16, 10-22 and
+ * 10-24.
+ */
 export function childEnv({ boundMs, env = process.env, logDir = null }) {
   return {
     ...env,
     PROMPTFOO_MAX_EVAL_TIME_MS: String(boundMs),
+    PROMPTFOO_RETRY_5XX: 'true',
     ...(logDir === null ? {} : { PROMPTFOO_LOG_DIR: logDir })
   };
 }
@@ -419,6 +443,98 @@ export async function daySpent({ pin, apiKey, fetch = globalThis.fetch }) {
   } catch {
     return null;
   }
+}
+
+/** The pinned judge: the `--grader` of the `eval:graded` script. */
+export function judgePin(packageJson) {
+  return (
+    /--grader\s+(\S+)/.exec(packageJson?.scripts?.['eval:graded'] ?? '')?.[1] ??
+    null
+  );
+}
+
+const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models';
+export const GEMINI_HOST = new URL(GEMINI).host;
+
+/**
+ * Google's refusal of the judge for a daily quota: the quota, its limit and
+ * the model, read from the `google.rpc.QuotaFailure` in a 429's body whose
+ * violation names a per-day quota, such as
+ * `GenerateRequestsPerDayPerProjectPerModel-FreeTier`; or null.
+ */
+export function judgeRefusal(text) {
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  for (const detail of body?.error?.details ?? []) {
+    if (!String(detail?.['@type']).endsWith('google.rpc.QuotaFailure')) {
+      continue;
+    }
+    for (const violation of detail.violations ?? []) {
+      if (!/PerDay/.test(violation?.quotaId ?? '')) continue;
+      const limit = Number(violation.quotaValue);
+      return {
+        quotaId: violation.quotaId,
+        limit: Number.isFinite(limit) ? limit : null,
+        model: violation.quotaDimensions?.model ?? null
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * What Google says when the judge's day is spent: one minimal request to the
+ * pinned judge, refused for a per-day quota. Null when the request goes
+ * through, is refused for anything else, or the judge is not a Gemini model.
+ * A request that goes through spends one of the judge's requests for the day,
+ * so the run asks only after a config's grading has met rate limits.
+ */
+export async function judgeDaySpent({
+  pin,
+  apiKey,
+  fetch = globalThis.fetch,
+  log = () => {}
+}) {
+  if (!pin?.startsWith('google:') || !apiKey) return null;
+  try {
+    const model = encodeURIComponent(pin.slice('google:'.length));
+    const response = await fetch(`${GEMINI}/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: 'x' }] }],
+        generationConfig: { maxOutputTokens: 1 }
+      })
+    });
+    if (response?.status === 200) return null;
+    const text = await response.text();
+    const said = response.status === 429 ? judgeRefusal(text) : null;
+    // Any other answer is logged in Google's words, so a refusal this does not
+    // recognize can still be read in the run log.
+    if (!said) {
+      log(
+        `  Google answered the judge's probe with ${response.status}, not a daily quota: ${googleMessage(text)}`
+      );
+    }
+    return said;
+  } catch {
+    return null;
+  }
+}
+
+/** The `error.message` of a Google error body, or the body's start. */
+function googleMessage(text) {
+  try {
+    const message = JSON.parse(text)?.error?.message;
+    if (message) return String(message).slice(0, 500);
+  } catch {
+    // Not JSON: the body itself.
+  }
+  return String(text ?? '').slice(0, 500);
 }
 
 /**
@@ -802,8 +918,10 @@ export async function runEvals({
   costs = null,
   tokensPerDay = TOKENS_PER_DAY_DEFAULT,
   logsDir = null,
+  judge = null,
   env = process.env,
   spawn = spawnEval,
+  fetch = globalThis.fetch,
   now = () => Date.now(),
   log = console.log
 }) {
@@ -839,6 +957,24 @@ export async function runEvals({
   };
   writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
 
+  // Asks the judge itself after a child whose grading met rate limits and left
+  // its config short of a pass.
+  const checkJudge = async (verdict, waits) => {
+    if (summary.day.judgeSpent || verdict.verdict === 'pass') return;
+    if (!waits.some((wait) => wait.host === GEMINI_HOST)) return;
+    const said = await judgeDaySpent({
+      pin: judge,
+      apiKey: env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY,
+      fetch,
+      log
+    });
+    if (!said) return;
+    summary.day.judgeSpent = said;
+    log(
+      `Google refused the judge for its daily quota (${said.limit ?? 'an unstated number of'} requests a day for ${said.model ?? judge}, ${said.quotaId}); the rest wait for another day.`
+    );
+  };
+
   const started = now();
   for (const [index, config] of configs.entries()) {
     const skill = skillOf(config);
@@ -846,7 +982,13 @@ export async function runEvals({
     // left runs next; one that does not is first in line tomorrow.
     const cost = costs?.get(config) ?? null;
     const need = cost ? dayCost(cost) : 0;
-    if (summary.day.spentByGroq || summary.day.spent + need > tokensPerDay) {
+    if (summary.day.spentByGroq || summary.day.judgeSpent) {
+      log(`${skill}: waits for another day, which a provider says is spent.`);
+      summary.day.waiting.push(skill);
+      writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
+      continue;
+    }
+    if (summary.day.spent + need > tokensPerDay) {
       log(
         `${skill}: waits for another day; it may need ${need} generator tokens and the day has ${tokensPerDay - summary.day.spent} left.`
       );
@@ -939,12 +1081,14 @@ export async function runEvals({
         : '';
       const waits = rateLimitWaits(debugLog);
       if (waits.length > 0) log(`  rate-limit waits: ${waitsLine(waits)}`);
-      // A first attempt Groq refused for the day would only be refused again.
+      // Neither provider takes a re-run once it has refused for the day.
       refused = logsDir && dayRefusal(debugLog);
+      await checkJudge(verdict, waits);
       if (
         shouldRetry({ baseline, killed: outcome.killed === true, verdict }) &&
         !retryBound.skip &&
-        !refused
+        !refused &&
+        !summary.day.judgeSpent
       ) {
         const down = verdict.counts.fail + verdict.counts.error;
         log(
@@ -974,12 +1118,15 @@ export async function runEvals({
           retryText: readSidecar(retryPath)
         });
         verdict = { ...combined, reason: null };
-        const retryWaits = rateLimitWaits(
-          logsDir ? readDebugLogs(join(logsDir, `${name}-${skill}-retry`)) : ''
-        );
+        const retryLog = logsDir
+          ? readDebugLogs(join(logsDir, `${name}-${skill}-retry`))
+          : '';
+        const retryWaits = rateLimitWaits(retryLog);
         if (retryWaits.length > 0) {
           log(`  rate-limit waits in the re-run: ${waitsLine(retryWaits)}`);
         }
+        refused = refused || (logsDir && dayRefusal(retryLog));
+        await checkJudge(verdict, retryWaits);
         retry = {
           exitCode: retryOutcome.exitCode ?? null,
           killed: retryOutcome.killed === true,
@@ -993,6 +1140,37 @@ export async function runEvals({
             `  ${test.description}: ${test.attempts.join(', ')} -> ${test.verdict}`
           );
         }
+      }
+
+      // Groq may refuse a request for a daily limit lower than the configured
+      // one, or for tokens spent elsewhere today; then no further config starts.
+      if (refused) {
+        summary.day.spentByGroq = refused;
+        log(
+          `Groq refused a request for the key's daily limit (${refused.used} of ${refused.tokensPerDay} tokens used); the rest wait for another day.`
+        );
+      }
+      // A config the day cut off has no verdict: some of its tests were never
+      // graded or never re-run. It is an `error` that does not fail the run,
+      // and it goes first the next day.
+      const dayCut =
+        verdict.verdict === 'pass'
+          ? null
+          : refused
+            ? 'generator'
+            : summary.day.judgeSpent
+              ? 'judge'
+              : null;
+      if (dayCut) {
+        verdict = {
+          ...verdict,
+          verdict: 'error',
+          signatures: [...verdict.signatures, 'day-spent']
+        };
+        setAside({ resultsDir, workDir, name, skill });
+        log(
+          `${skill}: the ${dayCut}'s day ended before it was graded; it goes first the next day.`
+        );
       }
 
       record = {
@@ -1009,6 +1187,7 @@ export async function runEvals({
         waits,
         exitCode: outcome.exitCode ?? null,
         tokenUsage: verdict.tokenUsage ?? null,
+        ...(dayCut ? { dayCut } : {}),
         retry
       };
       for (const error of verdict.errors ?? []) {
@@ -1017,26 +1196,50 @@ export async function runEvals({
     }
 
     summary.day.spent += record.tokenUsage?.total ?? 0;
-    // Groq may refuse a request for a daily limit lower than the configured one,
-    // or for tokens spent elsewhere today; then no further config starts.
-    const said =
-      refused ||
-      (logsDir &&
-        dayRefusal(readDebugLogs(join(logsDir, `${name}-${skill}-retry`))));
-    if (said) {
-      summary.day.spentByGroq = said;
-      log(
-        `Groq refused a request for the key's daily limit (${said.used} of ${said.tokensPerDay} tokens used); the rest wait for another day.`
-      );
-    }
-
     log(`${skill}: ${record.verdict}`);
     appendFileSync(verdictsPath, `${skill}:${record.verdict}\n`);
     summary.configs.push(record);
     writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
   }
 
-  return { summary, failed: summary.configs.some((c) => c.verdict !== 'pass') };
+  // A day a provider ended early is not a failure; a day that graded nothing
+  // is, whatever ended it, since a quota spent before the run began or a
+  // config bigger than the judge's day would otherwise pass in silence.
+  const graded = summary.configs.some(
+    (c) => c.verdict === 'pass' || c.verdict === 'fail'
+  );
+  if (summary.configs.length > 0 && !graded) {
+    log('No config got a verdict today.');
+  }
+  return {
+    summary,
+    failed:
+      summary.configs.some(
+        (c) => c.verdict === 'fail' || (c.verdict === 'error' && !c.dayCut)
+      ) ||
+      (summary.configs.length > 0 && !graded)
+  };
+}
+
+/**
+ * Takes a config the day cut off out of the results the publish job commits,
+ * into the verdict artifact. The rotation reads the committed CSVs and counts
+ * a test with any graded row (`lastGraded`), so a first attempt's graded
+ * failure would otherwise pass for a verdict whose re-runs never happened, and
+ * the config would lose its place at the front of the line.
+ */
+export function setAside({ resultsDir, workDir, name, skill }) {
+  const aside = join(workDir, 'day-spent');
+  for (const stem of [`${name}-${skill}`, `${name}-${skill}-retry`]) {
+    const from = join(resultsDir, `${stem}.csv`);
+    try {
+      mkdirSync(aside, { recursive: true });
+      copyFileSync(from, join(aside, `${stem}.csv`));
+      rmSync(from);
+    } catch {
+      // Not written: nothing to set aside.
+    }
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -1215,7 +1418,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     tokensPerDay,
     // Beside the work dir, not in it: the work dir is uploaded as an artifact,
     // and these logs hold every request and response in full.
-    logsDir: `${workDir}-logs`
+    logsDir: `${workDir}-logs`,
+    judge: judgePin(JSON.parse(readFileSync('package.json', 'utf8')))
   });
   // A day that graded nothing has nothing for the publish job.
   setOutputs({ ran: String(summary.planned.length > 0) });

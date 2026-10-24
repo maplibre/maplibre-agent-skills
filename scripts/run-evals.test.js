@@ -15,6 +15,9 @@ import {
   dayRefusal,
   daySpent,
   dryRunLines,
+  judgeDaySpent,
+  judgePin,
+  judgeRefusal,
   longestWaiting,
   measureLimits,
   paceMs,
@@ -265,6 +268,10 @@ describe('childEnv', () => {
   it("points promptfoo's debug log at the folder it is given", () => {
     const env = childEnv({ boundMs: 1, env: {}, logDir: '/tmp/eval-logs/x' });
     assert.equal(env.PROMPTFOO_LOG_DIR, '/tmp/eval-logs/x');
+  });
+
+  it('has promptfoo retry a 5xx rather than file it as an error', () => {
+    assert.equal(childEnv({ boundMs: 1, env: {} }).PROMPTFOO_RETRY_5XX, 'true');
   });
 });
 
@@ -782,6 +789,162 @@ describe('daySpent', () => {
   });
 });
 
+describe('judgePin', () => {
+  it('reads the --grader of the eval:graded script', () => {
+    const packageJson = {
+      scripts: {
+        'eval:graded':
+          'promptfoo eval --grader google:gemini-2.5-flash-lite --delay 8000 --no-cache -j 1'
+      }
+    };
+    assert.equal(judgePin(packageJson), 'google:gemini-2.5-flash-lite');
+    assert.equal(judgePin({ scripts: {} }), null);
+  });
+});
+
+// The shape of Google's 429 body: a QuotaFailure naming the quota, a Help
+// link, and a RetryInfo whose short delay holds even for a per-day quota.
+function googleRefusal(quotaId, quotaValue = '20') {
+  return JSON.stringify({
+    error: {
+      code: 429,
+      message:
+        'You exceeded your current quota, please check your plan and billing details.',
+      status: 'RESOURCE_EXHAUSTED',
+      details: [
+        {
+          '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+          violations: [
+            {
+              quotaMetric:
+                'generativelanguage.googleapis.com/generate_content_free_tier_requests',
+              quotaId,
+              quotaDimensions: {
+                location: 'global',
+                model: 'gemini-2.5-flash-lite'
+              },
+              ...(quotaValue === null ? {} : { quotaValue })
+            }
+          ]
+        },
+        {
+          '@type': 'type.googleapis.com/google.rpc.RetryInfo',
+          retryDelay: '41s'
+        }
+      ]
+    }
+  });
+}
+
+const PER_DAY = 'GenerateRequestsPerDayPerProjectPerModel-FreeTier';
+const PER_MINUTE = 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier';
+
+describe('judgeRefusal', () => {
+  it("reads the quota, its limit and the model out of Google's refusal for the day", () => {
+    assert.deepEqual(judgeRefusal(googleRefusal(PER_DAY)), {
+      quotaId: PER_DAY,
+      limit: 20,
+      model: 'gemini-2.5-flash-lite'
+    });
+  });
+
+  it('keeps the quota when Google states no limit', () => {
+    assert.deepEqual(judgeRefusal(googleRefusal(PER_DAY, null)), {
+      quotaId: PER_DAY,
+      limit: null,
+      model: 'gemini-2.5-flash-lite'
+    });
+  });
+
+  it('says nothing of a per-minute refusal, a 503, or a body that is not JSON', () => {
+    assert.equal(judgeRefusal(googleRefusal(PER_MINUTE)), null);
+    assert.equal(
+      judgeRefusal(
+        '{"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}'
+      ),
+      null
+    );
+    assert.equal(judgeRefusal('Too Many Requests'), null);
+    assert.equal(judgeRefusal(undefined), null);
+  });
+});
+
+describe('judgeDaySpent', () => {
+  const pin = 'google:gemini-2.5-flash-lite';
+  const respond =
+    (status, text, seen = []) =>
+    async (url, request) => {
+      seen.push({ url, request });
+      return { status, text: async () => text };
+    };
+
+  it('asks the pinned model for one token, with the key in its header', async () => {
+    const seen = [];
+    await judgeDaySpent({
+      pin,
+      apiKey: 'k',
+      fetch: respond(429, googleRefusal(PER_DAY), seen)
+    });
+    assert.equal(seen.length, 1);
+    assert.equal(
+      seen[0].url,
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent'
+    );
+    assert.equal(seen[0].request.headers['x-goog-api-key'], 'k');
+    assert.equal(
+      JSON.parse(seen[0].request.body).generationConfig.maxOutputTokens,
+      1
+    );
+  });
+
+  it("reads Google's refusal for the day", async () => {
+    assert.deepEqual(
+      await judgeDaySpent({
+        pin,
+        apiKey: 'k',
+        fetch: respond(429, googleRefusal(PER_DAY))
+      }),
+      { quotaId: PER_DAY, limit: 20, model: 'gemini-2.5-flash-lite' }
+    );
+  });
+
+  it("puts a refusal it cannot read into the run log in Google's words", async () => {
+    const lines = [];
+    const said = await judgeDaySpent({
+      pin,
+      apiKey: 'k',
+      fetch: respond(
+        429,
+        '{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}'
+      ),
+      log: (line) => lines.push(line)
+    });
+    assert.equal(said, null);
+    assert.deepEqual(lines, [
+      "  Google answered the judge's probe with 429, not a daily quota: Resource has been exhausted (e.g. check quota)."
+    ]);
+  });
+
+  it('says nothing when the judge answers, refuses for the minute, or cannot be asked', async () => {
+    const offline = async () => {
+      throw new Error('ENOTFOUND');
+    };
+    for (const options of [
+      { pin, apiKey: 'k', fetch: respond(200, '{}') },
+      { pin, apiKey: 'k', fetch: respond(429, googleRefusal(PER_MINUTE)) },
+      { pin, apiKey: 'k', fetch: offline },
+      { pin, apiKey: undefined, fetch: respond(429, googleRefusal(PER_DAY)) },
+      {
+        pin: 'groq:openai/gpt-oss-120b',
+        apiKey: 'k',
+        fetch: respond(429, googleRefusal(PER_DAY))
+      }
+    ]) {
+      assert.equal(await judgeDaySpent(options), null);
+    }
+  });
+});
+
 describe('runEvals', () => {
   it('records every config and leaves a complete summary', async () => {
     const { resultsDir, workDir } = workspace();
@@ -952,6 +1115,228 @@ describe('runEvals', () => {
       used: 198049
     });
     assert.deepEqual(summary.day.waiting, ['maplibre-fonts-glyphs']);
+    assert.equal(summary.configs[0].dayCut, 'generator');
+  });
+
+  // What promptfoo leaves when Google refuses the judge: ERROR rows naming the
+  // judge, and in its debug log the waits, but never Google's body.
+  const JUDGE_REFUSED =
+    'RateLimitExhaustedError: Rate limit exceeded for google:gemini-2.5-flash-lite after 4 attempts';
+  const judgeWaits = (dir) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'promptfoo-debug-2026-10-24_10-50-02-597Z.log'),
+      [
+        'Rate limited on URL https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent: HTTP 429 Too Many Requests, attempt 1/5, waiting before retry...',
+        'Rate limited, waiting 60516ms (base 60000ms + 516ms jitter) before retry'
+      ].join('\n')
+    );
+  };
+  // Writes both outputs, as promptfoo does: the CSV the publish job commits
+  // and the sidecar the verdict is read from.
+  const outputs = (args, rows) => {
+    const at = args.indexOf('--output');
+    writeFileSync(args[at + 1], 'Description,Status\n');
+    writeFileSync(args[at + 2], sidecar(rows));
+  };
+  const googleSays =
+    (status, calls = []) =>
+    async (url) => {
+      calls.push(url);
+      return {
+        status,
+        text: async () => (status === 429 ? googleRefusal(PER_DAY) : '{}')
+      };
+    };
+  const judged = {
+    judge: 'google:gemini-2.5-flash-lite',
+    env: { GOOGLE_API_KEY: 'k' }
+  };
+
+  it('ends the day when Google refuses the judge for its daily quota, and does not fail the run for it', async () => {
+    const { resultsDir, workDir } = workspace();
+    const logsDir = mkdtempSync(join(tmpdir(), 'eval-logs-'));
+    const ran = [];
+    const spawn = async (command, args, { env }) => {
+      ran.push(args);
+      if (args.includes('evals/prompts/maplibre-fonts-glyphs.yaml')) {
+        judgeWaits(env.PROMPTFOO_LOG_DIR);
+        outputs(args, [row(0), row(2, JUDGE_REFUSED)]);
+        return { exitCode: 100, durationMs: 1000 };
+      }
+      outputs(args, [row(0)]);
+      return { exitCode: 0, durationMs: 1000 };
+    };
+    const lines = [];
+
+    const { summary, failed } = await runEvals({
+      configs: [
+        'evals/prompts/maplibre-cartography.yaml',
+        'evals/prompts/maplibre-fonts-glyphs.yaml',
+        'evals/prompts/maplibre-mapbox-migration.yaml'
+      ],
+      name: '2026-10-24',
+      resultsDir,
+      workDir,
+      budgetMinutes: 240,
+      logsDir,
+      ...judged,
+      spawn,
+      fetch: googleSays(429),
+      log: (line) => lines.push(line)
+    });
+
+    // No re-run: the judge would refuse it too.
+    assert.equal(ran.length, 2);
+    assert.deepEqual(summary.day.judgeSpent, {
+      quotaId: PER_DAY,
+      limit: 20,
+      model: 'gemini-2.5-flash-lite'
+    });
+    assert.deepEqual(summary.day.waiting, ['maplibre-mapbox-migration']);
+    const cut = summary.configs[1];
+    assert.equal(cut.verdict, 'error');
+    assert.equal(cut.dayCut, 'judge');
+    assert.ok(cut.signatures.includes('day-spent'));
+    assert.equal(failed, false);
+    assert.equal(
+      readFileSync(join(workDir, 'verdicts.txt'), 'utf8'),
+      'maplibre-cartography:pass\nmaplibre-fonts-glyphs:error\n'
+    );
+    assert.ok(
+      lines.includes(
+        `Google refused the judge for its daily quota (20 requests a day for gemini-2.5-flash-lite, ${PER_DAY}); the rest wait for another day.`
+      )
+    );
+    // Its CSV is set aside, so the rotation keeps it first in line.
+    assert.throws(() =>
+      readFileSync(join(resultsDir, '2026-10-24-maplibre-fonts-glyphs.csv'))
+    );
+    readFileSync(
+      join(workDir, 'day-spent', '2026-10-24-maplibre-fonts-glyphs.csv')
+    );
+    readFileSync(join(resultsDir, '2026-10-24-maplibre-cartography.csv'));
+  });
+
+  it('leaves an error standing when the judge still answers', async () => {
+    const { resultsDir, workDir } = workspace();
+    const logsDir = mkdtempSync(join(tmpdir(), 'eval-logs-'));
+    const calls = [];
+    const spawn = async (command, args, { env }) => {
+      if (args.includes('evals/prompts/maplibre-fonts-glyphs.yaml')) {
+        judgeWaits(env.PROMPTFOO_LOG_DIR);
+        outputs(args, [row(2, JUDGE_REFUSED)]);
+        return { exitCode: 100, durationMs: 1000 };
+      }
+      outputs(args, [row(0)]);
+      return { exitCode: 0, durationMs: 1000 };
+    };
+
+    const { summary, failed } = await runEvals({
+      configs: [
+        'evals/prompts/maplibre-fonts-glyphs.yaml',
+        'evals/prompts/maplibre-mapbox-migration.yaml'
+      ],
+      name: '2026-10-24',
+      resultsDir,
+      workDir,
+      budgetMinutes: 240,
+      logsDir,
+      ...judged,
+      spawn,
+      fetch: googleSays(200, calls),
+      log: () => {}
+    });
+
+    // Asked after the first attempt and again after its re-run.
+    assert.equal(calls.length, 2);
+    assert.equal(summary.day.judgeSpent, undefined);
+    assert.equal(summary.configs[0].verdict, 'error');
+    assert.equal(summary.configs[0].dayCut, undefined);
+    assert.equal(summary.configs[1].verdict, 'pass');
+    assert.equal(failed, true);
+  });
+
+  it('cuts a config whose re-runs the judge could not grade', async () => {
+    const { resultsDir, workDir } = workspace();
+    const logsDir = mkdtempSync(join(tmpdir(), 'eval-logs-'));
+    const spawn = async (command, args, { env }) => {
+      if (!args.includes('evals/prompts/maplibre-cartography.yaml')) {
+        outputs(args, [graded('a', 0)]);
+        return { exitCode: 0, durationMs: 1000 };
+      }
+      if (args.includes('--filter-failing')) {
+        judgeWaits(env.PROMPTFOO_LOG_DIR);
+        outputs(args, [
+          graded('b', 2, JUDGE_REFUSED),
+          graded('b', 2, JUDGE_REFUSED)
+        ]);
+        return { exitCode: 100, durationMs: 1000 };
+      }
+      outputs(args, [graded('a', 0), graded('b', 1)]);
+      return { exitCode: 100, durationMs: 1000 };
+    };
+
+    const { summary, failed } = await runEvals({
+      configs: [
+        'evals/prompts/maplibre-mapbox-migration.yaml',
+        'evals/prompts/maplibre-cartography.yaml',
+        'evals/prompts/maplibre-fonts-glyphs.yaml'
+      ],
+      name: '2026-10-24',
+      resultsDir,
+      workDir,
+      budgetMinutes: 240,
+      logsDir,
+      ...judged,
+      spawn,
+      fetch: googleSays(429),
+      log: () => {}
+    });
+
+    // One graded failure is not a verdict when its re-runs were refused.
+    const cut = summary.configs[1];
+    assert.equal(cut.verdict, 'error');
+    assert.equal(cut.dayCut, 'judge');
+    assert.deepEqual(summary.day.waiting, ['maplibre-fonts-glyphs']);
+    assert.equal(failed, false);
+    for (const stem of ['', '-retry']) {
+      readFileSync(
+        join(workDir, 'day-spent', `2026-10-24-maplibre-cartography${stem}.csv`)
+      );
+    }
+  });
+
+  it('fails a run that graded nothing, whatever ended its day', async () => {
+    const { resultsDir, workDir } = workspace();
+    const logsDir = mkdtempSync(join(tmpdir(), 'eval-logs-'));
+    const spawn = async (command, args, { env }) => {
+      judgeWaits(env.PROMPTFOO_LOG_DIR);
+      outputs(args, [row(2, JUDGE_REFUSED)]);
+      return { exitCode: 100, durationMs: 1000 };
+    };
+    const lines = [];
+
+    const { summary, failed } = await runEvals({
+      configs: [
+        'evals/prompts/maplibre-fonts-glyphs.yaml',
+        'evals/prompts/maplibre-mapbox-migration.yaml'
+      ],
+      name: '2026-10-24',
+      resultsDir,
+      workDir,
+      budgetMinutes: 240,
+      logsDir,
+      ...judged,
+      spawn,
+      fetch: googleSays(429),
+      log: (line) => lines.push(line)
+    });
+
+    assert.equal(summary.configs[0].dayCut, 'judge');
+    assert.deepEqual(summary.day.waiting, ['maplibre-mapbox-migration']);
+    assert.equal(failed, true);
+    assert.ok(lines.includes('No config got a verdict today.'));
   });
 
   it('records the shard in the summary when the run is one slice of the week', async () => {

@@ -305,6 +305,15 @@ describe('signatureOf', () => {
     assert.equal(signatureOf(REQUEST_TOO_LARGE), 'request-too-large');
   });
 
+  it("names a 5xx that outlasted promptfoo's retries", () => {
+    assert.equal(
+      signatureOf(
+        'API call error: Error: Request failed after 4 retries: Error: Internal Server Error: 503 Service Unavailable'
+      ),
+      'unavailable'
+    );
+  });
+
   it('names a generator rate limit from a 429 or its text', () => {
     assert.equal(signatureOf('API error: 429 Too Many Requests'), 'rate-limit');
     assert.equal(
@@ -623,9 +632,84 @@ describe('headlineFor', () => {
       'infrastructure'
     );
   });
+
+  it('leaves a config the day cut out of the headline: it is waiting, not broken', () => {
+    const summary = withConfigs([
+      { skill: 'maplibre-cartography', verdict: 'fail', signatures: [] },
+      {
+        skill: 'maplibre-fonts-glyphs',
+        verdict: 'error',
+        signatures: ['rate-limit-exhausted', 'day-spent'],
+        dayCut: 'judge'
+      }
+    ]);
+    assert.equal(
+      headlineFor({ summary, evalResult: 'failure' }),
+      'graded failure'
+    );
+  });
+
+  it('says the day was spent when it ended before any config was graded', () => {
+    // The config after it waited, so it was never planned.
+    const summary = {
+      ...PASSING,
+      planned: ['maplibre-cartography'],
+      configs: [
+        {
+          skill: 'maplibre-cartography',
+          verdict: 'error',
+          signatures: ['rate-limit-exhausted', 'day-spent'],
+          dayCut: 'judge'
+        }
+      ]
+    };
+    assert.equal(
+      headlineFor({ summary, evalResult: 'failure' }),
+      'day spent before any verdict'
+    );
+  });
 });
 
 describe('classificationBlock', () => {
+  it("quotes Google's refusal of the judge, and names what the day cut and what waits", () => {
+    const summary = {
+      ...withConfigs([
+        { skill: 'maplibre-cartography', verdict: 'fail', signatures: [] },
+        {
+          skill: 'maplibre-fonts-glyphs',
+          verdict: 'error',
+          signatures: ['rate-limit-exhausted', 'day-spent'],
+          dayCut: 'judge'
+        }
+      ]),
+      day: {
+        tokensPerDay: 200000,
+        spent: 169072,
+        waiting: ['maplibre-mapbox-migration'],
+        judgeSpent: {
+          quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+          limit: 20,
+          model: 'gemini-2.5-flash-lite'
+        }
+      }
+    };
+    const block = classificationBlock({
+      summary,
+      evalResult: 'failure',
+      publish: { commit: 'success', sync: 'success', statusCommit: 'skipped' }
+    });
+    assert.match(block, /\*\*Classification: graded failure\.\*\*/);
+    assert.match(
+      block,
+      /Google refused the judge for its daily quota \(20 requests a day for gemini-2\.5-flash-lite, `GenerateRequestsPerDayPerProjectPerModel-FreeTier`\)/
+    );
+    assert.match(block, /they go first the next day: maplibre-fonts-glyphs\./);
+    assert.match(
+      block,
+      /Waiting for another day, which is spent: maplibre-mapbox-migration\./
+    );
+  });
+
   it('leads with the headline and tabulates every planned skill', () => {
     const summary = withConfigs([
       { skill: 'maplibre-cartography', verdict: 'pass', signatures: [] },

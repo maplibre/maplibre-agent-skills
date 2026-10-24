@@ -150,6 +150,9 @@ export function signatureOf(message) {
   ) {
     return 'request-too-large';
   }
+  // A 5xx that outlasted promptfoo's retries, which PROMPTFOO_RETRY_5XX turns
+  // on for every child (scripts/run-evals.js, childEnv).
+  if (/Internal Server Error: 5\d\d\b/.test(text)) return 'unavailable';
   if (/\b429\b/.test(text) || /Rate limit exceeded/.test(text)) {
     return 'rate-limit';
   }
@@ -282,7 +285,8 @@ export function headlineFor({ summary, evalResult }) {
   const configs = summary.configs ?? [];
   const planned = summary.planned ?? [];
   const failed = configs.some((c) => c.verdict === 'fail');
-  const errored = configs.some((c) => c.verdict === 'error');
+  // A config a provider's day ended is waiting, not broken.
+  const errored = configs.some((c) => c.verdict === 'error' && !c.dayCut);
   const cutOff = configs.some(isCutOff) || configs.length < planned.length;
 
   if (failed && errored) return 'mixed';
@@ -294,6 +298,9 @@ export function headlineFor({ summary, evalResult }) {
   // Not transient like the rest of infrastructure: it fails again next run.
   if (configs.some((c) => c.signatures?.includes('request-too-large'))) {
     return 'request too large';
+  }
+  if (configs.length > 0 && configs.every((c) => c.dayCut)) {
+    return 'day spent before any verdict';
   }
   // Everything recorded either passed or errored, and the job still did not
   // succeed: whatever went wrong was not a graded verdict on skill content.
@@ -413,10 +420,26 @@ export function classificationBlock({ summary, evalResult, publish }) {
         ''
       );
     }
+    const judge = summary.day?.judgeSpent;
+    if (judge) {
+      lines.push(
+        `Google refused the judge for its daily quota (${judge.limit ?? 'an unstated number of'} requests a day for ${judge.model ?? 'the judge'}, \`${judge.quotaId}\`), so the run stopped starting configs.`,
+        ''
+      );
+    }
+    const cut = configs.filter((c) => c.dayCut).map((c) => c.skill);
+    if (cut.length > 0) {
+      lines.push(
+        `No verdict, since the day ended before they were graded; they go first the next day: ${cut.join(', ')}.`,
+        ''
+      );
+    }
     const waiting = summary.day?.waiting ?? [];
     if (waiting.length > 0) {
       lines.push(
-        `Waiting for another day, since the day's generator tokens would not cover them: ${waiting.join(', ')}.`,
+        said || judge
+          ? `Waiting for another day, which is spent: ${waiting.join(', ')}.`
+          : `Waiting for another day, since the day's generator tokens would not cover them: ${waiting.join(', ')}.`,
         ''
       );
     }

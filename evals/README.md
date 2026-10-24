@@ -210,5 +210,7 @@ a malicious lifecycle script, not a modified `eval:graded` command.
 
 **Requests are paced, so none meets the per-minute limit.** The runner gives each config a `--delay` of its largest request's share of a minute at the measured limit, so the limit has room for each request when it is sent. After a per-minute 429, promptfoo 0.122 waits as long as Groq's daily-request header says rather than the seconds Groq states, so each one cost 86 s or more. After every config the run log names the rate-limit waits promptfoo's debug log recorded, by host, and the drift issue lists them under Signals.
 
+**The judge's day ends the run too.** Google reports the judge's limits in no response header and states a daily quota only in the body of a refusal, which promptfoo does not keep. So after a config whose grading met rate limits and fell short of a pass, the runner asks the judge once itself; if Google refuses that for a daily quota, nothing is re-run and no further config starts. A config cut off by either provider's daily refusal records `error` without failing the run: its CSVs go to the verdict artifact instead of `evals/results/`, so it is first in line the next day. A run that graded no config at all fails. The runner also sets `PROMPTFOO_RETRY_5XX`, so promptfoo retries a 5xx, such as the judge's "high demand" 503, with backoff instead of recording an ERROR row.
+
 `npm run lint:model-pins` fails on any provider id that drifts from the [Setup](#setup)
 pins (the generator in `providers.yaml`, the judge in the `eval:graded` script).
