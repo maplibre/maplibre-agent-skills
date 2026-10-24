@@ -150,7 +150,16 @@ Broken-looking route shields (bare floating numbers, missing badges) are almost 
 1. **Confirm glyphs load.** Probe the `glyphs` server for the exact `text-font` names and expect HTTP 200. If they 200, you can deduce the culprit is a missing sprite image or broken reference.
 2. **Confirm the sprite carries the shield images.** OSM Bright's shield layers use `icon-image: "{network}_{ref_length}"` for US networks (e.g. `us-interstate_2`, `us-highway_3`, `us-state_2`) and `road_{ref_length}` for other refs; OSM Liberty's use `default_{ref_length}`. A missing icon is omitted, so grep the sprite JSON for those keys.
 
-The `https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite` and `https://openmaptiles.github.io/osm-bright-gl-style/sprite` sheets currently carry `road_1`–`_6`, `us-state_1`–`_6`, `us-highway_1`–`_3`, and `us-interstate_1`–`_3` (`_1`–`_5` on openmaptiles.github.io), but a minimal or custom sprite may ship only the generic `road_*`. If yours lacks the shield images and your tiles populate `network`, `ref`, and `ref_length` (the OSM US OpenMapTiles tiles do), point `sprite` at one that has them — the `{network}_{ref_length}` style layers then resolve with no layer edits.
+The two public OSM Bright sheets currently stop at a different length for each network:
+
+| Badges            | `https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite` | `https://openmaptiles.github.io/osm-bright-gl-style/sprite` |
+| ----------------- | ------------------------------------------------------------------ | ----------------------------------------------------------- |
+| `road_*`          | `road_1` to `road_6`                                               | `road_1` to `road_6`                                        |
+| `us-state_*`      | `us-state_1` to `us-state_6`                                       | `us-state_1` to `us-state_6`                                |
+| `us-highway_*`    | `us-highway_1` to `us-highway_3`                                   | `us-highway_1` to `us-highway_3`                            |
+| `us-interstate_*` | `us-interstate_1` to `us-interstate_3`                             | `us-interstate_1` to `us-interstate_5`                      |
+
+The layers ask for `{network}_{ref_length}` whatever the sheet holds, so a ref longer than its network's last badge gets no badge. A minimal or custom sprite may ship only the generic `road_*`. If yours lacks the shield images and your tiles populate `network`, `ref`, and `ref_length` (the OSM US OpenMapTiles tiles do), point `sprite` at one that has them — the `{network}_{ref_length}` style layers then resolve with no layer edits.
 
 **A shield is a badge image behind the route ref, sized one of two ways.** OSM Bright and OSM Liberty pick a pre-drawn badge per ref length, using the OpenMapTiles `ref_length` attribute to select the right one.[9] OSM Bright's interstate shield layer, abridged:
 
