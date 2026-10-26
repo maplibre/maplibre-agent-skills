@@ -168,6 +168,8 @@ Process skills are reviewed by reading them against the files they describe, and
 
 **1. Clone the repo and install dependencies:**
 
+Use the Node version in `.nvmrc`.
+
 ```bash
 git clone https://github.com/maplibre/maplibre-agent-skills.git
 cd maplibre-agent-skills

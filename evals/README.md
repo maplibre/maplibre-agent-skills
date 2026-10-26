@@ -188,9 +188,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for how to structure a new results doc
 
 Two workflows run in CI, and only one of them gates a merge:
 
-- **`check.yml`** — the deterministic gate: formatting, spelling, markdown lint,
-  terminology, model pins, and skill validation. It runs on every PR including forks,
-  needs no secrets, and is the only workflow that blocks merge.
+- **`check.yml`** — the deterministic gate: every `npm run check` step, plus the unit tests (`npm test`). It runs on every PR including forks, needs no secrets, and is the only workflow that blocks merge.
 - **`eval.yml`** — the judge-graded eval: a drift check against the default branch that runs every day at 10:17 UTC and grades the configs that have waited longest for a verdict, as many as the Groq key's daily tokens hold, since a full pass needs more than one day has ([#108](https://github.com/maplibre/maplibre-agent-skills/issues/108)); plus `workflow_dispatch` (`ref`, `configs`, `baseline`) for a maintainer to validate a branch or PR by hand, pre- or post-merge.
 
 **It never runs automatically on `pull_request`.** GitHub withholds secrets from a
