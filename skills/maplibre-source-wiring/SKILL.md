@@ -7,9 +7,9 @@ metadata:
 
 # MapLibre Source Wiring
 
-You have a tile URL or a data file and a style, and the map is blank, drawing at the wrong
-scale, or drawing in the wrong order. This skill covers connecting a source to a style
-correctly, and the failure modes that look identical from the outside.
+**Use this only when a source is configured and the map is wrong with no error, in one of the ways listed below, or when choosing how a source should reference a tile endpoint.** For any other MapLibre question, such as how to style a layer that already draws, answer it as asked, assume the source works, and add no section, table, list or note about the failure modes this skill covers or any other reason a map might not render.
+
+This skill covers connecting a source to a style correctly, and the failure modes that look identical from the outside.
 
 ## When to Use This Skill
 
