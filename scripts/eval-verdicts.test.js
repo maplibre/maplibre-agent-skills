@@ -633,6 +633,26 @@ describe('headlineFor', () => {
     );
   });
 
+  it('says passed when every graded config passed and the job succeeded', () => {
+    assert.equal(
+      headlineFor({ summary: PASSING, evalResult: 'success' }),
+      'passed'
+    );
+    const waiting = withConfigs([
+      { skill: 'maplibre-cartography', verdict: 'pass', signatures: [] },
+      {
+        skill: 'maplibre-fonts-glyphs',
+        verdict: 'error',
+        signatures: ['rate-limit-exhausted', 'day-spent'],
+        dayCut: 'judge'
+      }
+    ]);
+    assert.equal(
+      headlineFor({ summary: waiting, evalResult: 'success' }),
+      'passed'
+    );
+  });
+
   it('leaves a config the day cut out of the headline: it is waiting, not broken', () => {
     const summary = withConfigs([
       { skill: 'maplibre-cartography', verdict: 'fail', signatures: [] },
@@ -736,7 +756,7 @@ describe('classificationBlock', () => {
     assert.match(block, /never changes a skill's `status:`/);
   });
 
-  it('says how many tests a config ran again', () => {
+  it('lists every attempt of the tests a config ran again', () => {
     const summary = withConfigs([
       {
         skill: 'maplibre-cartography',
@@ -759,7 +779,10 @@ describe('classificationBlock', () => {
       evalResult: 'failure',
       publish: { commit: 'success', sync: 'success', statusCommit: 'success' }
     });
-    assert.match(block, /\| maplibre-cartography \| fail \| re-ran 1 test \|/);
+    assert.match(
+      block,
+      /\| maplibre-cartography \| fail \| re-ran 1 test \(explicit: fail, fail, pass\) \|/
+    );
     assert.match(block, /\| maplibre-fonts-glyphs \| pass \| — \|/);
   });
 

@@ -301,9 +301,9 @@ export function headlineFor({ summary, evalResult }) {
   if (configs.length > 0 && configs.every((c) => c.dayCut)) {
     return 'day spent before any verdict';
   }
-  // Everything recorded either passed or errored, and the job still did not
-  // succeed: whatever went wrong was not a graded verdict on skill content.
-  return evalResult === 'success' ? 'graded failure' : 'infrastructure';
+  // Everything recorded passed, or waits for another day. A job that still did
+  // not succeed went wrong somewhere other than a graded verdict.
+  return evalResult === 'success' ? 'passed' : 'infrastructure';
 }
 
 function thousands(value) {
@@ -338,6 +338,22 @@ export function waitsLine(waits) {
         `${wait.host} ${wait.count} time${wait.count === 1 ? '' : 's'}, ${minutesSeconds(wait.ms)}`
     )
     .join('; ');
+}
+
+/**
+ * The tests a config ran again, each with the verdict of every attempt, as one
+ * signal: `re-ran 1 test (explicit: fail, pass, pass)`. A failure on every
+ * attempt repeats; one the re-runs did not repeat flipped on its own.
+ */
+function rerunSignal(tests) {
+  if (tests.length === 0) return null;
+  const each = tests
+    .map(
+      (test) =>
+        `${String(test.description).replace(/\|/g, '\\|')}: ${test.attempts.join(', ')}`
+    )
+    .join('; ');
+  return `re-ran ${tests.length} test${tests.length === 1 ? '' : 's'} (${each})`;
 }
 
 function publishLines(publish = {}) {
@@ -391,11 +407,11 @@ export function classificationBlock({ summary, evalResult, publish }) {
       : configs.map((c) => c.skill)) {
       const config = bySkill.get(skill);
       const verdict = config?.verdict ?? 'not recorded';
-      const rerun = config?.retry?.tests?.length ?? 0;
+      const rerun = rerunSignal(config?.retry?.tests ?? []);
       const waits = mergeWaits(config?.waits ?? [], config?.retry?.waits ?? []);
       const signalList = [
         ...(config?.signatures ?? []),
-        ...(rerun > 0 ? [`re-ran ${rerun} test${rerun === 1 ? '' : 's'}`] : []),
+        ...(rerun === null ? [] : [rerun]),
         ...(waits.length > 0 ? [`rate-limit waits: ${waitsLine(waits)}`] : [])
       ];
       const signals = signalList.length ? signalList.join(', ') : '—';

@@ -34,13 +34,17 @@
  * and rewrites `<work>/summary.json`, so a run cut off halfway still hands the
  * publish job a record it can report.
  *
- * A test that did not pass runs twice more before its verdict stands, since the
- * generator is nondeterministic even at temperature 0. A second child hands the
- * first attempt's sidecar to promptfoo's `--filter-failing`, so only those tests
- * run, and `combineAttempts` judges each test on all its graded attempts: it
- * passes only when its passes outnumber its failures. Baseline runs are not
- * re-run, since their gap tests are meant to fail; neither is a config the bound
- * cut off, nor one with more than MAX_RETRIED_TESTS tests down.
+ * A test that did not pass runs twice more, since the generator is
+ * nondeterministic even at temperature 0. A second child hands the first
+ * attempt's sidecar to promptfoo's `--filter-failing`, so only those tests run,
+ * and `combineAttempts` judges each test on all its graded attempts: a failure
+ * on any attempt stands, a test no attempt failed passes on its graded passes,
+ * and only a test no attempt graded is an `error`. So a re-run grades what a
+ * provider error left ungraded and shows whether a failure repeats, which the
+ * run log and the drift issue list per attempt; it never turns a failure into
+ * a pass. Baseline runs are not re-run, since their gap tests are meant to
+ * fail; neither is a config the bound cut off, nor one with more than
+ * MAX_RETRIED_TESTS tests down.
  *
  * A run grades only the configs that are due (`planRun`): those whose inputs
  * (scripts/lib/eval-inputs.js) differ from what their last graded run recorded
@@ -160,8 +164,9 @@ const BUDGET_MINUTES_DEFAULT = 240;
 // Groq refuses a request for its daily limit, stops there and says so.
 const TOKENS_PER_DAY_DEFAULT = 200000;
 
-// How many more times a test that did not pass is run. Two re-runs after one
-// failure is a best of three: the failure stands unless both re-runs pass.
+// How many more times a test that did not pass is run. The failure stands
+// whatever they say; two re-runs show whether it repeats, and grade a test a
+// provider error left ungraded.
 export const RETRY_REPEATS = 2;
 
 // More tests down than this in one config is not sampling noise, and running
@@ -774,11 +779,11 @@ function sumTokenUsage(a, b) {
 /**
  * A config's verdict once its failing tests have run again. Rows are matched to
  * tests by their vars, as `--filter-failing` matches them, and each test is
- * judged on all its graded attempts: it passes when its passes outnumber its
- * failures, fails when they do not, and is an `error` only when no attempt was
- * graded. A test that passed the first time was not run again, so its one pass
- * stands. A re-run with no readable output adds no attempts, which leaves the
- * first attempt's verdict unchanged.
+ * judged on all its graded attempts: it fails when any attempt failed, passes
+ * when none did and at least one was graded, and is an `error` only when no
+ * attempt was graded. A test that passed the first time was not run again, so
+ * its one pass stands. A re-run with no readable output adds no attempts,
+ * which leaves the first attempt's verdict unchanged.
  */
 export function combineAttempts({ firstText, retryText = null }) {
   const first = JSON.parse(firstText);
@@ -816,8 +821,7 @@ export function combineAttempts({ firstText, retryText = null }) {
   for (const test of tests.values()) {
     const passes = test.attempts.filter((a) => a === 'pass').length;
     const fails = test.attempts.filter((a) => a === 'fail').length;
-    const verdict =
-      passes + fails === 0 ? 'error' : passes > fails ? 'pass' : 'fail';
+    const verdict = fails > 0 ? 'fail' : passes > 0 ? 'pass' : 'error';
     counts[verdict]++;
     if (verdict === 'error') {
       const { signature, message } = test.error;

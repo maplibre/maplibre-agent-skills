@@ -517,7 +517,7 @@ describe('shouldRetry', () => {
 });
 
 describe('combineAttempts', () => {
-  it('passes a test only when its passes outnumber its failures', () => {
+  it('fails a test that failed on any graded attempt', () => {
     const result = combineAttempts({
       firstText: sidecar([
         graded('a', 0),
@@ -532,21 +532,22 @@ describe('combineAttempts', () => {
       ])
     });
     assert.equal(result.verdict, 'fail');
-    assert.deepEqual(result.counts, { pass: 2, fail: 1, error: 0 });
+    assert.deepEqual(result.counts, { pass: 1, fail: 2, error: 0 });
     assert.equal(result.total, 3);
     assert.deepEqual(result.signatures, []);
     assert.deepEqual(result.retried, [
-      { description: 'b', attempts: ['fail', 'pass', 'pass'], verdict: 'pass' },
+      { description: 'b', attempts: ['fail', 'pass', 'pass'], verdict: 'fail' },
       { description: 'c', attempts: ['error', 'pass', 'fail'], verdict: 'fail' }
     ]);
   });
 
-  it('keeps a failure that comes back on either re-run', () => {
+  it('never lets two passing re-runs outvote the first failure', () => {
     const result = combineAttempts({
       firstText: sidecar([graded('a', 0), graded('b', 1)]),
-      retryText: sidecar([graded('b', 0), graded('b', 1)])
+      retryText: sidecar([graded('b', 0), graded('b', 0)])
     });
     assert.equal(result.verdict, 'fail');
+    assert.deepEqual(result.counts, { pass: 1, fail: 1, error: 0 });
   });
 
   it('passes a test that errored first on its one graded pass', () => {
@@ -1410,7 +1411,7 @@ describe('runEvals', () => {
     assert.equal(written.shard, '1/2');
   });
 
-  it('runs a failing test again and lets its attempts decide', async () => {
+  it('runs a failing test again and keeps the failure whatever the re-runs say', async () => {
     const { resultsDir, workDir } = workspace();
     const calls = [];
     const spawn = async (command, args) => {
@@ -1438,7 +1439,7 @@ describe('runEvals', () => {
       log: () => {}
     });
 
-    assert.equal(failed, false);
+    assert.equal(failed, true);
     assert.equal(calls.length, 2);
     assert.equal(
       calls[1][calls[1].indexOf('--filter-failing') + 1],
@@ -1446,13 +1447,49 @@ describe('runEvals', () => {
     );
     assert.equal(
       readFileSync(join(workDir, 'verdicts.txt'), 'utf8'),
-      'maplibre-cartography:pass\n'
+      'maplibre-cartography:fail\n'
     );
     const [record] = summary.configs;
-    assert.deepEqual(record.counts, { pass: 2, fail: 0, error: 0 });
+    assert.deepEqual(record.counts, { pass: 1, fail: 1, error: 0 });
     assert.equal(record.exitCode, 100);
     assert.deepEqual(record.retry.tests, [
-      { description: 'b', attempts: ['fail', 'pass', 'pass'], verdict: 'pass' }
+      { description: 'b', attempts: ['fail', 'pass', 'pass'], verdict: 'fail' }
+    ]);
+  });
+
+  it('passes a test a provider error left ungraded once its re-runs grade it', async () => {
+    const { resultsDir, workDir } = workspace();
+    const spawn = async (command, args) => {
+      const retry = args.includes('--filter-failing');
+      const jsonPath = args[args.indexOf('--output') + 2];
+      writeFileSync(
+        jsonPath,
+        sidecar(
+          retry
+            ? [graded('b', 0), graded('b', 0)]
+            : [graded('a', 0), graded('b', 2, 'Rate limit exceeded')]
+        )
+      );
+      return { exitCode: retry ? 0 : 1, durationMs: 1000 };
+    };
+
+    const { summary, failed } = await runEvals({
+      configs: ['evals/prompts/maplibre-cartography.yaml'],
+      name: '2026-10-18',
+      resultsDir,
+      workDir,
+      budgetMinutes: 240,
+      spawn,
+      log: () => {}
+    });
+
+    assert.equal(failed, false);
+    assert.equal(
+      readFileSync(join(workDir, 'verdicts.txt'), 'utf8'),
+      'maplibre-cartography:pass\n'
+    );
+    assert.deepEqual(summary.configs[0].retry.tests, [
+      { description: 'b', attempts: ['error', 'pass', 'pass'], verdict: 'pass' }
     ]);
   });
 
