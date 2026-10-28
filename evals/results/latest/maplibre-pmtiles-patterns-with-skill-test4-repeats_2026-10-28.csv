@@ -1,0 +1,924 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+explicit — inspect a PMTiles file before deploying,skills/maplibre-pmtiles-patterns/SKILL.md,"I generated a PMTiles file and want to check what layers it contains and verify it is valid before uploading. How?
+","Below is a step-by-step checklist you can run on your workstation (or in a CI job) to **inspect the layer list** of a PMTiles archive and **verify that the file is structurally sound** before you push it to S3, Cloudflare R2, GitHub Pages, etc.
+
+---
+
+## 1️⃣ Install the official **pmtiles CLI**
+
+The CLI is a single binary (no Node, Go, or Python runtime needed). Pick the version that matches the spec you used when you built the file (v3 is the current stable spec).
+
+| OS | Download command |
+|----|------------------|
+| macOS (Intel) | `curl -L -o pmtiles https://github.com/protomaps/go-pmtiles/releases/download/v3.2.0/pmtiles-darwin-amd64 && chmod +x pmtiles` |
+| macOS (Apple Silicon) | `curl -L -o pmtiles https://github.com/protomaps/go-pmtiles/releases/download/v3.2.0/pmtiles-darwin-arm64 && chmod +x pmtiles` |
+| Linux (amd64) | `curl -L -o pmtiles https://github.com/protomaps/go-pmtiles/releases/download/v3.2.0/pmtiles-linux-amd64 && chmod +x pmtiles` |
+| Windows | Download `pmtiles-windows-amd64.exe` from the same release page and rename to `pmtiles.exe` (add it to your PATH). |
+
+> **Tip** – If you use Docker you can also run `docker run --rm -v $(pwd):/data protomaps/go-pmtiles:latest <subcommand> …` instead of installing the binary.
+
+---
+
+## 2️⃣ Quick sanity check – **`show`**
+
+```bash
+./pmtiles show my-data.pmtiles
+```
+
+What you’ll see (example output):
+
+```
+File: my-data.pmtiles
+  Type: vector
+  Version: 3
+  Tile count: 1 254 321
+  Bounds: [-180.0000, -85.0511, 180.0000, 85.0511]
+  MinZoom: 0
+  MaxZoom: 14
+  Compression: gzip
+  Metadata entries: 7
+```
+
+If the command fails with an error like *“invalid header”* or *“unexpected EOF”* the archive is corrupted and you should rebuild it.
+
+---
+
+## 3️⃣ **List the vector layer names** – `show --metadata`
+
+The layer names that you will later reference in a MapLibre style (`""source-layer"": ""…""` ) live in the JSON metadata under the `vector_layers` array. The plain `show` command only prints a summary, so ask for the full metadata:
+
+```bash
+./pmtiles show --metadata my-data.pmtiles
+```
+
+Typical JSON fragment (pretty-printed for readability):
+
+```json
+{
+  ""name"": ""my-data"",
+  ""format"": ""pbf"",
+  ""bounds"": ""-180,-85.0511,180,85.0511"",
+  ""minzoom"": 0,
+  ""maxzoom"": 14,
+  ""vector_layers"": [
+    {
+      ""id"": ""water"",
+      ""description"": ""Water bodies"",
+      ""fields"": {
+        ""class"": ""String"",
+        ""name"": ""String""
+      }
+    },
+    {
+      ""id"": ""roads"",
+      ""description"": ""All road geometries"",
+      ""fields"": {
+        ""class"": ""String"",
+        ""type"": ""String"",
+        ""name"": ""String""
+      }
+    },
+    {
+      ""id"": ""buildings"",
+      ""description"": ""Building footprints"",
+      ""fields"": {
+        ""height"": ""Number"",
+        ""min_height"": ""Number""
+      }
+    }
+  ]
+}
+```
+
+**What to look for**
+
+| Item | Why it matters |
+|------|----------------|
+| `vector_layers` array | Every object’s `id` is the exact string you will use for `""source-layer""` in the style. |
+| `minzoom` / `maxzoom` | The archive’s native zoom range. MapLibre will automatically over-zoom beyond `maxzoom` if you reference the source with `url:` (not `tiles:`). |
+| `bounds` | Useful for setting `maxbounds` in the map or for splitting archives later. |
+| `format` | Should be `""pbf""` for vector, `""png""`/`""jpeg""` for raster, `""terrarium""`/`""mapbox""` for raster-dem. |
+
+If the `vector_layers` array is missing, the file is **not a valid vector PMTiles archive** (the spec requires it). You can still use it for raster, but you’ll need to change the source `type` accordingly.
+
+---
+
+## 4️⃣ **Full structural verification** – `verify`
+
+`verify` walks the internal index, checks offsets, tile counts, and that the header matches the actual data layout. It does **not** decode each tile (that would be far slower), but it catches most file-corruption problems.
+
+```bash
+./pmtiles verify my-data.pmtiles
+```
+
+Typical success output:
+
+```
+✅  Verification passed
+   Header OK
+   Tile index OK (1 254 321 entries)
+   Tile data offsets OK
+   Zoom levels OK (0-14)
+   Bounds OK
+```
+
+If something is wrong you’ll see a red-colored error line, e.g.:
+
+```
+❌  Tile index entry #12345 points outside file bounds (offset 9 876 543, length 12 345)
+```
+
+In that case you must **re-run the tile generation step** (tippecanoe, Planetiler, etc.) because the archive is broken.
+
+---
+
+## 5️⃣ Optional: **Inspect a single tile** (quick sanity test)
+
+Sometimes you want to be sure the tiles actually contain the geometry you expect. The CLI can extract a tile as raw PBF (or PNG/JPEG for raster) and pipe it to a viewer.
+
+```bash
+# Example: get tile z=12, x=657, y=1582
+./pmtiles tile my-data.pmtiles 12/657/1582 > tile.pbf
+# Then inspect with tippecanoe's tile-join or mapbox/tile-join, or with `vt2geojson`
+vt2geojson tile.pbf | jq .
+```
+
+If the file is empty or the command errors, the tile may be missing from the archive (e.g. you asked for a zoom level outside the range). Double-check the `minzoom`/`maxzoom` you saw in `show`.
+
+---
+
+## 6️⃣ **Programmatic check (Node / browser)** – using the `pmtiles` library
+
+If you prefer to embed the check in a CI script or a small Node utility, the same library that MapLibre uses can read the header and list layers:
+
+```js
+// check-pmtiles.js
+import { PMTiles } from ""pmtiles"";
+import { readFile } from ""fs/promises"";
+
+async function main(file) {
+  const data = await readFile(file);
+  const archive = await PMTiles.fromArrayBuffer(data.buffer);
+  const header = await archive.getHeader();
+  console.log(""type:"", header.tileType);
+  console.log(""zoom range:"", header.minZoom, ""–"", header.maxZoom);
+  console.log(""bounds:"", header.bounds);
+  console.log(""layers:"");
+  const meta = await archive.getMetadata();
+  const layers = JSON.parse(meta).vector_layers || [];
+  layers.forEach(l => console.log(""  -"", l.id));
+}
+main(process.argv[2] ?? ""my-data.pmtiles"");
+```
+
+Run it with `node check-pmtiles.js my-data.pmtiles`. It will throw if the archive is malformed, giving you a programmatic “fail fast” hook for CI pipelines.
+
+---
+
+## 7️⃣ **CORS & Range-request sanity (optional pre-upload test)**
+
+Even a perfectly valid PMTiles file can fail in the browser if the host you plan to use does not return the required headers.
+
+```bash
+# 1️⃣ Check that the server returns Accept-Ranges
+curl -I -H ""Range: bytes=0-0"" https://example.com/my-data.pmtiles
+
+# Expected headers (order may vary)
+#   Accept-Ranges: bytes
+#   Content-Range: bytes 0-0/12345678
+#   Access-Control-Allow-Origin: *
+#   Access-Control-Expose-Headers: Content-Range,Accept-Ranges
+```
+
+If you see `416 Requested Range Not Satisfiable` or the `Accept-Ranges` header is missing, the host will not work for MapLibre. Most static hosts (S3, R2, GitHub Pages, Netlify) already send those headers; you only need to add CORS (`Access-Control-Allow-Origin`) if you are serving from a different origin than your web page.
+
+---
+
+## 8️⃣ **Putting it all together – a one-liner for CI**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+FILE=$1
+
+# 1️⃣ Show summary (fails on malformed header)
+./pmtiles show ""$FILE""
+
+# 2️⃣ Verify structure
+./pmtiles verify ""$FILE""
+
+# 3️⃣ Extract layer list (fail if missing)
+LAYERS=$(./pmtiles show --metadata ""$FILE"" | jq -r '.vector_layers[].id')
+if [[ -z ""$LAYERS"" ]]; then
+  echo ""❌ No vector_layers found – not a vector PMTiles archive""
+  exit 1
+fi
+echo ""✅ Layers found: $LAYERS""
+```
+
+Add this script to your repo’s `package.json` or CI config and run it before the `aws s3 cp …` step. If any command exits non-zero the pipeline stops, preventing a broken archive from being published.
+
+---
+
+## 📚 Quick reference cheat-sheet
+
+| Command | What you get | Typical use |
+|---------|--------------|-------------|
+| `pmtiles show <file>` | Header summary (type, zoom range, bounds, tile count) | Quick sanity check |
+| `pmtiles show --metadata <file>` | Full JSON metadata (including `vector_layers`) | Find the exact `source-layer` names |
+| `pmtiles verify <file>` | Structural integrity check (offsets, index, zooms) | Guard against corruption |
+| `pmtiles tile <file> z/x/y > out.pbf` | Extract a single tile | Spot-check geometry or raster content |
+| `pmtiles extract --bbox=minLon,minLat,maxLon,maxLat --minzoom=… --maxzoom=… <src> <dst>` | Create a smaller regional PMTiles | When you need a subset without re-tiling |
+| `pmtiles edit --metadata='{""vector_layers"":[…]}' <file>` | Overwrite metadata (rare) | Fix a missing `vector_layers` entry (usually easier to regenerate) |
+
+---
+
+### TL;DR
+
+1. **Install** the `pmtiles` binary.  
+2. Run `pmtiles show --metadata my.pmtiles` → read the `vector_layers` IDs (these are the strings you’ll use for `""source-layer""`).  
+3. Run `pmtiles verify my.pmtiles` → ensures the file isn’t corrupted.  
+4. (Optional) Extract a tile with `pmtiles tile …` to double-check content.  
+5. If all three steps succeed, you’re safe to upload the file to any static host that supports **HTTP Range** and **CORS**.
+
+Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+explicit — inspect a PMTiles file before deploying,skills/maplibre-pmtiles-patterns/SKILL.md,"I generated a PMTiles file and want to check what layers it contains and verify it is valid before uploading. How?
+","Below is a step-by-step checklist you can run locally to **(1) list the layer names that are inside the archive** and **(2) make sure the file is structurally sound** before you push it to S3, Cloudflare R2, GitHub Pages, etc.
+
+---
+
+## 1️⃣ Install the official **pmtiles CLI**
+
+The CLI is a single binary (no npm, no Python, no Java).  
+Pick the right build for your OS/arch and put it on your `$PATH`.
+
+| OS | Download link |
+|----|---------------|
+| macOS (Intel) | <https://github.com/protomaps/go-pmtiles/releases/download/v1.12.0/pmtiles-darwin-amd64> |
+| macOS (Apple Silicon) | <https://github.com/protomaps/go-pmtiles/releases/download/v1.12.0/pmtiles-darwin-arm64> |
+| Linux (amd64) | <https://github.com/protomaps/go-pmtiles/releases/download/v1.12.0/pmtiles-linux-amd64> |
+| Windows (amd64) | <https://github.com/protomaps/go-pmtiles/releases/download/v1.12.0/pmtiles-windows-amd64.exe> |
+
+```bash
+# Example for macOS Intel
+curl -L -o pmtiles https://github.com/protomaps/go-pmtiles/releases/download/v1.12.0/pmtiles-darwin-amd64
+chmod +x pmtiles
+sudo mv pmtiles /usr/local/bin/
+```
+
+> **Tip** – The current stable version (as of Oct 2026) is `v1.12.0`. If you already have a version older than `v1.10.0` you’ll miss the `--metadata` flag on `show`, so upgrade.
+
+---
+
+## 2️⃣ Quick sanity-check: `pmtiles verify`
+
+```bash
+pmtiles verify my-data.pmtiles
+```
+
+*What it does*  
+
+* Checks the file header (magic bytes, version, tile-type, bounds, min/max zoom).  
+* Walks the internal index and makes sure every tile offset/length is inside the file and non-overlapping.  
+* Verifies the tile count for each zoom level matches the index.  
+* Returns **exit code 0** if everything is OK, otherwise prints a short error message and exits with a non-zero code.
+
+**Typical output when the file is fine**
+
+```
+✔︎ verified  my-data.pmtiles
+  tile type:  vector
+  bounds:    -180.0,-85.0511,180.0,85.0511
+  zooms:     0-14
+  tiles:     1 234 567
+  metadata:  3 212 bytes
+```
+
+If you see something like `error: tile offset 123456 out of range` you need to rebuild the archive (most often a corrupted conversion step).
+
+---
+
+## 3️⃣ List the **vector layer names** (or raster metadata)
+
+### 3.1 Vector archives – `pmtiles show --metadata`
+
+```bash
+pmtiles show --metadata my-data.pmtiles
+```
+
+The `--metadata` flag expands the JSON block that lives in the archive’s *metadata* field. In a **vector** PMTiles file you will see a `vector_layers` array that follows the TileJSON 3.0 spec:
+
+```json
+{
+  ""vector_layers"": [
+    {
+      ""id"": ""water"",
+      ""fields"": {
+        ""class"": ""String"",
+        ""name"": ""String""
+      },
+      ""description"": ""Water bodies""
+    },
+    {
+      ""id"": ""roads"",
+      ""fields"": {
+        ""class"": ""String"",
+        ""type"": ""String"",
+        ""name"": ""String""
+      }
+    },
+    {
+      ""id"": ""buildings"",
+      ""fields"": { ""height"": ""Number"", ""building"": ""String"" }
+    }
+  ],
+  ""bounds"": ""-180,-85.0511,180,85.0511"",
+  ""minzoom"": 0,
+  ""maxzoom"": 14,
+  ""center"": [0,0,2],
+  ""format"": ""pbf""
+}
+```
+
+*The `id` values are exactly what you will use in a MapLibre style as `""source-layer""`*:
+
+```json
+{
+  ""id"": ""water-fill"",
+  ""type"": ""fill"",
+  ""source"": ""myPmtiles"",
+  ""source-layer"": ""water"",
+  ""paint"": { ""fill-color"": ""#a0c8f0"" }
+}
+```
+
+### 3.2 Raster or raster-DEM archives
+
+Raster PMTiles do **not** have a `vector_layers` array. Instead you’ll see keys like:
+
+```json
+{
+  ""format"": ""png"",
+  ""bounds"": ""-180,-85.0511,180,85.0511"",
+  ""minzoom"": 0,
+  ""maxzoom"": 12,
+  ""center"": [0,0,2],
+  ""encoding"": ""terrarium""   // only for raster-dem
+}
+```
+
+For raster sources you don’t need a `source-layer` – the whole file is the source.
+
+---
+
+## 4️⃣ Optional: Peek at a single tile (helps confirm the geometry/encoding)
+
+```bash
+# Grab tile z=10, x=512, y=384 and write it to a file
+pmtiles tile my-data.pmtiles 10/512/384 > tile.pbf
+# For raster (png) you could open it with any image viewer:
+pmtiles tile my-data.pmtiles 12/2048/1024 > tile.png
+```
+
+*Why you might do this*  
+
+* Verify that the tile actually contains data (non-empty file size).  
+* For vector tiles you can pipe the result through `vt2geojson` or `mapbox-vector-tile` to inspect the feature properties.  
+* For raster-DEM you can open the PNG and check that the elevation encoding (Terrarium or Mapbox) looks plausible.
+
+---
+
+## 5️⃣ Putting it all together – a one-liner script
+
+If you want a quick “all-clear” report you can combine the two commands:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+FILE=$1
+
+echo ""=== Verifying $FILE ===""
+pmtiles verify ""$FILE""
+
+echo ""=== Metadata (layer list) ===""
+pmtiles show --metadata ""$FILE"" | jq '.vector_layers[].id'   # jq is optional
+```
+
+Running `./check-pmtiles.sh my-data.pmtiles` will exit with a non-zero status if verification fails, and it will print each vector layer name on its own line.
+
+---
+
+## 6️⃣ Common pitfalls & how to fix them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `pmtiles verify` reports “tile offset … out of range” | The file was truncated (e.g. upload interrupted) or the conversion step crashed. | Re-run the conversion (`pmtiles convert …` or the original tippecanoe/planetiler command). |
+| `pmtiles show --metadata` prints `<object, use --metadata to view full JSON metadata>` and no `vector_layers` | You omitted `--metadata`. The plain `show` only prints scalar fields. | Add `--metadata`. |
+| No `vector_layers` array appears even though you expect vector data | The archive is **raster** (or you generated MBTiles → PMTiles without preserving metadata). | Regenerate with a vector-tile tool (tippecanoe `-o out.pmtiles` or planetiler). |
+| MapLibre shows a blank map after you add the source | The file is valid but the style is referencing a non-existent `source-layer`. | Double-check the `id` values from `vector_layers` and use them verbatim in `""source-layer""` fields. |
+| CORS error in the browser (`No 'Access-Control-Allow-Origin' header`) | Your static host isn’t sending CORS headers for range requests. | Configure the bucket (S3 → “CORS configuration”) or CDN to return `Access-Control-Allow-Origin: *` (or your domain) and `Access-Control-Allow-Headers: Range`. |
+| Tiles load but are always empty at high zooms | The archive’s `maxzoom` is lower than the map’s zoom. | Either (a) generate higher-zoom tiles, or (b) let MapLibre over-zoom by using `url:` (not `tiles:`) – the protocol will automatically repeat the highest-zoom tiles. |
+
+---
+
+## 7️⃣ Quick cheat-sheet
+
+| Command | What you get |
+|---------|--------------|
+| `pmtiles verify file.pmtiles` | Pass/fail + basic header info |
+| `pmtiles show file.pmtiles` | Human-readable summary (bounds, zooms, tile count) |
+| `pmtiles show --metadata file.pmtiles` | Full JSON metadata – **vector_layers** list for vector archives |
+| `pmtiles extract -b <bbox> -z <zmin>-<zmax> file.pmtiles out.pmtiles` | Sub-set of the original (useful for region-only uploads) |
+| `pmtiles tile file.pmtiles <z>/<x>/<y> > tile.ext` | Dump a single tile to disk for inspection |
+
+---
+
+## 8️⃣ Next step – upload & use in MapLibre
+
+Once `verify` passes and you’ve confirmed the layer names, you can:
+
+1. **Upload** the file to your static host (S3, R2, GitHub Pages, Netlify, etc.).  
+   *Make sure the bucket serves `Accept-Ranges: bytes` and `Access-Control-Allow-Origin: *`.*  
+2. **Add the PMTiles protocol** in your app (see the skill’s “MapLibre Integration” section).  
+3. **Reference the source** with `url: 'pmtiles://https://<host>/<file>.pmtiles'`.  
+4. **Add style layers** using the `source-layer` names you just saw.
+
+That’s it – you now have a validated, inspected PMTiles archive ready for a completely server-less MapLibre map! 🚀",PASS,1.00,,All assertions passed,
+explicit — inspect a PMTiles file before deploying,skills/maplibre-pmtiles-patterns/SKILL.md,"I generated a PMTiles file and want to check what layers it contains and verify it is valid before uploading. How?
+","Below is a step-by-step checklist you can run locally to **(1) list the layer names that are inside the archive** and **(2) make sure the file is structurally sound** before you push it to S3, Cloudflare R2, GitHub Pages, etc.
+
+---
+
+## 1️⃣ Install the official **pmtiles CLI**
+
+The CLI is a single binary (no npm, no Python, no Java).  
+Pick the right build for your OS/arch and put it on your `$PATH`.
+
+| OS / Architecture | Download URL |
+|-------------------|--------------|
+| macOS x86_64      | <https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles-darwin-amd64> |
+| macOS ARM (Apple Silicon) | <https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles-darwin-arm64> |
+| Linux x86_64      | <https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles-linux-amd64> |
+| Linux ARM64       | <https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles-linux-arm64> |
+| Windows x86_64    | <https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles-windows-amd64.exe> |
+
+```bash
+# Example for macOS-ARM
+curl -L -o pmtiles https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles-darwin-arm64
+chmod +x pmtiles
+sudo mv pmtiles /usr/local/bin/
+```
+
+> **Tip** – If you prefer Docker you can also run `docker run --rm -v $(pwd):/data protomaps/go-pmtiles <subcommand>`.
+
+---
+
+## 2️⃣ Verify the archive structure
+
+```bash
+pmtiles verify my-data.pmtiles
+```
+
+*What it does*  
+
+* Checks the file header (magic bytes, version, tile-type, bounds, min/max-zoom).  
+* Walks the internal index and makes sure every tile offset/length is inside the file and non-overlapping.  
+* Confirms the tile count matches the index entries.  
+* Returns **exit code 0** if everything is OK; otherwise you’ll see a short error message such as:
+
+```
+error: tile offset 123456 exceeds file size 123400
+```
+
+If you get an error, the archive is corrupted (e.g. incomplete upload, disk-write failure, or a bug in the generator). Re-run the generator or the `pmtiles convert` step that produced the file.
+
+---
+
+## 3️⃣ Inspect the header & list the vector layers
+
+### 3.1 Quick human-readable summary
+
+```bash
+pmtiles show my-data.pmtiles
+```
+
+Typical output (truncated for brevity):
+
+```
+File: my-data.pmtiles
+  Tile type:  vector
+  Bounds:   -180.0, -85.0511, 180.0, 85.0511
+  Zoom range: 0-14
+  Tile count:  1 234 567
+  Compression:  gzip
+  Metadata keys:  3
+```
+
+That tells you the **zoom range** and **bounds** that MapLibre will read automatically when you use `url:` in the style.
+
+### 3.2 Full JSON metadata (where the layer list lives)
+
+```bash
+pmtiles show my-data.pmtiles --metadata
+```
+
+You’ll get a JSON blob that follows the PMTiles v3 spec. The part you care about is the `vector_layers` array:
+
+```json
+{
+  ""vector_layers"": [
+    {
+      ""id"": ""water"",
+      ""fields"": {
+        ""class"": ""String"",
+        ""name"": ""String""
+      }
+    },
+    {
+      ""id"": ""road"",
+      ""fields"": {
+        ""class"": ""String"",
+        ""type"": ""String"",
+        ""name"": ""String""
+      }
+    },
+    {
+      ""id"": ""building"",
+      ""fields"": {
+        ""class"": ""String"",
+        ""height"": ""Number""
+      }
+    }
+  ],
+  ""bounds"": [-180,-85.0511,180,85.0511],
+  ""minzoom"": 0,
+  ""maxzoom"": 14,
+  ""center"": [0,0,2],
+  ""format"": ""pbf""
+}
+```
+
+* `id` → the value you will use for `""source-layer""` in a MapLibre style.  
+* `fields` → a map of attribute names → type; useful for building `filter` expressions.
+
+If the `vector_layers` array is missing, the file **does not contain a valid vector-layer metadata block** – most tools (MapLibre, Martin, etc.) will still be able to read tiles, but you won’t know the correct layer names without opening a tile manually. In that case you can:
+
+* Re-run the tile generator with a flag that writes the metadata (e.g. `tippecanoe --layer=water ...` or `planetiler --layers=...`).  
+* Or extract a single tile and inspect it with `pmtiles tile` + `mapbox-vector-tile` tools, but that’s a last-resort hack.
+
+### 3.3 (Optional) Dump a single tile to double-check a layer name
+
+```bash
+# Grab tile z=10, x=512, y=384 (any tile that you know exists)
+pmtiles tile my-data.pmtiles 10/512/384 > tile.pbf
+# Decode with a tiny Node script or `mapbox-vector-tile` CLI
+npx @mapbox/vector-tile-cli decode tile.pbf
+```
+
+The decoded JSON will show the layer names present in that tile, confirming they match the `vector_layers` list.
+
+---
+
+## 4️⃣ Quick “all-in-one” sanity script (bash)
+
+If you want a single command that both verifies and prints the layer list:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+FILE=$1
+
+echo ""🔎 Verifying $FILE …""
+pmtiles verify ""$FILE""
+
+echo ""🗂️  Vector layers in $FILE:""
+pmtiles show ""$FILE"" --metadata |
+  jq -r '.vector_layers[].id'   # requires jq; install with brew/apt if missing
+```
+
+Run it:
+
+```bash
+chmod +x check-pmtiles.sh
+./check-pmtiles.sh my-data.pmtiles
+```
+
+Output example:
+
+```
+🔎 Verifying my-data.pmtiles …
+✅  verification succeeded
+🗂️  Vector layers in my-data.pmtiles:
+water
+road
+building
+```
+
+---
+
+## 5️⃣ What to do **after** the checks pass
+
+1. **Upload** the file to a static host that supports **HTTP Range** and **CORS** (S3, Cloudflare R2, GitHub Pages, Netlify, Vercel, etc.).  
+   *Set the following response headers* (most hosts let you set them on the object):
+   ```text
+   Accept-Ranges: bytes
+   Access-Control-Allow-Origin: *
+   Cache-Control: public, max-age=31536000, immutable
+   ```
+2. **Add the PMTiles protocol** in your MapLibre app (see the skill’s “MapLibre Integration” section).  
+   ```js
+   import {Protocol as PMTilesProtocol} from 'pmtiles';
+   const pm = new PMTilesProtocol();
+   maplibregl.addProtocol('pmtiles', pm.tile);
+   ```
+3. **Reference the source** with `url:` (not `tiles:`) so MapLibre can read the min/max-zoom from the archive header:
+   ```json
+   ""sources"": {
+     ""mytiles"": {
+       ""type"": ""vector"",
+       ""url"": ""pmtiles://https://my-bucket.s3.amazonaws.com/my-data.pmtiles""
+     }
+   }
+   ```
+4. **Add layers** using the `source-layer` names you just saw in `vector_layers`.
+
+---
+
+## 6️⃣ Common pitfalls & how to fix them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `pmtiles verify` returns *“tile offset … exceeds file size”* | File was truncated during copy/upload. | Re-upload the file with a tool that preserves binary integrity (e.g. `aws s3 cp`, `rclone copy`, or Git LFS). |
+| `pmtiles show --metadata` prints `vector_layers: <object, use --metadata to view full JSON metadata>` and you see no `id`s | You ran plain `pmtiles show` (without `--metadata`). | Use the `--metadata` flag; the layer list lives there. |
+| MapLibre shows **blank vector tiles** at zoom levels that exist in the archive | You used `tiles: ['pmtiles://…/{z}/{x}/{y}']` instead of `url:`. | Switch to `url:` so the protocol can read the archive’s `maxzoom` and over-zoom correctly. |
+| Browser console shows **CORS error** when fetching the .pmtiles file | Host does not send `Access-Control-Allow-Origin` or `Accept-Ranges`. | Add those headers on the bucket/object (S3 → “CORS configuration”, Cloudflare R2 → “CORS” tab). |
+| `vector_layers` array is missing | The generator didn’t write TileJSON metadata (common with raw MBTiles → PMTiles conversion). | Regenerate the source with a tool that writes metadata (`tippecanoe --layer=…`, `planetiler --layers=…`) or add it manually with `pmtiles edit --metadata='{""vector_layers"":[…]}'`. |
+| Tile size is huge (several MB) | The whole archive was gzip-compressed **twice** by the static host (e.g., CloudFront + `Content-Encoding: gzip`). | Disable automatic gzip on the host for `.pmtiles` files; the format already stores each tile compressed. |
+
+---
+
+## 7️⃣ TL;DR – One-liner checklist
+
+```bash
+# 1️⃣ Verify structure
+pmtiles verify my-data.pmtiles && echo ""✅ OK""
+
+# 2️⃣ List layers (requires jq)
+pmtiles show my-data.pmtiles --metadata |
+  jq -r '.vector_layers[].id'   # prints each layer name on its own line
+```
+
+If both commands succeed, you’re ready to upload and use the file in MapLibre.
+
+---
+
+### 🎉 You’re all set!
+
+Now you can confidently push the `.pmtiles` file to any static bucket, register the `pmtiles://` protocol once in your app, and reference the layers you just listed in your style. Happy mapping!",PASS,1.00,,All assertions passed,
+explicit — inspect a PMTiles file before deploying,skills/maplibre-pmtiles-patterns/SKILL.md,"I generated a PMTiles file and want to check what layers it contains and verify it is valid before uploading. How?
+","Below is a step-by-step checklist you can run locally to **(1) list the layers that are inside the archive** and **(2) make sure the file is structurally sound** before you push it to S3, Cloudflare R2, GitHub Pages, etc.
+
+---
+
+## 1️⃣ Install the official **pmtiles CLI**
+
+The CLI is a single binary (no Node, Go, or Python runtime needed).  
+
+| OS | How to get it |
+|----|----------------|
+| macOS (Intel/Apple Silicon) | `brew install pmtiles`  *(Homebrew pulls the latest release)* |
+| Linux (amd64/arm64) | Download the tarball from the GitHub releases page: <br>`curl -L https://github.com/protomaps/go-pmtiles/releases/download/v1.12.0/pmtiles-linux-amd64.tar.gz | tar xz` |
+| Windows | Grab `pmtiles-windows-amd64.exe` from the same releases page and rename it to `pmtiles.exe`. |
+| Docker (any platform) | `docker run --rm -v $(pwd):/data protomaps/go-pmtiles:latest <command>` – the binary is already in the image. |
+
+> **Tip:** The current stable CLI version (as of Oct 2026) is **v1.12.0**. Newer releases add a few extra flags but the core commands (`show`, `verify`, `extract`) have not changed.
+
+---
+
+## 2️⃣ Quick sanity-check: `show` the header
+
+```bash
+pmtiles show my-tiles.pmtiles
+```
+
+Typical output (truncated for brevity):
+
+```
+File: my-tiles.pmtiles
+Version: 3
+Tile type: vector
+Bounds: -180.0,-85.0511,180.0,85.0511
+Zoom range: 0-14
+Tile count: 1 234 567
+Compression: gzip
+Metadata keys: 5
+```
+
+*What you get from this command*  
+
+* **Zoom range** – `minzoom` / `maxzoom` that the archive claims.  
+* **Bounds** – geographic extent (useful to confirm you didn’t accidentally generate a global file when you only wanted a city).  
+* **Tile count** – sanity-check that the number isn’t zero or absurdly low.  
+
+If any of those numbers look wrong, you probably need to regenerate or extract a subset (see the `extract` command later).
+
+---
+
+## 3️⃣ List the **vector layer names** (or raster layer info)
+
+The layer names that you will use in a MapLibre style are stored in the **JSON metadata** under the `vector_layers` array. To see them:
+
+```bash
+pmtiles show my-tiles.pmtiles --metadata
+```
+
+You’ll get a JSON blob similar to:
+
+```json
+{
+  ""name"": ""my-tiles"",
+  ""format"": ""pbf"",
+  ""vector_layers"": [
+    { ""id"": ""water"", ""fields"": { ""class"": ""string"", ""name"": ""string"" } },
+    { ""id"": ""roads"", ""fields"": { ""class"": ""string"", ""type"": ""string"", ""name"": ""string"" } },
+    { ""id"": ""buildings"", ""fields"": { ""height"": ""number"", ""building"": ""string"" } }
+  ],
+  ""bounds"": [-180,-85.0511,180,85.0511],
+  ""minzoom"": 0,
+  ""maxzoom"": 14,
+  ""center"": [0,0,2]
+}
+```
+
+*What to look for*  
+
+| Item | Why it matters |
+|------|----------------|
+| `vector_layers[].id` | This is the exact string you will put in `""source-layer""` in your MapLibre style. |
+| `fields` | Helpful for debugging attribute names (`feature.getProperty('…')`). |
+| `format` | Should be `""pbf""` for vector tiles; `""png""`/`""jpeg""` for raster. |
+| `bounds`, `minzoom`, `maxzoom` | Confirm they match the area/zoom you intended. |
+
+> **Important:** If the file is a **raster** or **raster-dem** archive, the `vector_layers` key will be absent. Instead you’ll see `""format"": ""png""` (or `""jpeg""`/`""webp""`). In that case you don’t need a `source-layer` – the whole file is a single raster source.
+
+---
+
+## 4️⃣ Full structural validation: `verify`
+
+```bash
+pmtiles verify my-tiles.pmtiles
+```
+
+If the archive is healthy you’ll see:
+
+```
+✅  verification passed
+```
+
+If something is broken you’ll get a descriptive error, e.g.:
+
+```
+❌  tile offset out of bounds at z=12, x=345, y=678
+❌  duplicate tile entry for z=5, x=10, y=12
+❌  header checksum mismatch
+```
+
+**What `verify` checks**
+
+| Check | Description |
+|-------|-------------|
+| Header integrity (magic bytes, version, offsets) |
+| Tile offset/length table consistency |
+| No duplicate tile entries |
+| Offsets stay inside the file (range-request safe) |
+| Correct tile count per zoom level |
+| Valid JSON metadata (well-formed, required fields present) |
+
+If you get an error, you have two options:
+
+1. **Regenerate** the archive (often the fastest fix).  
+2. **Extract a clean subset** (see step 6) and re-run `verify` on the new file.
+
+---
+
+## 5️⃣ (Optional) Quick visual sanity-check in a browser
+
+Even after `verify` passes, it’s nice to see the tiles actually render.
+
+```js
+import * as pmtiles from ""pmtiles"";
+import maplibregl from ""maplibre-gl"";
+
+const protocol = new pmtiles.Protocol();
+maplibregl.addProtocol(""pmtiles"", protocol.tile);
+
+new maplibregl.Map({
+  container: ""map"",
+  style: {
+    version: 8,
+    sources: {
+      mytiles: {
+        type: ""vector"",
+        url: ""pmtiles://./my-tiles.pmtiles""
+      }
+    },
+    layers: [
+      {
+        id: ""water"",
+        type: ""fill"",
+        source: ""mytiles"",
+        ""source-layer"": ""water"",
+        paint: { ""fill-color"": ""#a0c8f0"" }
+      },
+      {
+        id: ""roads"",
+        type: ""line"",
+        source: ""mytiles"",
+        ""source-layer"": ""roads"",
+        paint: { ""line-color"": ""#777"", ""line-width"": 1 }
+      }
+    ]
+  },
+  center: [0, 0],
+  zoom: 2
+});
+```
+
+If the map shows the expected features, you’re good to go. If you get blank tiles, double-check that you used `url:` (not `tiles:`) and that the `source-layer` names match the `vector_layers` IDs you saw in step 3.
+
+---
+
+## 6️⃣ (If needed) **Extract** a smaller, clean archive
+
+Sometimes you generate a global file but only need a country or a tighter zoom range. Extracting a subset can also “repair” a corrupted region because the extractor rewrites the index.
+
+```bash
+# Extract by bounding box (lon/lat) and zoom range
+pmtiles extract \
+  --bbox=-1.5,48.5,1.5,50.5 \   # (west,south,east,north) – e.g. a small part of France
+  --minzoom=5 \
+  --maxzoom=12 \
+  my-tiles.pmtiles \
+  france-part.pmtiles
+```
+
+After extraction, run `pmtiles verify france-part.pmtiles` again. The new file will be smaller, faster to upload, and still contain a correct `vector_layers` list (the same as the source).
+
+---
+
+## 7️⃣ Upload-ready checklist
+
+| ✅ Item | How to confirm |
+|--------|----------------|
+| **Layer names known** | `pmtiles show --metadata` → copy each `id` into your style’s `""source-layer""` fields. |
+| **Zoom range correct** | Header `minzoom`/`maxzoom` match the zoom levels you intend to expose. |
+| **File passes `verify`** | `pmtiles verify` returns “✅ verification passed”. |
+| **CORS & Range support** | When you later host the file, test with `curl -I -H ""Range: bytes=0-0"" https://…/my-tiles.pmtiles`. You should see `Accept-Ranges: bytes` and `Access-Control-Allow-Origin: *` (or your domain). |
+| **Cache headers** | Set a long `Cache-Control` (e.g. `public, max-age=31536000, immutable`) on the object in S3/R2. |
+| **File size within host limits** | GitHub Pages ≤ 100 MiB, Netlify ≤ 100 MiB (free tier), S3/R2 have no practical limit. If you exceed, split the dataset into multiple PMTiles files and add them as separate sources in your style. |
+
+---
+
+## 8️⃣ TL;DR Command Summary
+
+```bash
+# 1. Show basic header
+pmtiles show my-tiles.pmtiles
+
+# 2. List vector layer IDs (JSON metadata)
+pmtiles show my-tiles.pmtiles --metadata | jq '.vector_layers[].id'
+
+# 3. Verify structural integrity
+pmtiles verify my-tiles.pmtiles
+
+# 4. (Optional) Extract a region/zoom subset
+pmtiles extract \
+  --bbox=-1.5,48.5,1.5,50.5 \
+  --minzoom=5 \
+  --maxzoom=12 \
+  my-tiles.pmtiles \
+  france-part.pmtiles
+
+# 5. Verify the new file
+pmtiles verify france-part.pmtiles
+```
+
+*(If you don’t have `jq` you can just read the JSON output; `jq` just makes it prettier.)*
+
+---
+
+### 🎉 You’re ready!
+
+Once the above steps all succeed, upload the `.pmtiles` file to your static host, set the proper CORS/Range headers, and reference it in your MapLibre style with:
+
+```json
+{
+  ""type"": ""vector"",
+  ""url"": ""pmtiles://https://my-cdn.example.com/my-tiles.pmtiles""
+}
+```
+
+Your map will now load tiles directly from the single file, with no tile server required. Happy mapping! 🚀",PASS,1.00,,All assertions passed,

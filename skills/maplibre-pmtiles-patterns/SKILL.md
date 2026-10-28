@@ -157,8 +157,10 @@ The [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) is the official comman
 **Why install and use it:**
 
 - **Convert MBTiles to PMTiles** — Many tools (tippecanoe, GDAL, martin-cp) output MBTiles. One command turns any .mbtiles file into a .pmtiles file: `pmtiles convert in.mbtiles out.pmtiles`. This is often the simplest way to get PMTiles when your pipeline already produces MBTiles.
-- **Inspect and verify archives** — `pmtiles show <file>` prints header and metadata (bounds, zoom range, tile count). `pmtiles verify <file>` checks archive integrity. Useful for debugging or confirming a file before uploading.
+- **Inspect and verify archives** — `pmtiles show <file>` prints the header (tile type, bounds, zoom range, tile counts, compression) and a metadata summary; `pmtiles show <file> --metadata` prints the full metadata JSON, which lists the layer names; `pmtiles verify <file>` checks the archive structure. Run `show --metadata` and `verify` before uploading.
 - **Extract subsets** — `pmtiles extract` creates a smaller .pmtiles file from an existing one (e.g. by bounding box or zoom range), so you can ship a region or a limited zoom band without regenerating from source.
+
+**Layer names come from `--metadata`, not from plain `show`.** Plain `pmtiles show` prints any metadata value that is not a string as `<object, use --metadata to view full JSON metadata>`, and the layer list is one of those: the `vector_layers` array, which the PMTiles spec requires in the metadata of every vector archive, names each layer's `id` (the value for `source-layer` in the style) and its `fields`. Read it with `pmtiles show <file> --metadata` (go-pmtiles 1.11.0 and later); decoding a tile is not needed to find the layer names. `pmtiles verify <file>` checks the archive structure (header offsets and lengths, tile counts, zoom range, bounds, tile order), not the tile contents, and exits with an error that names the problem.
 
 **❌ The subcommand list is closed — don't reach for a plausible-sounding verb.** go-pmtiles ships exactly `show`, `tile`, `verify`, `extract`, `merge`, `serve`, `convert`, `cluster`, `upload`, `edit` and `version`. There is no `info` verb and no `inspect` verb, and nothing sets metadata from the command line except `edit`. To read an archive's header, bounds and zoom range, the command is `pmtiles show`; to check integrity, `pmtiles verify`.
 
@@ -232,7 +234,8 @@ PMTiles supports **raster** tiles (PNG/JPEG, e.g. satellite or pre-rendered imag
 - [PMTiles for MapLibre GL](https://docs.protomaps.com/pmtiles/maplibre) (Protomaps) — Setup, vector/raster/raster-dem (Terrarium) sources, React usage.
 - [`addProtocol` (MapLibre GL JS API)](https://maplibre.org/maplibre-gl-js/docs/API/functions/addProtocol/) — The custom-protocol handler signature and the `{data}` return shape.
 - [PMTiles](https://github.com/protomaps/PMTiles) — Format and protocol
-- [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) — Simplest way to create PMTiles (`convert`, `show`, `verify`, `extract`)
+- [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) — `convert`, `show` and its `--metadata` flag, `verify`, `extract`; what plain `show` prints is in [`show.go`](https://github.com/protomaps/go-pmtiles/blob/main/pmtiles/show.go) and what `verify` checks in [`verify.go`](https://github.com/protomaps/go-pmtiles/blob/main/pmtiles/verify.go)
+- [PMTiles spec v3, JSON Metadata](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md#5-json-metadata) — `vector_layers` is required for vector archives, in the [TileJSON 3.0 shape](https://github.com/mapbox/tilejson-spec/blob/22f5f91e643e8980ef2656674bef84c2869fbe76/3.0.0/README.md#33-vector_layers)
 - [Planetiler](https://github.com/onthegomap/planetiler) — OSM → PMTiles/MBTiles
 - [MapLibre GL JS](https://maplibre.org/maplibre-gl-js/docs/) — Style spec and API
 

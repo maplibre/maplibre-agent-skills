@@ -1,0 +1,844 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+explicit — inspect a PMTiles file before deploying,skills/maplibre-pmtiles-patterns/SKILL.md,false,"I generated a PMTiles file and want to check what layers it contains and verify it is valid before uploading. How?
+","Below is a **step-by-step cheat-sheet** you can run on any workstation (Linux, macOS, Windows + WSL) to:
+
+1. **Confirm the PMTiles file is structurally valid** (header, index, checksums).  
+2. **Read the embedded TileJSON** (bounds, min/max-zoom, attribution, etc.).  
+3. **List the vector-tile layers** that are actually stored inside the file.  
+4. **Optionally preview the tiles in a browser** before you push the file to a CDN or a server.
+
+---
+
+## 1️⃣ Install the tooling you’ll need
+
+| Tool | What it does | Install command |
+|------|--------------|-----------------|
+| **pmtiles-cli** (official MapLibre/Mapbox CLI) | `info`, `validate`, `tilejson`, `serve`, `get` | `npm i -g @mapbox/pmtiles`  *(or `brew install pmtiles` on macOS, `cargo install pmtiles-cli` if you prefer Rust)* |
+| **mapbox-vector-tile** (Node) or **mapbox-vector-tile-decoder** (Python) | Decode a single PBF tile to see its layer names | `npm i -g mapbox-vector-tile`  **or** `pip install mapbox-vector-tile` |
+| **pmtiles-viewer** (optional, tiny web UI) | Quick visual check in a browser | `npm i -g pmtiles-viewer` |
+| **tippecanoe** (optional, if you still have the source GeoJSON/MBTiles) | Re-run the generation, list layers before packaging | `brew install tippecanoe` (mac) / `apt-get install tippecanoe` (Linux) |
+| **jq** (JSON pretty-printer) | Makes TileJSON output readable | `brew install jq` / `apt-get install jq` |
+
+> **Tip:** If you already have Node ≥ 14 or a recent Python 3, the above commands will work out-of-the-box. No heavy GIS libraries (GDAL, QGIS) are required.
+
+---
+
+## 2️⃣ Verify the container is *well-formed*
+
+```bash
+# Basic sanity check – reads the header & index, reports any corruption
+pmtiles validate my-tiles.pmtiles
+```
+
+**Typical output**
+
+```
+✅  PMTiles file is valid
+Header:
+  version: 2
+  root_offset: 123456
+  root_length: 7890
+  tile_count: 124578
+  tile_data_offset: 8192
+  tile_data_length: 34567890
+```
+
+If the file is broken you’ll see an error like:
+
+```
+❌  Invalid PMTiles file: index checksum mismatch (expected 0x1a2b3c, got 0x4d5e6f)
+```
+
+In that case you’ll need to regenerate the file (or run `pmtiles repair` if you suspect a truncated download).
+
+---
+
+## 3️⃣ Pull the embedded TileJSON (metadata)
+
+```bash
+pmtiles tilejson my-tiles.pmtiles | jq .
+```
+
+**What you’ll see**
+
+```json
+{
+  ""tilejson"": ""2.2.0"",
+  ""name"": ""my-tiles"",
+  ""description"": ""Vector tiles of city streets"",
+  ""bounds"": [-122.55,37.70,-122.35,37.85],
+  ""minzoom"": 0,
+  ""maxzoom"": 14,
+  ""center"": [-122.45,37.775,12],
+  ""vector_layers"": [
+    { ""id"": ""roads"", ""description"": ""All road features"", ""minzoom"": 0, ""maxzoom"": 14 },
+    { ""id"": ""buildings"", ""description"": ""Building footprints"", ""minzoom"": 12, ""maxzoom"": 14 }
+  ],
+  ""attribution"": ""© City GIS""
+}
+```
+
+*If `vector_layers` is present, the creator already wrote the layer list into the TileJSON. That’s the quickest way to know what’s inside.*
+
+---
+
+## 4️⃣ Extract a single tile and decode its layer names
+
+Even if the TileJSON does **not** contain a `vector_layers` array (some generators omit it), you can always look at a real tile.
+
+### 4.1 Pull a tile with the CLI
+
+```bash
+# Grab the tile at zoom 0, x=0, y=0 (the “root” tile – it usually contains all layers)
+pmtiles get my-tiles.pmtiles 0 0 0 > root.pbf
+```
+
+If you prefer a higher-zoom tile (e.g., `z=12, x=657, y=1582`) just replace the numbers.
+
+### 4.2 Decode the PBF to list layers
+
+#### Option A – Node (quick, no code file)
+
+```bash
+# Install once: npm i -g mapbox-vector-tile
+node -e ""
+  const fs = require('fs');
+  const {decode} = require('mapbox-vector-tile');
+  const data = fs.readFileSync('root.pbf');
+  const tile = decode(data);
+  console.log('Layers in this tile:', Object.keys(tile));
+""
+```
+
+**Result**
+
+```
+Layers in this tile: [ 'roads', 'buildings', 'water', 'landuse' ]
+```
+
+#### Option B – Python (useful for scripting)
+
+```python
+# pip install mapbox-vector-tile
+from mapbox_vector_tile import decode
+with open('root.pbf', 'rb') as f:
+    tile = decode(f.read())
+print('Layers:', list(tile.keys()))
+```
+
+### 4.3 (Optional) Dump the full schema of each layer
+
+If you want to see the attribute fields that each layer carries:
+
+```bash
+node -e ""
+  const fs = require('fs');
+  const {decode} = require('mapbox-vector-tile');
+  const data = fs.readFileSync('root.pbf');
+  const tile = decode(data);
+  for (const [layerName, features] of Object.entries(tile)) {
+    const fields = new Set();
+    for (const f of features) {
+      Object.keys(f.properties).forEach(k => fields.add(k));
+    }
+    console.log(`${layerName}: ${[...fields].join(', ')}`);
+  }
+""
+```
+
+---
+
+## 5️⃣ Quick visual sanity-check (optional but highly recommended)
+
+### 5.1 Serve the PMTiles locally
+
+```bash
+pmtiles serve my-tiles.pmtiles 8080
+```
+
+The CLI starts a tiny HTTP server that speaks the **PMTiles** protocol (compatible with MapLibre GL JS, Mapbox GL JS, and any client that understands the `pmtiles://` scheme).
+
+### 5.2 Open a minimal HTML page
+
+Create `preview.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>PMTiles preview</title>
+  <script src=""https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <script src=""https://unpkg.com/@mapbox/pmtiles@2.7.0/dist/pmtiles.min.js""></script>
+  <style>body,html,#map{margin:0;height:100%;}</style>
+</head>
+<body>
+<div id=""map""></div>
+<script>
+  // Register the PMTiles protocol
+  const pmtiles = new PMTiles('http://localhost:8080/my-tiles.pmtiles');
+  maplibregl.addProtocol('pmtiles', (params) => pmtiles.get(params));
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: {
+        mytiles: {
+          type: 'vector',
+          url: 'pmtiles://my-tiles.pmtiles'
+        }
+      },
+      layers: [
+        { id: 'roads', type: 'line', source: 'mytiles', 'source-layer': 'roads', paint: { 'line-color': '#ff6600', 'line-width': 2 } },
+        { id: 'buildings', type: 'fill', source: 'mytiles', 'source-layer': 'buildings', paint: { 'fill-color': '#c0c0c0', 'fill-opacity': 0.6 } }
+      ]
+    },
+    center: [-122.45, 37.775],
+    zoom: 12
+  });
+</script>
+</body>
+</html>
+```
+
+Open `preview.html` in a browser → you’ll see the layers rendered. If a layer is missing or looks wrong, you now know before you upload.
+
+---
+
+## 6️⃣ Automating the whole “check-before-upload” flow
+
+If you want a single-command CI step (e.g., in GitHub Actions, GitLab CI, or a local pre-commit hook), wrap the above into a shell script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+FILE=""${1:-my-tiles.pmtiles}""
+
+# 1️⃣ Validate container
+pmtiles validate ""$FILE""
+
+# 2️⃣ Show TileJSON (optional, just for logging)
+echo ""=== TileJSON ===""
+pmtiles tilejson ""$FILE"" | jq .
+
+# 3️⃣ Grab a tile and list layers
+TMP=$(mktemp)
+pmtiles get ""$FILE"" 0 0 0 > ""$TMP""
+echo ""=== Layers in tile (0/0/0) ===""
+node -e ""
+  const fs = require('fs');
+  const {decode} = require('mapbox-vector-tile');
+  const tile = decode(fs.readFileSync('$TMP'));
+  console.log(Object.keys(tile).join(', '));
+""
+rm ""$TMP""
+
+echo ""✅ $FILE passed all checks""
+```
+
+Add it to your CI:
+
+```yaml
+# .github/workflows/pmtiles.yml
+name: PMTiles sanity check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          npm i -g @mapbox/pmtiles mapbox-vector-tile
+          sudo apt-get update && sudo apt-get install -y jq
+      - name: Run validator
+        run: ./scripts/pmtiles-check.sh path/to/my-tiles.pmtiles
+```
+
+If any step exits with a non-zero status, the CI job fails and you never push a broken file.
+
+---
+
+## 7️⃣ Common pitfalls & how to fix them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `pmtiles validate` reports **“index checksum mismatch”** | File got truncated during copy (e.g., `scp` without `-C` or a bad network) | Re-transfer with `rsync --partial --progress` or regenerate. |
+| `pm",FAIL,0.00,,"The output fails the rubric on several counts: 1) It does not mention the 'pmtiles show --metadata' command or its use for inspecting the 'vector_layers' array. 2) It fails to mention the 'pmtiles verify' command. 3) It explicitly presents decoding a tile via Node/Python scripts as a primary method for listing layers, which the rubric forbids.",
+explicit — inspect a PMTiles file before deploying,skills/maplibre-pmtiles-patterns/SKILL.md,false,"I generated a PMTiles file and want to check what layers it contains and verify it is valid before uploading. How?
+","Below is a practical, step-by-step guide you can follow right now to **inspect a PMTiles file, list the layers (or “datasets”) it contains, and make sure the file is structurally sound** before you push it to a server or a CDN.
+
+---
+
+## 1️⃣ Quick-look: What is a PMTiles file?
+
+- **PMTiles** is a single-file container for raster or vector tiles (XYZ, TMS, or Web Mercator).  
+- It stores a **TileJSON** block (metadata) and a **tile index** that maps Z/X/Y → byte offset/length.
+- The file format is deliberately simple, so you can validate it with a few command-line tools or a short script.
+
+---
+
+## 2️⃣ Install the official tooling
+
+The easiest way to work with PMTiles is the **`pmtiles` CLI** (written in Go) and the **`pmtiles-js`/`pmtiles-py` libraries** for deeper inspection.
+
+| Platform | Command |
+|----------|---------|
+| **macOS / Linux (Homebrew)** | `brew install pmtiles` |
+| **macOS / Linux (binary)** | `curl -L https://github.com/protomaps/PMTiles/releases/latest/download/pmtiles-$(uname -s)-$(uname -m).tar.gz \| tar -xz && sudo mv pmtiles /usr/local/bin/` |
+| **Windows (Scoop)** | `scoop install pmtiles` |
+| **Node.js** | `npm i -g @protomaps/pmtiles-cli` |
+| **Python** | `pip install pmtiles` |
+
+> **Tip:** The Go binary (`pmtiles`) works everywhere and is the one I’ll use in the examples below.
+
+---
+
+## 3️⃣ Verify the file is *structurally* valid
+
+### 3.1 Run the built-in validator
+
+```bash
+pmtiles validate mydata.pmtiles
+```
+
+- **What it does:**  
+  - Checks the file header (magic bytes, version, tile count).  
+  - Walks the tile index and verifies that every offset/length points inside the file.  
+  - Computes a CRC32 for each tile block (if the file was written with checksums).  
+
+- **Typical output**
+
+```
+✅ PMTiles file is well-formed
+✔  Header OK (version 2, 1 234 tiles)
+✔  Tile index OK (no overlapping ranges)
+✔  All tile offsets within file bounds
+```
+
+If you see any `❌` messages, the file is corrupted (e.g., truncated, wrong offsets). In that case you’ll need to regenerate it from the source data.
+
+### 3.2 Optional: deeper integrity check (full CRC)
+
+If you built the PMTiles with `--checksum` (Tippecanoe or `pmtiles create --checksum`), you can ask the validator to recompute every CRC:
+
+```bash
+pmtiles validate --checksum mydata.pmtiles
+```
+
+This is slower (it reads every tile) but guarantees that the tile payloads themselves haven’t been altered.
+
+---
+
+## 4️⃣ Peek at the **metadata** (TileJSON) and list the layers
+
+PMTiles can hold **any** TileJSON you like, but for vector tiles the most common pattern is:
+
+```json
+{
+  ""vector_layers"": [
+    {""id"":""roads"",""fields"":{""class"":""String"",""type"":""String""}},
+    {""id"":""buildings"",""fields"":{""height"":""Number""}},
+    …
+  ],
+  ""bounds"": [-180,-85,180,85],
+  ""minzoom"":0,
+  ""maxzoom"":14,
+  …
+}
+```
+
+### 4.1 Dump the TileJSON block
+
+```bash
+pmtiles info mydata.pmtiles
+```
+
+Output (pretty-printed JSON) will include:
+
+- `tilejson` version
+- `name`, `description`, `attribution`
+- `vector_layers` array (the **layers** you’re after)
+- `bounds`, `center`, `minzoom`, `maxzoom`
+- `format` (`pbf` for vector, `png`/`jpg` for raster)
+
+If you only want the `vector_layers` part:
+
+```bash
+pmtiles info mydata.pmtiles | jq '.vector_layers'
+```
+
+> **Note:** `jq` is a tiny JSON processor (`brew install jq` on macOS). It makes the output readable.
+
+### 4.2 Using the Python library (if you prefer a script)
+
+```python
+from pmtiles.reader import Reader
+
+with open(""mydata.pmtiles"", ""rb"") as f:
+    r = Reader(f)
+    metadata = r.metadata()
+    print(metadata.get(""vector_layers""))
+```
+
+That prints a Python list of dicts, exactly the same as the JSON you saw with `pmtiles info`.
+
+---
+
+## 5️⃣ Quick visual sanity-check (optional but very helpful)
+
+### 5.1 Load in **MapLibre GL JS** (browser)
+
+Create a tiny HTML file:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>PMTiles preview</title>
+  <script src=""https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js""></script>
+  <script src=""https://unpkg.com/@protomaps/pmtiles@latest/dist/pmtiles.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>#map {position:absolute;top:0;bottom:0;width:100%;}</style>
+</head>
+<body>
+<div id=""map""></div>
+<script>
+  // Register the PMTiles protocol handler
+  const pmtiles = new PMTiles(""mydata.pmtiles"");
+  maplibregl.addProtocol(""pmtiles"", pmtiles.tile);
+  
+  const map = new maplibregl.Map({
+    container: ""map"",
+    style: {
+      version: 8,
+      sources: {
+        ""mytiles"": {
+          type: ""vector"",
+          url: ""pmtiles://mydata.pmtiles""
+        }
+      },
+      layers: [
+        // Add a simple line layer for each vector layer automatically
+        // (you can also manually list them if you prefer)
+      ]
+    },
+    center: [0, 0],
+    zoom: 2
+  });
+
+  // Dynamically add a layer for each vector layer in the TileJSON
+  pmtiles.getMetadata().then(meta => {
+    meta.vector_layers.forEach(vl => {
+      map.addLayer({
+        id: vl.id,
+        type: ""line"",
+        source: ""mytiles"",
+        ""source-layer"": vl.id,
+        paint: { ""line-color"": ""#ff6600"", ""line-width"": 2 }
+      });
+    });
+  });
+</script>
+</body>
+</html>
+```
+
+- Save the file as `preview.html` in the same folder as `mydata.pmtiles`.
+- Open it in a browser (Chrome/Firefox).  
+- If the map renders, you know the file is both **valid** and **readable** by a typical client.
+
+### 5.2 Load in **QGIS** (desktop GIS)
+
+1. Install the **PMTiles** plugin (QGIS 3.28+).  
+2. Drag-and-drop the `.pmtiles` file onto the QGIS canvas.  
+3. QGIS will automatically read the TileJSON and expose each vector layer as a separate sub-layer.  
+
+If QGIS shows the layers and you can toggle them on/off, you have a green light.
+
+---
+
+## 6️⃣ Common pitfalls & how to fix them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `pmtiles validate` reports “offset out of bounds” | The file was truncated (e.g., upload interrupted) or created with an older version of Tippecanoe that didn’t write the index correctly. | Regenerate the PMTiles from the source data. Use the latest `tippecanoe` (`>=2.27`) or `pmtiles create`. |
+| `pmtiles info` shows **no** `vector_layers` field | You built a raster PMTiles, or you omitted `--layer` metadata when creating the file. | For vector data, add `--layer` (Tippecanoe) or `--metadata '{""vector_layers"":[...]}'` when using `pmtiles create`. |
+| Browser console shows `Failed to load resource: net::ERR_FILE_NOT_FOUND` | The `pmtiles://` URL can’t find the file because the protocol handler wasn’t registered or the file path is wrong. | Ensure the `PMTiles` object is instantiated with the **exact** relative/absolute path to the file, and that the script `pmtiles.js` is loaded before you call `addProtocol`. |
+| QGIS plugin refuses to open the file | The file uses **PMTiles v1** (old) while the plugin expects v2+. | Re-create the file with `pmtiles create --version 2 …` (v2 is the default for recent tools). |
+| `pmtiles validate --checksum` is *slow* (minutes) | Very large dataset (millions of tiles). | Run the validator without `--checksum` for a quick sanity check; run with `--checksum` only on a small sample (`--sample 0.01` if you add that flag in a future release) or on a CI pipeline where time isn’t critical. |
+
+---
+
+## 7️⃣ Automating the check in a CI/CD pipeline
+
+If you want to make sure **every** PMTiles you push to your bucket passes validation, add a tiny script to your CI (GitHub Actions, GitLab CI, etc.):
+
+```yaml
+# .github/workflows/pmtiles.yml
+name: Validate PMTiles
+
+on:
+  push:
+    paths:
+      - '**/*.pmtiles'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pmtiles CLI
+        run: |
+          curl -L https://github.com/protomaps/PMTiles/releases/latest/download/pmtiles-linux-amd64.tar.gz | tar -xz
+          sudo mv pmtiles /usr/local/bin/
+      - name: Validate all PMTiles
+        run: |
+          for f in $(git ls-files '*.pmtiles'); do
+            echo ""🔎 Validating $f""
+            pmtiles validate ""$f"" || exit 1
+            echo ""✅ $f looks good""
+          done
+```
+
+If any file fails, the workflow aborts and you’ll get a clear error in the PR.
+
+---
+
+## 8️⃣ Quick cheat-sheet (copy-paste)
+
+```bash
+# 1️⃣ Install (once)
+brew install pmtiles   # macOS
+# or download binary from GitHub releases
+
+# 2️⃣ Validate
+pmtiles validate mydata.pmtiles
+
+# 3️⃣ Show metadata (incl. layers)
+pmtiles info mydata.pmtiles | jq '.vector_layers'
+
+# 4️⃣ List just the layer names
+pmtiles info mydata.pmtiles | jq -r '.vector_layers[].id'
+
+# 5️⃣ Extract the raw TileJSON (if you need to edit)
+pmtiles info mydata.pmtiles > tilejson.json
+
+# 6️⃣ Quick visual test (MapLibre)
+#   - create preview.html (see above)
+#   - open in browser
+
+# 7️⃣ Optional: Python script
+python - <<'PY'
+from pmtiles.reader import Reader
+with open(""mydata.pmtiles"",""rb"") as f:
+    r = Reader(f)
+    meta = r.metadata()
+    print(""Layers:"", [l[""id""] for l in meta.get(""vector_layers"", [])])
+PY
+```
+
+---
+
+## 9️⃣ TL;DR – What you should do right now
+
+1. **Install** the `pmtiles` CLI (`brew install pmtiles` or download the binary).  
+2. Run `pmtiles validate mydata.pmtiles`. If it prints ✅, the file structure is sound.  
+3. Run `pmtiles info mydata.pmtiles | jq '.vector_layers'` to see the exact list of vector layers (or `jq -r '.vector_layers[].id'` for just the names).  
+4. (Optional) Open the file in a browser with a tiny MapLibre preview or drop it into QGIS to make sure the tiles actually render.  
+5. If any step fails, regenerate the PMTiles with the latest version of **Tippecanoe** (`tippecanoe -o mydata.pmtiles …`) or **pmtiles create** and repeat.
+
+Once those checks pass, you can safely upload the file to S3, Cloudflare R2, GitHub Releases, or wherever you host your tiles. 🎉
+
+Happy tiling! 🚀",FAIL,0.00,,"The output fails to meet the rubric requirements: 1) It uses 'pmtiles info' instead of the required 'pmtiles show --metadata' command; 2) It uses 'pmtiles validate' instead of the required 'pmtiles verify' command; 3) While it correctly identifies the structure of the metadata, it uses the incorrect command names specified by the rubric.",
+explicit — inspect a PMTiles file before deploying,skills/maplibre-pmtiles-patterns/SKILL.md,false,"I generated a PMTiles file and want to check what layers it contains and verify it is valid before uploading. How?
+","Below is a practical, step-by-step guide you can follow right now to **inspect a PMTiles file, list the layers (or “datasets”) it contains, and make sure the file is structurally sound** before you push it to a server or a CDN.
+
+---
+
+## 1️⃣ Quick-look: What is a PMTiles file?
+
+- **PMTiles** is a single-file container for raster or vector tiles (XYZ, TMS, or Web Mercator).  
+- It stores a **TileJSON** block (metadata) and a **tile index** that maps Z/X/Y → byte offset/length.
+- The file format is deliberately simple, so you can validate it with a few command-line tools or a short script.
+
+---
+
+## 2️⃣ Install the official tooling
+
+The easiest way to work with PMTiles is the **`pmtiles` CLI** (written in Go) and the **`pmtiles-js`/`pmtiles-py` libraries** for deeper inspection.
+
+| Platform | Command |
+|----------|---------|
+| **macOS / Linux (Homebrew)** | `brew install pmtiles` |
+| **macOS / Linux (binary)** | `curl -L https://github.com/protomaps/PMTiles/releases/latest/download/pmtiles-$(uname -s)-$(uname -m) -o pmtiles && chmod +x pmtiles && sudo mv pmtiles /usr/local/bin/` |
+| **Windows (Scoop)** | `scoop install pmtiles` |
+| **Node.js** | `npm i -g @protomaps/pmtiles-cli` |
+| **Python** | `pip install pmtiles` |
+
+> **Tip:** The Go binary (`pmtiles`) is the most feature-complete (it includes `info`, `validate`, `extract`, `list`, `tilejson`, …). Keep it handy.
+
+---
+
+## 3️⃣ Verify the file is a valid PMTiles archive
+
+```bash
+pmtiles validate mydata.pmtiles
+```
+
+- **Result**:  
+  - `✅ Valid PMTiles file` – the header, index, and CRC checks all passed.  
+  - If you see errors, the CLI will point to the exact byte offset that failed (e.g., “invalid magic number”, “tile offset out of bounds”, “checksum mismatch”).  
+
+**What the validator does under the hood**
+
+| Check | Description |
+|-------|-------------|
+| Magic bytes (`PMT\0`) | Confirms it’s a PMTiles file. |
+| Version number | Must be `1` (current spec). |
+| Header fields (tile count, max zoom, etc.) | Must be sane (e.g., `maxZoom >= minZoom`). |
+| Tile index integrity | Every entry’s offset/length fits inside the file. |
+| CRC32 of each tile (if present) | Detects corruption. |
+| TileJSON block | Must be valid JSON and contain required fields (`tiles`, `minzoom`, `maxzoom`, `bounds`). |
+
+If the validator reports **“OK”**, you can safely move on.
+
+---
+
+## 4️⃣ Peek at the embedded TileJSON (metadata)
+
+```bash
+pmtiles tilejson mydata.pmtiles
+```
+
+Typical output (pretty-printed):
+
+```json
+{
+  ""tilejson"": ""2.2.0"",
+  ""name"": ""My vector tiles"",
+  ""description"": ""A small test dataset"",
+  ""version"": ""1.0"",
+  ""bounds"": [-180,-85.0511,180,85.0511],
+  ""minzoom"": 0,
+  ""maxzoom"": 14,
+  ""center"": [0,0,2],
+  ""vector_layers"": [
+    {
+      ""id"": ""roads"",
+      ""description"": ""Road network"",
+      ""minzoom"": 5,
+      ""maxzoom"": 14,
+      ""fields"": {
+        ""class"": ""String"",
+        ""name"": ""String""
+      }
+    },
+    {
+      ""id"": ""buildings"",
+      ""description"": ""Building footprints"",
+      ""minzoom"": 12,
+      ""maxzoom"": 14,
+      ""fields"": {
+        ""height"": ""Number"",
+        ""type"": ""String""
+      }
+    }
+  ]
+}
+```
+
+### How to read it
+
+- **`vector_layers`** (or `raster_layers` for raster tiles) is the list you’re after.  
+- Each entry’s `id` is the **layer name** that MapLibre GL / Mapbox GL will expose via `source-layer`.  
+- `fields` tells you the attribute schema (useful for styling).  
+
+If the `vector_layers` array is missing, the file may have been generated without a TileJSON block (some pipelines skip it). You can still list layers by reading the first tile (see §5).
+
+---
+
+## 5️⃣ List the distinct layer names *without* relying on TileJSON
+
+Sometimes you have a PMTiles file that was created without a TileJSON block (e.g., raw output from `tippecanoe --no-tilejson`). In that case you can **sample a few tiles** and extract the layer names directly.
+
+### 5.1 Using the CLI (`pmtiles list`)
+
+```bash
+pmtiles list mydata.pmtiles --zoom 0-14 --sample 10
+```
+
+- `--sample 10` tells the tool to pick up to 10 random tiles per zoom level (adjust as needed).  
+- The output looks like:
+
+```
+Zoom 0: layers = [ ""landuse"", ""water"" ]
+Zoom 5: layers = [ ""roads"", ""water"", ""landuse"" ]
+Zoom 12: layers = [ ""roads"", ""buildings"", ""water"" ]
+```
+
+### 5.2 Using a tiny Node/Python script
+
+If you prefer a programmatic approach (e.g., to embed in CI), here’s a **Python snippet** that reads the first tile of each zoom level and prints the layer IDs:
+
+```python
+import pmtiles
+import json
+import sys
+from collections import defaultdict
+
+def list_layers(pmtiles_path):
+    layers_by_zoom = defaultdict(set)
+    with pmtiles.PMTiles(pmtiles_path) as src:
+        # Get the range of zoom levels from the header
+        minz, maxz = src.header.min_zoom, src.header.max_zoom
+        for z in range(minz, maxz + 1):
+            # Grab the first tile (x=0, y=0) – if it exists
+            try:
+                tile = src.get(z, 0, 0)
+                if tile:
+                    # Tile data is a Mapbox Vector Tile (MVT) protobuf
+                    # Use mapbox_vector_tile to decode
+                    import mapbox_vector_tile
+                    decoded = mapbox_vector_tile.decode(tile)
+                    for layer_name in decoded.keys():
+                        layers_by_zoom[z].add(layer_name)
+            except Exception as e:
+                # No tile at (0,0) for this zoom – ignore
+                pass
+
+    for z in sorted(layers_by_zoom):
+        print(f""Zoom {z}: {sorted(layers_by_zoom[z])}"")
+
+if __name__ == ""__main__"":
+    list_layers(sys.argv[1])
+```
+
+> **Dependencies**: `pip install pmtiles mapbox-vector-tile`.  
+> This script works for both vector and raster PMTiles (raster tiles will raise a decode error, which you can ignore).
+
+---
+
+## 6️⃣ Full-file integrity check (optional but recommended)
+
+The `validate` command only checks the *structure*. If you want to be absolutely sure that **every tile can be decoded**, run a quick “exhaustive read”:
+
+```bash
+pmtiles extract --all mydata.pmtiles /tmp/pmtiles-extract
+```
+
+- This extracts every tile to a temporary folder.  
+- If any tile is corrupted, the command aborts with an error and tells you the offending Z/X/Y.  
+- After extraction you can delete the folder; the operation is fast because it just copies bytes (no re-encoding).
+
+**Alternative (streaming) approach** – useful for huge archives where extracting everything would be costly:
+
+```bash
+pmtiles validate --deep mydata.pmtiles
+```
+
+`--deep` tells the validator to read *each tile* and compute its CRC (if present) or at least verify that the byte range is readable. It’s slower but still runs in seconds for files up to a few hundred MB.
+
+---
+
+## 7️⃣ Quick sanity-check with a viewer
+
+Even after the CLI says “valid”, it’s good practice to **preview the tiles**:
+
+| Tool | How to use |
+|------|------------|
+| **MapLibre GL JS** (browser) | ```html <script src=""https://unpkg.com/pmtiles@latest/dist/pmtiles.min.js""></script> <script> const pm = new PMTiles('mydata.pmtiles'); const source = new maplibregl.VectorSource({ url: pm.getURL() }); // add to map ``` |
+| **QGIS** (desktop) | *Layer → Add Layer → Add Vector Tile Layer* → select the `.pmtiles` file. QGIS will read the TileJSON and list the layers in the “Layer” dropdown. |
+| **TileServer-GL** (Docker) | `docker run -p 8080:80 -v $(pwd):/data  maptiler/tileserver-gl` then open `http://localhost:8080/` and add the PMTiles as a source. |
+| **Tippecanoe’s `tile-join`** (debug) | `tile-join --output=debug.mbtiles mydata.pmtiles` – this converts back to MBTiles so you can open it in any MBTiles viewer. |
+
+If the map renders correctly and you can toggle the layers you saw in the TileJSON, you’re good to go.
+
+---
+
+## 8️⃣ Checklist before uploading
+
+| ✅ Item | How to verify |
+|--------|---------------|
+| **File is a valid PMTiles archive** | `pmtiles validate mydata.pmtiles` (or `--deep`). |
+| **TileJSON present & correct** | `pmtiles tilejson mydata.pmtiles` → JSON parses, `vector_layers` list matches expectations. |
+| **All expected layers are present** | `pmtiles list …` **or** run the Python script above. |
+| **No missing zoom levels** | Compare `minzoom`/`maxzoom` in TileJSON with the actual tile index (`pmtiles info`). |
+| **Tile count matches header** | `pmtiles info` shows `tileCount`; you can also count extracted tiles (`ls -R | wc -l`). |
+| **File size reasonable** | Compare against source MBTiles size; PMTiles should be ~5-15 % smaller due to better packing. |
+| **MIME type for CDN** | When you upload, set `Content-Type: application/vnd.pmtiles`. |
+| **Cache-control** | `Cache-Control: public, max-age=31536000, immutable` (if you never rewrite the same URL). |
+| **Optional: SHA-256 checksum** | `shasum -a 256 mydata.pmtiles > mydata.pmtiles.sha256` – store alongside the file for later verification. |
+
+---
+
+## 9️⃣ Automating the whole thing (CI/CD example)
+
+If you’re generating PMTiles as part of a build pipeline (GitHub Actions, GitLab CI, etc.), you can embed the checks in a single job:
+
+```yaml
+name: Validate PMTiles
+
+on: [push, pull_request]
+
+jobs:
+  pmtiles-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pmtiles CLI
+        run: |
+          curl -L https://github.com/protomaps/PMTiles/releases/latest/download/pmtiles-linux-amd64 -o pmtiles
+          chmod +x pmtiles
+          sudo mv pmtiles /usr/local/bin/
+      - name: Build PMTiles (example with tippecanoe)
+        run: |
+          tippecanoe -o data.pmtiles -z14 -Z0 --no-tilejson data.geojson
+      - name: Validate structure
+        run: pmtiles validate data.pmtiles
+      - name: List layers
+        run: |
+          echo ""Layers found:""
+          pmtiles list data.pmtiles --sample 5
+      - name: Deep validation (optional, may be slower)
+        run: pmtiles validate --deep data.pmtiles
+      - name: Upload artifact (if all checks pass)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmtiles
+          path: data.pmtiles
+```
+
+If any step fails, the job aborts and you never push a broken file.
+
+---
+
+## 📚 TL;DR – One-liner cheat sheet
+
+```bash
+# 1️⃣ Validate structure
+pmtiles validate mydata.pmtiles
+
+# 2️⃣ Show TileJSON (metadata + layer list)
+pmtiles tilejson mydata.pmtiles | jq .
+
+# 3️⃣ Quick layer list (no TileJSON needed)
+pmtiles list mydata.pmtiles --sample 5
+
+# 4️⃣ Deep check (optional)
+pmtiles validate --deep mydata.pmtiles
+```
+
+If all commands exit with a green checkmark and the `vector_layers` array (or `pmtiles list` output) contains the layers you expect, you can safely upload the file.
+
+---
+
+### 🎉 You’re ready!
+
+You now have:
+
+1. **",FAIL,0.00,,"The output fails to meet the negative constraints and specific command requirements. It uses 'pmtiles tilejson' instead of the required 'pmtiles show --metadata' command. It explicitly suggests using 'pmtiles list' and provides a Python script to decode tiles as a primary method for listing layers, which the rubric forbids. It also suggests 'pmtiles validate' instead of the required 'pmtiles verify' command.",
