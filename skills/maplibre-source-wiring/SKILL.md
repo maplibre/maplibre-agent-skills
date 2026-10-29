@@ -7,7 +7,7 @@ metadata:
 
 # MapLibre Source Wiring
 
-**Use this only when a source is configured and the map is wrong with no error, in one of the ways listed below, or when choosing how a source should reference a tile endpoint.** For any other MapLibre question, such as how to style a layer that already draws, answer it as asked, assume the source works, and add no section, table, list or note about the failure modes this skill covers or any other reason a map might not render.
+**Use this only when a source is configured and the map is wrong with no error, in one of the ways listed below, or when choosing how a source should reference a tile endpoint.** For any other MapLibre question, such as how to style a layer that already draws, answer it as asked and stop when the question is answered: no troubleshooting, tips, pitfalls or gotchas section, no table of issues to check, and nothing from this skill, since none of it applies.
 
 This skill covers connecting a source to a style correctly, and the failure modes that look identical from the outside.
 
@@ -159,7 +159,7 @@ Hosted providers handle CORS for you. For self-hosted servers or static storage,
 
 ## Diagnosing a blank map
 
-Work down this list — the symptoms overlap heavily:
+Work down this list for a map with one of the symptoms above — they overlap heavily. It is not an appendix to, or a template for, an answer about anything else.
 
 | Symptom                                       | Check first                                                          |
 | --------------------------------------------- | -------------------------------------------------------------------- |
