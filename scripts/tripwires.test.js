@@ -219,6 +219,22 @@ describe('selfTrippedTripwires', () => {
       /test 1 sets no skillFile/
     );
   });
+
+  it('leaves alone a test whose skill is not written yet', () => {
+    const found = selfTrippedTripwires(
+      config(
+        [
+          {
+            description: 'explicit — contours',
+            assert: [{ type: 'not-icontains', value: 'marching-squares' }]
+          }
+        ],
+        { vars: { skillFile: 'skills/not-yet/SKILL.md' } }
+      ),
+      { readSkill: (path) => SKILLS[path] ?? null }
+    );
+    assert.deepEqual(found, []);
+  });
 });
 
 describe('answerTransform', () => {

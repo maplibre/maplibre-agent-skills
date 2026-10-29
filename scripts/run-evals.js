@@ -151,6 +151,7 @@ import {
   changedInputs,
   harnessOf,
   inputsOf,
+  missingSkillFiles,
   recordedInputs
 } from './lib/eval-inputs.js';
 import { passCost, sizeConfig } from './lib/prompt-budget.js';
@@ -686,6 +687,26 @@ export function shouldRetry({ baseline = false, killed = false, verdict }) {
  */
 export function dayCost(cost) {
   return cost.firstPass + MAX_RETRIED_TESTS * RETRY_REPEATS * cost.largest;
+}
+
+/**
+ * The configs a run can grade, and the ones whose SKILL.md is not written yet.
+ * Such a config is a new skill's rubric round: its tests run at baseline by
+ * dispatch (`--baseline`), and there is no skill to grade until the file
+ * exists, so a scheduled run or a blank dispatch leaves it out.
+ */
+export function withoutUnwrittenSkills(
+  configs,
+  { missing = missingSkillFiles } = {}
+) {
+  const run = [];
+  const skipped = [];
+  for (const config of configs) {
+    const files = missing(config);
+    if (files.length > 0) skipped.push({ config, files });
+    else run.push(config);
+  }
+  return { run, skipped };
 }
 
 /**
@@ -1409,6 +1430,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const baseline = args.baseline || process.env.INPUT_BASELINE === 'true';
   const today = new Date().toISOString().slice(0, 10);
   const name = runName(today, baseline);
+  if (!baseline) {
+    const { run, skipped } = withoutUnwrittenSkills(configs);
+    for (const { config, files } of skipped) {
+      console.log(
+        `${skillOf(config)}: not run (no SKILL.md at ${files.join(', ')} yet; its baseline runs with --baseline).`
+      );
+    }
+    configs = run;
+    if (configs.length === 0) {
+      console.log('Nothing to grade: no config has a SKILL.md yet.');
+      if (!args.dryRun) setOutputs({ name, ran: 'false' });
+      process.exit(0);
+    }
+  }
   const resultsDir = args.resultsDir ?? 'evals/results';
   const workDir =
     args.workDir ?? process.env.EVAL_WORK_DIR ?? join(tmpdir(), 'eval');

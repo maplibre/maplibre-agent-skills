@@ -1,12 +1,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   PINNED_PROVIDER,
   SKILL_PROMPT,
   passCost,
+  sizeConfig,
   sizeTests,
   workflowSetting
 } from './lib/prompt-budget.js';
+import { countTokens } from '../evals/prompts/lib/request-size.mjs';
 
 // One token per character, so each sum below can be checked by eye.
 const byLength = (text) => text.length;
@@ -82,6 +87,41 @@ describe('sizeTests', () => {
         }),
       /expected providers/
     );
+  });
+});
+
+describe('sizeConfig', () => {
+  it('sizes a config whose skill is not written yet with the skill withheld, and names the file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'prompt-budget-'));
+    mkdirSync(join(root, 'evals/prompts'), { recursive: true });
+    const prompt = 'Where do the tiles come from?';
+    writeFileSync(
+      join(root, 'evals/prompts/maplibre-b.yaml'),
+      [
+        `prompts: ['${SKILL_PROMPT}']`,
+        `providers: ['${PINNED_PROVIDER}']`,
+        'defaultTest:',
+        '  vars:',
+        '    skillFile: skills/maplibre-b/SKILL.md',
+        'tests:',
+        '  - vars:',
+        `      prompt: ${prompt}`,
+        ''
+      ].join('\n')
+    );
+    const limits = { tokensPerMinute: 8000, templateTokens: 74 };
+    const { sizes, missingSkills } = sizeConfig(
+      'evals/prompts/maplibre-b.yaml',
+      {
+        root,
+        limits,
+        answerTokens: 3072
+      }
+    );
+    assert.deepEqual(missingSkills, ['skills/maplibre-b/SKILL.md']);
+    assert.equal(sizes.length, 1);
+    assert.equal(sizes[0].prompt, 74 + countTokens(prompt));
+    assert.equal(sizes[0].answer, 3072);
   });
 });
 

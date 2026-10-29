@@ -6,8 +6,10 @@
  * answer room, so that is what this reports.
  */
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { load } from 'js-yaml';
 import render from '../../evals/prompts/lib/skill-prompt.mjs';
+import { missingSkillFiles } from './eval-inputs.js';
 import {
   answerBudget,
   answerCap,
@@ -92,14 +94,23 @@ export function workflowSetting(workflowText, name) {
   return match ? Number(match[1]) : null;
 }
 
-/** Every test of one eval config file, rendered as the eval renders it, and sized. */
+/**
+ * Every test of one eval config file, rendered as the eval renders it, and
+ * sized, with the skill files the config names that are not written yet. Such
+ * a config is a rubric round, run at baseline until its skill exists, so its
+ * requests are sized with the skill withheld, as that run sends them.
+ */
 export function sizeConfig(
   path,
-  { limits = limitsFrom(), answerTokens = answerBudget() } = {}
+  { limits = limitsFrom(), answerTokens = answerBudget(), root = '.' } = {}
 ) {
-  return sizeTests(load(readFileSync(path, 'utf8')), {
-    render,
+  const missingSkills = missingSkillFiles(path, { root });
+  const withheld = ({ vars }) =>
+    render({ vars: { ...vars, injectSkill: 'false' } });
+  const sizes = sizeTests(load(readFileSync(join(root, path), 'utf8')), {
+    render: missingSkills.length > 0 ? withheld : render,
     limits,
     answerTokens
   });
+  return { sizes, missingSkills };
 }

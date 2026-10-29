@@ -11,13 +11,22 @@
  */
 import { readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
+import { missingSkillFiles } from './lib/eval-inputs.js';
 import { listEvalConfigs, skillOf } from './lib/eval-verdicts.js';
 import { answerTransform, selfTrippedTripwires } from './lib/tripwires.js';
 
 const graded = answerTransform(
   load(readFileSync('evals/prompts/lib/providers.yaml', 'utf8'))
 );
-const readSkill = (path) => graded(readFileSync(path, 'utf8'));
+// A skill not written yet (a rubric round) has no text for a tripwire to match.
+const readSkill = (path) => {
+  try {
+    return graded(readFileSync(path, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+};
 
 let failed = false;
 for (const configPath of listEvalConfigs()) {
@@ -38,7 +47,14 @@ for (const configPath of listEvalConfigs()) {
     );
     failed = true;
   }
-  if (found.length === 0) console.log(`✅ ${skill}`);
+  if (found.length === 0) {
+    const unwritten = missingSkillFiles(configPath);
+    console.log(
+      unwritten.length > 0
+        ? `✅ ${skill} (no SKILL.md at ${unwritten.join(', ')} yet, so nothing to match)`
+        : `✅ ${skill}`
+    );
+  }
 }
 
 if (failed) process.exit(1);

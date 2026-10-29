@@ -7,6 +7,7 @@ import {
   changedInputs,
   harnessOf,
   inputsOf,
+  missingSkillFiles,
   recordedInputs,
   skillFiles
 } from './lib/eval-inputs.js';
@@ -89,9 +90,54 @@ describe('skillFiles', () => {
   });
 });
 
+describe('missingSkillFiles', () => {
+  it('names the skill files a config points at that are not written yet', () => {
+    const root = repo({
+      'evals/prompts/maplibre-b.yaml': CONFIG.replace(
+        'maplibre-a',
+        'maplibre-b'
+      )
+    });
+    assert.deepEqual(
+      missingSkillFiles('evals/prompts/maplibre-b.yaml', { root }),
+      ['skills/maplibre-b/SKILL.md']
+    );
+    assert.deepEqual(
+      missingSkillFiles('evals/prompts/maplibre-a.yaml', { root }),
+      []
+    );
+  });
+});
+
 describe('inputsOf', () => {
   it('hashes the same files the same way', () => {
     assert.deepEqual(inputs(repo()), inputs(repo()));
+  });
+
+  it('hashes a skill not written yet as absent, so the config is due when it appears', () => {
+    const config = 'evals/prompts/maplibre-b.yaml';
+    const text = CONFIG.replace('maplibre-a', 'maplibre-b');
+    const unwritten = repo({ [config]: text });
+    const written = repo({
+      [config]: text,
+      'skills/maplibre-b/SKILL.md': SKILL('provisional')
+    });
+    const before = inputsOf(config, {
+      root: unwritten,
+      harness: harnessOf(unwritten)
+    });
+    assert.deepEqual(
+      before,
+      inputsOf(config, {
+        root: repo({ [config]: text }),
+        harness: harnessOf(unwritten)
+      })
+    );
+    const after = inputsOf(config, {
+      root: written,
+      harness: harnessOf(written)
+    });
+    assert.deepEqual(changedInputs(after, before), ['SKILL.md']);
   });
 
   it("changes only the skill's hash when the skill text changes", () => {

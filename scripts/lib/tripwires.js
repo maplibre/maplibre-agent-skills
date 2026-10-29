@@ -52,7 +52,8 @@ function flatten(assertions) {
  * Every tripwire in one parsed eval config that the skill it injects already
  * trips, one entry per term: `{ test, description, type, term, skillFile,
  * line }`. `readSkill` returns a skill file's text as the grader would see it
- * in an answer. Vars merge the way promptfoo merges them, a test's own over
+ * in an answer, or null for a skill not written yet, which no tripwire can
+ * match. Vars merge the way promptfoo merges them, a test's own over
  * `defaultTest`'s, and `defaultTest`'s assertions apply to every test.
  */
 export function selfTrippedTripwires(config, { readSkill }) {
@@ -72,6 +73,7 @@ export function selfTrippedTripwires(config, { readSkill }) {
       throw new Error(`test ${index + 1} sets no skillFile`);
     }
     const text = readSkill(vars.skillFile);
+    if (text === null) return;
     for (const assertion of tripwires) {
       const check = TRIPWIRES[assertion.type];
       for (const term of check.list ? terms(assertion) : [assertion.value]) {

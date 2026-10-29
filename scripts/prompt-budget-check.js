@@ -40,14 +40,28 @@ const costs = new Map();
 for (const configPath of listEvalConfigs()) {
   const skill = skillOf(configPath);
   let sizes;
+  let missingSkills;
   try {
-    sizes = sizeConfig(configPath, { limits, answerTokens });
+    ({ sizes, missingSkills } = sizeConfig(configPath, {
+      limits,
+      answerTokens
+    }));
   } catch (error) {
     console.error(`❌ ${skill}: cannot size its requests (${error.message})`);
     failed = true;
     continue;
   }
-  costs.set(skill, passCost(sizes));
+  // A rubric round is run at baseline by hand, not by the scheduled run, so it
+  // is sized as that run sends it and left out of the round below.
+  const unwritten = missingSkills.length > 0;
+  const withheld = unwritten ? ' with the skill withheld' : '';
+  if (unwritten) {
+    console.log(
+      `⚠️  ${skill}: no SKILL.md at ${missingSkills.join(', ')} yet: sized with the skill withheld, as its baseline runs, and left out of the daily round until the skill exists.`
+    );
+  } else {
+    costs.set(skill, passCost(sizes));
+  }
   if (sizes.length === 0) {
     console.log(`✅ ${skill}: no tests to size`);
     continue;
@@ -69,7 +83,7 @@ for (const configPath of listEvalConfigs()) {
       ...sizes.map((s) => limits.tokensPerMinute - answerTokens - s.prompt)
     );
     console.log(
-      `✅ ${skill}: every answer gets the full budget, and its longest prompt can grow ${thousands(growth)} tokens before that changes`
+      `✅ ${skill}: every answer gets the full budget${withheld}, and its longest prompt can grow ${thousands(growth)} tokens before that changes`
     );
   }
 }

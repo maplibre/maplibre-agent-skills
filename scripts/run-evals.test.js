@@ -30,7 +30,8 @@ import {
   shouldRetry,
   spawnEval,
   verdictFor,
-  SIGKILL_AFTER_MS
+  SIGKILL_AFTER_MS,
+  withoutUnwrittenSkills
 } from './run-evals.js';
 
 function workspace() {
@@ -126,6 +127,24 @@ async function gone(pid) {
   }
   return false;
 }
+
+describe('withoutUnwrittenSkills', () => {
+  it('leaves out a config whose skill is not written yet, and names the file', () => {
+    const missing = (config) =>
+      config.endsWith('b.yaml') ? ['skills/b/SKILL.md'] : [];
+    assert.deepEqual(
+      withoutUnwrittenSkills(['evals/prompts/a.yaml', 'evals/prompts/b.yaml'], {
+        missing
+      }),
+      {
+        run: ['evals/prompts/a.yaml'],
+        skipped: [
+          { config: 'evals/prompts/b.yaml', files: ['skills/b/SKILL.md'] }
+        ]
+      }
+    );
+  });
+});
 
 describe('buildCommand', () => {
   it('renders the pinned eval:graded call with both output paths', () => {
