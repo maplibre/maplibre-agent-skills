@@ -188,7 +188,7 @@ npm install
 
 Run `npm run check` frequently while developing, not just before pushing — it stops at the first failure, and catching issues early costs less time than catching them all at once at the end. It runs:
 
-1. **Formatting** — Prettier (`.md`, `.json`, `.js`)
+1. **Formatting** — Prettier (the `.md`, `.json` and `.js` files git tracks or would track)
 2. **Spelling** — cspell (markdown)
 3. **Markdown linting** — markdownlint
 4. **Terminology** — proper noun capitalization (e.g. `MapLibre` not `Maplibre`)
