@@ -1,302 +1,13 @@
 Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
 negative — registering a custom protocol in the browser,skills/maplibre-native-gl-js-parity/SKILL.md,"Browser app, MapLibre GL JS, TypeScript. I want to serve vector tiles out of an in-browser IndexedDB cache under a `cache://` scheme, so my style can reference `cache://tiles/{z}/{x}/{y}`. Show me how to register the protocol.
-","Below is a **complete, self-contained TypeScript example** that
-
-1. **creates an IndexedDB database** (`tile-cache`) and stores vector-tile blobs under the key `z/x/y`,
-2. **registers a custom `cache://` protocol** with `maplibregl.addProtocol`,
-3. **initialises a MapLibre GL JS map** whose style points at `cache://tiles/{z}/{x}/{y}`,
-4. **falls back to the network** when a tile is not in the cache,
-5. **writes a tile into the cache** (so you can test the whole flow).
-
-You can paste the code into a single HTML file (or split it into modules) and run it in any modern browser.
-
----
-
-## 1️⃣  Install the tiny `idb` helper (optional but recommended)
-
-```bash
-npm i idb
-```
-
-`idb` gives a nice Promise-based wrapper around IndexedDB and keeps the code short.
-
----
-
-## 2️⃣  TypeScript code
-
-```ts
-/* --------------------------------------------------------------
-   1️⃣  Imports & type helpers
-   -------------------------------------------------------------- */
-import maplibregl, { Map, MapOptions, RequestParameters, RequestResponse } from 'maplibre-gl';
-import { openDB, DBSchema, IDBPDatabase } from 'idb';
-
-/* --------------------------------------------------------------
-   2️⃣  Define the IndexedDB schema
-   -------------------------------------------------------------- */
-interface TileCacheDB extends DBSchema {
-  /** One object store per source – we keep it simple and use a single store */
-  tiles: {
-    key: string;               // “z/x/y” (e.g. “12/3456/7890”)
-    value: Uint8Array;         // raw MVT bytes
-  };
-}
-
-/** Global reference – we open the DB once and reuse it */
-let dbPromise: Promise<IDBPDatabase<TileCacheDB>>;
-
-/* --------------------------------------------------------------
-   3️⃣  Open (or create) the DB
-   -------------------------------------------------------------- */
-function initDB(): Promise<IDBPDatabase<TileCacheDB>> {
-  if (dbPromise) return dbPromise;
-
-  dbPromise = openDB<TileCacheDB>('tile-cache', 1, {
-    upgrade(db) {
-      // The store holds raw MVT blobs keyed by “z/x/y”
-      db.createObjectStore('tiles');
-    },
-  });
-
-  return dbPromise;
-}
-
-/* --------------------------------------------------------------
-   4️⃣  Helper: read a tile from IndexedDB
-   -------------------------------------------------------------- */
-async function getTileFromCache(z: number, x: number, y: number): Promise<Uint8Array | undefined> {
-  const db = await initDB();
-  const key = `${z}/${x}/${y}`;
-  return db.get('tiles', key);
-}
-
-/* --------------------------------------------------------------
-   5️⃣  Helper: write a tile into IndexedDB (for demo / testing)
-   -------------------------------------------------------------- */
-async function putTileIntoCache(z: number, x: number, y: number, data: Uint8Array): Promise<void> {
-  const db = await initDB();
-  const key = `${z}/${x}/${y}`;
-  await db.put('tiles', data, key);
-}
-
-/* --------------------------------------------------------------
-   6️⃣  Register the custom protocol
-   -------------------------------------------------------------- */
-maplibregl.addProtocol('cache', async (params: RequestParameters): Promise<RequestResponse> => {
-  // params.url looks like:  cache://tiles/12/3456/7890
-  // Strip the scheme and any leading slash
-  const urlPath = new URL(params.url).pathname.replace(/^\/+/, ''); // ""tiles/12/3456/7890""
-  const parts = urlPath.split('/');
-
-  // Expect exactly: [""tiles"", z, x, y]
-  if (parts.length !== 4 || parts[0] !== 'tiles') {
-    return {
-      // Let the core know we couldn't handle it – it will try the next protocol (or fail)
-      data: null,
-      cacheControl: null,
-      expires: null,
-      modified: null,
-      etag: null,
-      error: new Error(`cache:// URL malformed: ${params.url}`),
-    };
-  }
-
-  const [, zStr, xStr, yStr] = parts;
-  const z = Number(zStr);
-  const x = Number(xStr);
-  const y = Number(yStr);
-
-  // 1️⃣ Try the cache first
-  const cached = await getTileFromCache(z, x, y);
-  if (cached) {
-    return {
-      data: cached.buffer,               // ArrayBuffer (or Uint8Array.buffer)
-      cacheControl: null,
-      expires: null,
-      modified: null,
-      etag: null,
-    };
-  }
-
-  // 2️⃣ Not in cache → fetch from the network, store, then return
-  //    (Replace this URL with your real tile endpoint)
-  const networkUrl = `https://example.com/tiles/${z}/${x}/${y}.pbf`;
-
-  const response = await fetch(networkUrl);
-  if (!response.ok) {
-    return {
-      data: null,
-      cacheControl: null,
-      expires: null,
-      modified: null,
-      etag: null,
-      error: new Error(`Network fetch failed: ${networkUrl} – ${response.status}`),
-    };
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-
-  // Store for next time (fire-and-forget)
-  putTileIntoCache(z, x, y, bytes).catch(console.error);
-
-  return {
-    data: arrayBuffer,
-    cacheControl: response.headers.get('Cache-Control'),
-    expires: response.headers.get('Expires'),
-    modified: response.headers.get('Last-Modified'),
-    etag: response.headers.get('ETag'),
-  };
-});
-
-/* --------------------------------------------------------------
-   7️⃣  Initialise the map – style points at cache://tiles/…
-   -------------------------------------------------------------- */
-const mapOptions: MapOptions = {
-  container: 'map',               // <div id=""map""></div> in the HTML
-  style: {
-    version: 8,
-    sources: {
-      // The source uses the custom scheme.  The “url” field can be any string;
-      // MapLibre will hand it to the protocol handler we just registered.
-      myTiles: {
-        type: 'vector',
-        // Note the trailing slash – MapLibre will replace {z}/{x}/{y}
-        url: 'cache://tiles/{z}/{x}/{y}',
-        // Optional: tell the renderer the tile size (default 512 for GL-JS)
-        tileSize: 512,
-      },
-    },
-    layers: [
-      {
-        id: 'my-fill',
-        type: 'fill',
-        source: 'myTiles',
-        'source-layer': 'my_layer_name', // <-- change to the layer name inside the MVT
-        paint: {
-          'fill-color': '#ff6600',
-          'fill-opacity': 0.5,
-        },
-      },
-    ],
-  },
-  center: [0, 0],
-  zoom: 2,
-};
-
-const map = new Map(mapOptions);
-
-/* --------------------------------------------------------------
-   8️⃣  (Optional) Pre-populate the cache for a single tile – handy for demos
-   -------------------------------------------------------------- */
-async function preloadDemoTile() {
-  // Grab a tile from the network once, then store it.
-  const demoUrl = 'https://example.com/tiles/2/1/1.pbf';
-  const resp = await fetch(demoUrl);
-  if (!resp.ok) return;
-  const buf = await resp.arrayBuffer();
-  await putTileIntoCache(2, 1, 1, new Uint8Array(buf));
-}
-preloadDemoTile().catch(console.error);
-```
-
----
-
-## 3️⃣  What the code does, step-by-step
-
-| Step | What happens |
-|------|--------------|
-| **DB init** (`initDB`) | Opens (or creates) an IndexedDB database called **`tile-cache`** with a single object store **`tiles`**. The key is the string `""z/x/y""` and the value is the raw MVT bytes (`Uint8Array`). |
-| **`addProtocol('cache', …)`** | Registers a **global** handler for any URL that starts with `cache://`. The handler receives a `RequestParameters` object (the same shape the core uses for HTTP requests). |
-| **URL parsing** | The handler extracts `z`, `x`, `y` from the path (`cache://tiles/12/3456/7890`). If the URL does not match the expected pattern, it returns an error so the core can try the next protocol. |
-| **Cache lookup** (`getTileFromCache`) | Looks up the tile in IndexedDB. If found, returns the raw `ArrayBuffer`. |
-| **Network fallback** | If the tile is missing, the handler fetches it from a regular `https://…` endpoint, stores the result in IndexedDB for future requests, and returns the data to the renderer. |
-| **Map creation** | The style references `cache://tiles/{z}/{x}/{y}`. When the map needs a tile, the core calls the protocol handler, which serves the cached bytes (or fetches them). |
-| **Demo pre-load** | The optional `preloadDemoTile` shows how you could seed the cache ahead of time (e.g. during an offline-first sync). |
-
----
-
-## 4️⃣  Things to keep in mind
-
-| Issue | How we handle it |
-|-------|------------------|
-| **Binary data** – MapLibre expects an `ArrayBuffer` (or `Uint8Array.buffer`). | We return `arrayBuffer` directly. |
-| **Headers** – The core may use `Cache-Control`, `ETag`, etc. | We forward the network response headers; for cached tiles we simply omit them (they’re optional). |
-| **Error handling** – If the handler returns `null` data **and** an `error`, the map will treat the tile as missing and will try the next protocol (or show a blank tile). | The handler always returns a `RequestResponse` object, never throws. |
-| **Threading** – IndexedDB is asynchronous, but the protocol handler can be `async`. MapLibre will `await` the Promise. | The handler is declared `async`. |
-| **Multiple sources** – If you have more than one custom source you can either (a) use a different scheme (`cache2://…`) and register another handler, or (b) encode the source name in the path (`cache://mySource/…`). | The example uses a single scheme; you can extend the parser accordingly. |
-| **Tile size** – GL JS defaults to 512 px tiles for vector sources. If your source uses 256 px tiles, set `tileSize: 256` in the source definition. | Shown in the source config. |
-| **Browser support** – `addProtocol` exists from **MapLibre GL JS 4.0.0** onward. If you run an older version, upgrade. | The code assumes v4+. |
-
----
-
-## 5️⃣  Full HTML demo (copy-paste)
-
-If you prefer a single-file demo without a build step, here’s a minimal HTML page that bundles the same logic (using the native IndexedDB API instead of `idb` to keep the file self-contained). Replace `https://example.com/…` with a real tile endpoint.
-
-```html
-<!doctype html>
-<html lang=""en"">
-<head>
-  <meta charset=""utf-8"">
-  <title>MapLibre GL JS – cache:// protocol demo</title>
-  <style>
-    body, html { margin:0; height:100%; }
-    #map { width:100%; height:100%; }
-  </style>
-  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
-  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet""/>
-</head>
-<body>
-<div id=""map""></div>
-
-<script>
-  // ---------- 1️⃣  IndexedDB helpers ----------
-  const DB_NAME = 'tile-cache';
-  const STORE_NAME = 'tiles';
-  const DB_VERSION = 1;
-
-  function openDB() {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => request.result.createObjectStore(STORE_NAME);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  async function getTile(z, x, y) {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      const key = `${z}/${x}/${y}`;
-      const get = store.get(key);
-      get.onsuccess = () => resolve(get.result);
-      get.onerror = () => reject(get.error);
-    });
-  }
-
-  async function putTile(z, x, y, data) {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      const key = `${z}/${x}/${y}`;
-      const put = store.put(data, key);
-      put.onsuccess = () => resolve();
-      put.onerror = () => reject(put.error);
-    });
- ",PASS,1.00,,All assertions passed,
-negative — registering a custom protocol in the browser,skills/maplibre-native-gl-js-parity/SKILL.md,"Browser app, MapLibre GL JS, TypeScript. I want to serve vector tiles out of an in-browser IndexedDB cache under a `cache://` scheme, so my style can reference `cache://tiles/{z}/{x}/{y}`. Show me how to register the protocol.
 ","Below is a **complete, ready-to-copy TypeScript example** that
 
-1. **creates (or opens) an IndexedDB database** called `tileCache`,
-2. **stores vector-tile blobs** under the key `z/x/y`,
-3. **registers a custom `cache://` protocol** with MapLibre GL JS (`addProtocol` – available since v4.0.0),
-4. **uses that protocol in a style** (`cache://tiles/{z}/{x}/{y}`).
+1. creates an IndexedDB store for vector-tile blobs,
+2. registers a `cache://` protocol with **MapLibre GL JS** (`maplibregl.addProtocol` – promise-based, available since v4.0.0),
+3. falls back to the network when a tile is not in the cache (and writes the fetched tile back to IndexedDB), and
+4. shows a style that references the custom scheme.
 
-You can drop the code into a single-page app (or a module-bundled project) and it will work with any MapLibre GL JS version ≥ 4.0.0.
+You can drop the code into a normal browser project (or a Vite/Next/React app) and it will work with any MapLibre GL JS version ≥ 4.0.0.
 
 ---
 
@@ -307,31 +18,29 @@ npm i idb
 # or yarn add idb
 ```
 
-`idb` gives you a Promise-based wrapper around IndexedDB that works in all modern browsers.
+`idb` gives you a nice Promise-based API and TypeScript typings.
 
 ---
 
-## 2️⃣ Tile-cache helper (type-safe)
+## 2️⃣ IndexedDB helper – one table that stores raw MVT bytes
 
 ```ts
-// tileCache.ts
+// src/TileCache.ts
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 
 interface TileCacheDB extends DBSchema {
-  /** One object store per source – we keep it simple and use a single store */
+  /** key = `${z}/${x}/${y}`  (no leading slash) */
   tiles: {
-    key: string;               // “z/x/y”
-    value: ArrayBuffer;        // raw MVT bytes
+    key: string;
+    value: ArrayBuffer; // raw MVT bytes
   };
 }
 
-/** Singleton – the DB is opened once and reused */
+/** Singleton – open the DB once */
 let dbPromise: Promise<IDBPDatabase<TileCacheDB>> | null = null;
-
-/** Open (or create) the IndexedDB database */
-export function getTileCacheDB(): Promise<IDBPDatabase<TileCacheDB>> {
+function getDB() {
   if (!dbPromise) {
-    dbPromise = openDB<TileCacheDB>('tileCache', 1, {
+    dbPromise = openDB<TileCacheDB>('maplibre-tile-cache', 1, {
       upgrade(db) {
         db.createObjectStore('tiles');
       },
@@ -340,16 +49,16 @@ export function getTileCacheDB(): Promise<IDBPDatabase<TileCacheDB>> {
   return dbPromise;
 }
 
-/** Store a tile (z/x/y) */
+/** Store a tile */
 export async function putTile(z: number, x: number, y: number, data: ArrayBuffer) {
-  const db = await getTileCacheDB();
+  const db = await getDB();
   const key = `${z}/${x}/${y}`;
   await db.put('tiles', data, key);
 }
 
 /** Retrieve a tile – returns undefined if not cached */
 export async function getTile(z: number, x: number, y: number): Promise<ArrayBuffer | undefined> {
-  const db = await getTileCacheDB();
+  const db = await getDB();
   const key = `${z}/${x}/${y}`;
   return db.get('tiles', key);
 }
@@ -360,115 +69,114 @@ export async function getTile(z: number, x: number, y: number): Promise<ArrayBuf
 ## 3️⃣ Register the `cache://` protocol
 
 ```ts
-// registerCacheProtocol.ts
-import maplibregl from 'maplibre-gl';
-import { getTile } from './tileCache';
+// src/registerCacheProtocol.ts
+import maplibregl, { RequestParameters, RequestParametersWithUrl } from 'maplibre-gl';
+import { getTile, putTile } from './TileCache';
 
 /**
- * The signature required by `addProtocol`:
- *   (params, abortController) => Promise<{ data: ArrayBuffer, ... }>
+ * Parse a URL of the form  cache://tiles/{z}/{x}/{y}
+ * Returns {z,x,y} or throws if the URL does not match.
+ */
+function parseCacheUrl(url: string): { z: number; x: number; y: number } {
+  // Remove the scheme and possible leading slash
+  const path = url.replace(/^cache:\/\//, '').replace(/^\/+/, '');
+  // Expected: tiles/14/8623/5401
+  const parts = path.split('/');
+  if (parts.length !== 4 || parts[0] !== 'tiles') {
+    throw new Error(`Unexpected cache URL: ${url}`);
+  }
+  const [z, x, y] = parts.slice(1).map(Number);
+  if ([z, x, y].some(Number.isNaN)) {
+    throw new Error(`Invalid tile coordinates in ${url}`);
+  }
+  return { z, x, y };
+}
+
+/**
+ * The protocol handler.  It must return a Promise that resolves to an object
+ * with at least a `data: ArrayBuffer` property.
  *
- * `params` contains:
- *   - url: the full URL that triggered the request (e.g. ""cache://tiles/12/3456/7890"")
- *   - request: the original Request object (contains method, headers, etc.)
- *
- * We parse the z/x/y from the URL, look it up in IndexedDB,
- * and either resolve with the tile bytes or reject with an error.
- *
- * If you want a network fallback you can simply `fetch()` the same URL
- * after replacing the scheme with `https://…` and return that result.
+ * If the tile is not cached we fetch it from the network (you can change the
+ * fallback URL pattern) and store it for the next request.
  */
 export function registerCacheProtocol() {
-  maplibregl.addProtocol('cache', async (params, abortController) => {
-    // --------------------------------------------------------------
-    // 1️⃣ Parse z/x/y from the URL
-    // --------------------------------------------------------------
-    // Expected pattern: cache://tiles/{z}/{x}/{y}
-    const match = params.url.match(/^cache:\/\/tiles\/(\d+)\/(\d+)\/(\d+)$/);
-    if (!match) {
-      // Wrong format – let MapLibre treat it as a normal error
-      throw new Error(`cache:// URL not recognised: ${params.url}`);
-    }
-    const [, zStr, xStr, yStr] = match;
-    const z = Number(zStr);
-    const x = Number(xStr);
-    const y = Number(yStr);
+  maplibregl.addProtocol('cache', async (params: RequestParameters) => {
+    // `params.url` is the full URL that the style asked for.
+    const { url } = params as RequestParametersWithUrl;
+    const { z, x, y } = parseCacheUrl(url);
 
-    // --------------------------------------------------------------
-    // 2️⃣ Try the IndexedDB cache
-    // --------------------------------------------------------------
+    // 1️⃣ Try the IndexedDB cache first
     const cached = await getTile(z, x, y);
     if (cached) {
-      // Success – return the raw MVT bytes.
-      // The object shape matches what MapLibre expects from a custom protocol.
-      return {
-        data: cached,
-        // Optional HTTP-like metadata (you can leave them out)
-        cacheControl: undefined,
-        expires: undefined,
-        // The `etag` can be used for conditional requests; we don’t have one.
-        etag: undefined,
-        // If you want to support aborting a long-running fetch, check abortController.signal.
-      };
+      // Return the cached bytes – MapLibre will treat it exactly like a network response.
+      return { data: cached };
     }
 
-    // --------------------------------------------------------------
-    // 3️⃣ (Optional) Network fallback – replace `cache://` with a real host
-    // --------------------------------------------------------------
-    // Example: your tiles are also reachable at https://tiles.example.com/{z}/{x}/{y}.pbf
-    const fallbackUrl = `https://tiles.example.com/${z}/${x}/${y}.pbf`;
-    const response = await fetch(fallbackUrl, { signal: abortController.signal });
+    // 2️⃣ Not cached → fetch from the real tile server.
+    //    Adjust the fallback URL to match your own source.
+    const fallbackUrl = `https://my.tileserver.com/tiles/${z}/${x}/${y}.pbf`;
+
+    const response = await fetch(fallbackUrl);
     if (!response.ok) {
-      throw new Error(`Network fallback failed (${response.status})`);
+      // Propagate the error to MapLibre (it will show a missing-tile placeholder)
+      throw new Error(`Network error ${response.status} for ${fallbackUrl}`);
     }
     const arrayBuffer = await response.arrayBuffer();
 
-    // Store the freshly-fetched tile for next time (fire-and-forget)
-    // (You may want to add size-capping, TTL, etc. in a real app)
+    // 3️⃣ Store the freshly fetched tile for future use
+    // (fire-and-forget – we don’t need to wait for it to finish)
     putTile(z, x, y, arrayBuffer).catch(console.error);
 
-    return { data: arrayBuffer };
+    // 4️⃣ Return the data to MapLibre
+    return {
+      data: arrayBuffer,
+      // Optional HTTP-like metadata – useful for the built-in cache logic
+      cacheControl: response.headers.get('Cache-Control') ?? undefined,
+      expires: response.headers.get('Expires') ?? undefined,
+      etag: response.headers.get('ETag') ?? undefined,
+    };
   });
 }
 ```
 
-> **Important:** Call `registerCacheProtocol()` **before** you create the `Map` instance, otherwise the first style load may already have tried (and failed) to fetch the tiles.
+> **Why the `RequestParametersWithUrl` cast?**  
+> The generic `RequestParameters` type does not expose `url` (it’s added by the
+> protocol handler). The cast is safe because MapLibre always passes an object
+> that contains `url`.
 
 ---
 
-## 4️⃣ Put it all together – a minimal app
+## 4️⃣ Put it all together – create the map
 
 ```ts
-// index.ts (or any entry point)
+// src/main.ts
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { registerCacheProtocol } from './registerCacheProtocol';
 
-// 1️⃣ Register the custom protocol
+// Register the protocol **before** you instantiate the map
 registerCacheProtocol();
 
-// 2️⃣ Create the map – the style can now reference cache:// URLs
 const map = new maplibregl.Map({
-  container: 'map',               // <div id=""map""></div> in your HTML
+  container: 'map',               // id of the <div>
   style: {
     version: 8,
     sources: {
-      // The source points to the custom scheme.
-      // The `tiles` array can contain multiple URLs; we only need one.
-      myCache: {
+      // The source uses the custom scheme.
+      // The URL can be absolute (as shown) or relative – MapLibre just passes it
+      // straight to the protocol handler.
+      myVector: {
         type: 'vector',
-        tiles: ['cache://tiles/{z}/{x}/{y}'],
-        // The maxzoom should match the source data you have cached.
-        maxzoom: 14,
-        // Optional: give a minzoom if you only cache a subset.
-        minzoom: 0,
+        url: 'cache://tiles/{z}/{x}/{y}',
+        // If you need a tilejson wrapper you can also use `tiles: [...]`
+        // but the `url` shortcut works for the simple pattern above.
       },
     },
     layers: [
       {
         id: 'my-fill',
         type: 'fill',
-        source: 'myCache',
+        source: 'myVector',
         'source-layer': 'my_layer_name', // <-- whatever layer name is inside the MVT
         paint: {
           'fill-color': '#3bb2d0',
@@ -482,115 +190,149 @@ const map = new maplibregl.Map({
 });
 ```
 
-### What you see in the network tab
-
-* When a tile is **already cached**, the request never leaves the browser – you’ll see a `cache://…` entry in MapLibre’s internal logs but no HTTP request.
-* When a tile is **missing**, the fallback `fetch()` runs (see the console log) and you’ll see a normal `https://…` request. After the first successful fetch the tile is stored in IndexedDB, so subsequent pans/zooms hit the cache.
+**Result:**  
+When the map needs a tile, MapLibre calls the `cache://` handler. The handler looks in IndexedDB, returns the cached `ArrayBuffer` if it exists, otherwise fetches the tile from the real server, stores it, and returns it to the renderer. All of this happens **entirely in the browser** – no service-worker or external server is required.
 
 ---
 
-## 5️⃣ Bonus: Pre-populate the cache (e.g. during an offline-first install)
+## 5️⃣ Quick checklist / gotchas
 
-If you want to download a region once and then work completely offline, you can run a one-off “seed” routine:
-
-```ts
-import { putTile } from './tileCache';
-
-async function seedRegion(
-  sourceUrlTemplate: string, // e.g. ""https://tiles.example.com/{z}/{x}/{y}.pbf""
-  z: number,
-  xRange: [number, number],
-  yRange: [number, number]
-) {
-  const [x0, x1] = xRange;
-  const [y0, y1] = yRange;
-
-  for (let x = x0; x <= x1; ++x) {
-    for (let y = y0; y <= y1; ++y) {
-      const url = sourceUrlTemplate
-        .replace('{z}', String(z))
-        .replace('{x}', String(x))
-        .replace('{y}', String(y));
-
-      try {
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.arrayBuffer();
-        await putTile(z, x, y, data);
-        console.log(`cached ${z}/${x}/${y}`);
-      } catch (e) {
-        console.warn(`failed ${z}/${x}/${y}:`, e);
-      }
-    }
-  }
-}
-
-// Example: cache all tiles for zoom 10 covering the whole world (≈ 1 048 576 tiles)
-// In practice you’d limit the area to what you really need.
-seedRegion('https://tiles.example.com/{z}/{x}/{y}.pbf', 10, [0, 1023], [0, 1023]);
-```
-
-Run this once (e.g. on a “download-offline-data” button) and the map will be able to render completely from the `cache://` scheme thereafter.
-
----
-
-## 6️⃣ TL;DR checklist
-
-| ✅ | Step |
+| ✅ | Item |
 |---|------|
-| **1** | Install `idb` (or use native IndexedDB APIs). |
-| **2** | Write a tiny wrapper (`tileCache.ts`) that can `getTile` / `putTile`. |
-| **3** | Call `maplibregl.addProtocol('cache', handler)` **before** creating the map. |
-| **4** | In the handler, parse `z/x/y`, read from IndexedDB, return `{data: ArrayBuffer}`. |
-| **5** | (Optional) Fallback to `fetch()` a remote URL and store the result for future use. |
-| **6** | Use the scheme in your style: `""tiles"": [""cache://tiles/{z}/{x}/{y}""]`. |
-| **7** | (Optional) Pre-seed the cache for offline use. |
-
-That’s all you need to serve vector tiles from an in-browser IndexedDB cache under a custom `cache://` scheme with MapLibre GL JS and TypeScript. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
-negative — registering a custom protocol in the browser,skills/maplibre-native-gl-js-parity/SKILL.md,"Browser app, MapLibre GL JS, TypeScript. I want to serve vector tiles out of an in-browser IndexedDB cache under a `cache://` scheme, so my style can reference `cache://tiles/{z}/{x}/{y}`. Show me how to register the protocol.
-","Below is a **complete, ready-to-copy TypeScript example** that
-
-1. **creates (or opens) an IndexedDB database** called `tileCache`,
-2. **stores vector-tile blobs** under the key `z/x/y`,
-3. **registers a custom `cache://` protocol** with MapLibre GL JS (`addProtocol` – available since v4.0.0),
-4. **uses that protocol in a style** (`cache://tiles/{z}/{x}/{y}`).
-
-You can drop the code into a single-page app (or a module-bundled project) and it will work with any MapLibre GL JS version ≥ 4.0.0.
+| **MapLibre version** | ≥ 4.0.0 (promise-based `addProtocol`). |
+| **IndexedDB** | Works in all modern browsers; on iOS Safari you may need to request persistent storage (`navigator.storage.persist()`) if you want the cache to survive a low-memory purge. |
+| **CORS** | The fallback network request must be CORS-enabled (or same-origin). The `cache://` scheme itself bypasses CORS because the data never leaves the browser. |
+| **Tile format** | The example assumes MapLibre vector tiles (`.pbf`). If you use a different format (e.g., `MVT` with gzip), just store the raw bytes – MapLibre will decode them. |
+| **Error handling** | Throwing inside the handler makes MapLibre treat the tile as missing (it will draw a “no-data” placeholder). |
+| **Performance tip** | If you expect many concurrent requests, keep the `fetch` fallback **outside** the IndexedDB transaction (as shown) – otherwise the DB can become a bottleneck. |
+| **Cleaning the cache** | `await (await getDB()).clear('tiles')` will wipe everything. You can expose a UI button that calls it. |
 
 ---
 
-## 1️⃣ Install the tiny `idb` helper (optional but makes IndexedDB painless)
+## 6️⃣ Full source (single-file version) – for copy-paste demos
 
-```bash
-npm i idb
-# or yarn add idb
+If you don’t want a build step, you can drop everything into a single HTML file that uses the CDN versions of MapLibre GL JS and `idb`. Below is a minimal example you can open directly in a browser:
+
+```html
+<!doctype html>
+<html lang=""en"">
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre + cache:// protocol demo</title>
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    body, html { margin:0; height:100%; }
+    #map { width:100%; height:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import maplibregl from 'https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.esm.js';
+  import { openDB } from 'https://cdn.jsdelivr.net/npm/idb@8/+esm';
+
+  // ---------- IndexedDB helpers ----------
+  const DB_NAME = 'maplibre-tile-cache';
+  const STORE = 'tiles';
+  const dbPromise = openDB(DB_NAME, 1, {
+    upgrade(db) { db.createObjectStore(STORE); }
+  });
+
+  async function getTile(z, x, y) {
+    const db = await dbPromise;
+    return db.get(STORE, `${z}/${x}/${y}`);
+  }
+  async function putTile(z, x, y, data) {
+    const db = await dbPromise;
+    return db.put(STORE, data, `${z}/${x}/${y}`);
+  }
+
+  // ---------- protocol ----------
+  function parseCacheUrl(url) {
+    const path = url.replace(/^cache:\/\//, '').replace(/^\/+/, '');
+    const parts = path.split('/');
+    if (parts.length !== 4 || parts[0] !== 'tiles')
+      throw new Error('Unexpected cache URL: ' + url);
+    const [z, x, y] = parts.slice(1).map(Number);
+    return { z, x, y };
+  }
+
+  maplibregl.addProtocol('cache', async ({ url }) => {
+    const { z, x, y } = parseCacheUrl(url);
+    const cached = await getTile(z, x, y);
+    if (cached) return { data: cached };
+
+    // fallback – replace with your own tile endpoint
+    const fallback = `https://tileserver.example.com/${z}/${x}/${y}.pbf`;
+    const resp = await fetch(fallback);
+    if (!resp.ok) throw new Error(`Network ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    putTile(z, x, y, buf).catch(console.error);
+    return { data: buf };
+  });
+
+  // ---------- map ----------
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: {
+        myVector: {
+          type: 'vector',
+          url: 'cache://tiles/{z}/{x}/{y}'
+        }
+      },
+      layers: [{
+        id: 'fill',
+        type: 'fill',
+        source: 'myVector',
+        'source-layer': 'my_layer_name',
+        paint: { 'fill-color': '#3bb2d0', 'fill-opacity': 0.5 }
+      }]
+    },
+    center: [0, 0],
+    zoom: 2
+  });
+</script>
+</body>
+</html>
 ```
 
-`idb` gives you a Promise-based wrapper around IndexedDB that works in all modern browsers.
+Open the file, zoom around",PASS,1.00,,All assertions passed,
+negative — registering a custom protocol in the browser,skills/maplibre-native-gl-js-parity/SKILL.md,"Browser app, MapLibre GL JS, TypeScript. I want to serve vector tiles out of an in-browser IndexedDB cache under a `cache://` scheme, so my style can reference `cache://tiles/{z}/{x}/{y}`. Show me how to register the protocol.
+","Below is a **complete, TypeScript-ready** example that shows how to:
+
+1. **Create an IndexedDB store** for vector-tile blobs (`MVT` files).  
+2. **Register a custom `cache://` protocol** with `maplibregl.addProtocol`.  
+3. **Use the protocol in a style** (`cache://tiles/{z}/{x}/{y}`).
+
+> **TL;DR** – `addProtocol` receives a handler that must return a `Promise<ProtocolResponse>`.  
+> The response can contain the raw bytes (`Uint8Array`) and optional HTTP-like headers (`cacheControl`, `expires`, `etag`, …).  
+> The handler is called for every resource that starts with `cache://` – tiles, sprites, glyphs, etc. – so you can keep the logic generic.
 
 ---
 
-## 2️⃣ Tile-cache helper (type-safe)
+## 1️⃣  Set up a tiny IndexedDB wrapper (using the tiny `idb` helper)
 
 ```ts
-// tileCache.ts
+// db.ts --------------------------------------------------------------
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 
-interface TileCacheDB extends DBSchema {
-  /** One object store per source – we keep it simple and use a single store */
+interface TileDB extends DBSchema {
+  /** key = `${z}/${x}/${y}` */
   tiles: {
-    key: string;               // “z/x/y”
-    value: ArrayBuffer;        // raw MVT bytes
+    key: string;
+    value: Uint8Array; // raw MVT bytes
   };
 }
 
-/** Singleton – the DB is opened once and reused */
-let dbPromise: Promise<IDBPDatabase<TileCacheDB>> | null = null;
+/** Singleton – open the DB once and reuse it */
+let dbPromise: Promise<IDBPDatabase<TileDB>> | null = null;
 
-/** Open (or create) the IndexedDB database */
-export function getTileCacheDB(): Promise<IDBPDatabase<TileCacheDB>> {
+export function getTileDB(): Promise<IDBPDatabase<TileDB>> {
   if (!dbPromise) {
-    dbPromise = openDB<TileCacheDB>('tileCache', 1, {
+    dbPromise = openDB<TileDB>('maplibre-tile-cache', 1, {
       upgrade(db) {
         db.createObjectStore('tiles');
       },
@@ -599,237 +341,558 @@ export function getTileCacheDB(): Promise<IDBPDatabase<TileCacheDB>> {
   return dbPromise;
 }
 
-/** Store a tile (z/x/y) */
-export async function putTile(z: number, x: number, y: number, data: ArrayBuffer) {
-  const db = await getTileCacheDB();
+/** Store a tile (you would call this when you first fetch it from the network) */
+export async function putTile(
+  z: number,
+  x: number,
+  y: number,
+  data: Uint8Array,
+): Promise<void> {
+  const db = await getTileDB();
   const key = `${z}/${x}/${y}`;
   await db.put('tiles', data, key);
 }
 
 /** Retrieve a tile – returns undefined if not cached */
-export async function getTile(z: number, x: number, y: number): Promise<ArrayBuffer | undefined> {
-  const db = await getTileCacheDB();
+export async function getTile(
+  z: number,
+  x: number,
+  y: number,
+): Promise<Uint8Array | undefined> {
+  const db = await getTileDB();
   const key = `${z}/${x}/${y}`;
   return db.get('tiles', key);
 }
 ```
 
+> **Why `Uint8Array`?**  
+> MapLibre expects the raw binary payload (`ArrayBuffer`/`Uint8Array`). The `idb` library stores binary data without any extra conversion, so you can write the bytes you received from the network straight into the DB.
+
 ---
 
-## 3️⃣ Register the `cache://` protocol
+## 2️⃣  Register the `cache://` protocol
 
 ```ts
-// registerCacheProtocol.ts
-import maplibregl from 'maplibre-gl';
-import { getTile } from './tileCache';
+// protocol.ts --------------------------------------------------------
+import maplibregl, { ProtocolResponse } from 'maplibre-gl';
+import { getTile } from './db';
 
 /**
- * The signature required by `addProtocol`:
- *   (params, abortController) => Promise<{ data: ArrayBuffer, ... }>
+ * MapLibre will call this for every URL that starts with `cache://`.
  *
- * `params` contains:
- *   - url: the full URL that triggered the request (e.g. ""cache://tiles/12/3456/7890"")
- *   - request: the original Request object (contains method, headers, etc.)
+ * @param params   – the parsed URL parts (`url`, `resourceType`, `zoom`, `x`, `y`, …)
+ * @param abortCtrl – an AbortController that MapLibre will abort if the request is cancelled.
  *
- * The function must **always** resolve (or reject) a Promise – never return `null`.
+ * @returns a Promise that resolves to a ProtocolResponse.
  */
-export function registerCacheProtocol() {
-  maplibregl.addProtocol('cache', async (params, abortController) => {
-    // --------------------------------------------------------------
-    // 1️⃣ Parse the URL – we only care about the z/x/y part.
-    // --------------------------------------------------------------
-    // Example URL: cache://tiles/12/3456/7890
-    const url = new URL(params.url);
-    // url.pathname = ""/tiles/12/3456/7890""
-    const parts = url.pathname.split('/').filter(Boolean); // [""tiles"",""12"",""3456"",""7890""]
-    if (parts.length !== 4) {
-      // Wrong shape – let the caller know we couldn't handle it.
-      return Promise.reject(new Error(`cache:// URL must be cache://tiles/{z}/{x}/{y}`));
-    }
-    const [, zStr, xStr, yStr] = parts;
-    const z = Number(zStr);
-    const x = Number(xStr);
-    const y = Number(yStr);
-    if (Number.isNaN(z) || Number.isNaN(x) || Number.isNaN(y)) {
-      return Promise.reject(new Error(`Invalid tile coordinates in ${params.url}`));
-    }
+function cacheProtocolHandler(
+  params: maplibregl.ProtocolParams,
+  abortCtrl: AbortController,
+): Promise<ProtocolResponse> {
+  // The URL we receive looks like: cache://tiles/12/3456/7890
+  // Strip the scheme and leading slash:
+  const path = new URL(params.url).pathname.replace(/^\/+/, ''); // ""tiles/12/3456/7890""
+  const parts = path.split('/');
 
-    // --------------------------------------------------------------
-    // 2️⃣ Try to read the tile from IndexedDB.
-    // --------------------------------------------------------------
-    const cached = await getTile(z, x, y);
-    if (cached) {
-      // Tile found – return it exactly as MapLibre expects.
-      return {
-        data: cached,
-        // Optional HTTP-like metadata (helps the cache layer inside MapLibre)
-        cacheControl: 'max-age=31536000', // 1 year – adjust as you like
-        expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(),
-        // No need for `etag` or `lastModified` unless you want fine-grained validation.
-      };
-    }
+  // We only care about the z/x/y part – ignore any prefix like ""tiles""
+  const z = Number(parts[parts.length - 3]);
+  const x = Number(parts[parts.length - 2]);
+  const y = Number(parts[parts.length - 1]);
 
-    // --------------------------------------------------------------
-    // 3️⃣ Fallback: fetch from the network (or any other source) and
-    //    store the result for next time.
-    // --------------------------------------------------------------
-    // In this example we assume the original source lives at
-    // https://my.tileserver.com/tiles/{z}/{x}/{y}.pbf
-    const networkUrl = `https://my.tileserver.com/tiles/${z}/${x}/${y}.pbf`;
+  // If the URL is malformed, reject – MapLibre will fall back to its default error handling.
+  if (Number.isNaN(z) || Number.isNaN(x) || Number.isNaN(y)) {
+    return Promise.reject(new Error(`Invalid cache URL: ${params.url}`));
+  }
 
-    // Respect abort signals – MapLibre may cancel a request if the view changes.
-    const response = await fetch(networkUrl, { signal: abortController.signal });
+  // -----------------------------------------------------------------
+  // 1️⃣  Try to read the tile from IndexedDB
+  // -----------------------------------------------------------------
+  const tilePromise = getTile(z, x, y);
 
-    if (!response.ok) {
-      // Propagate the HTTP error to MapLibre (it will show a red “missing tile” square)
-      return Promise.reject(new Error(`Network error ${response.status} for ${networkUrl}`));
+  // -----------------------------------------------------------------
+  // 2️⃣  Return a ProtocolResponse (or reject) – MapLibre will treat it
+  //     exactly like a network response.
+  // -----------------------------------------------------------------
+  return tilePromise.then((bytes) => {
+    if (!bytes) {
+      // No cached tile → tell MapLibre to treat it as a 404.
+      // You can also return a custom error response if you like.
+      const err = new Error(`Tile not found in cache: ${z}/${x}/${y}`);
+      // MapLibre will surface this as a “resource not found” error.
+      throw err;
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-
-    // Store it for future offline reads
-    await putTile(z, x, y, arrayBuffer);
-
-    // Return the freshly-fetched data
-    return {
-      data: arrayBuffer,
-      cacheControl: response.headers.get('Cache-Control') ?? undefined,
-      expires: response.headers.get('Expires') ?? undefined,
-      etag: response.headers.get('ETag') ?? undefined,
-      lastModified: response.headers.get('Last-Modified') ?? undefined,
+    // Optional: add HTTP-like headers so MapLibre can cache the response
+    // in its own in-memory cache (useful when you later switch to a
+    // network fallback).  All fields are optional.
+    const response: ProtocolResponse = {
+      data: bytes, // Uint8Array or ArrayBuffer
+      // cacheControl: 'max-age=86400',   // 1 day
+      // expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
+      // etag: `""${z}-${x}-${y}""`,
     };
+    return response;
   });
+}
+
+/**
+ * Register the handler **once** – before you create any MapLibre map.
+ */
+export function registerCacheProtocol(): void {
+  // `addProtocol` is promise-based since MapLibre GL JS v4.0.0.
+  // The first argument is the scheme name **without** the trailing `://`.
+  maplibregl.addProtocol('cache', cacheProtocolHandler);
 }
 ```
 
-> **Why we return an object with `data` and optional HTTP-like fields**  
-> MapLibre’s internal `Resource` loader expects the protocol handler to resolve to an object that looks like a `Response`. Supplying `cacheControl`, `expires`, `etag`, etc., lets MapLibre’s own caching layer (if you enable it) work correctly. If you don’t need those fields you can simply return `{ data: arrayBuffer }`.
+### What the handler receives
+
+| Property | Meaning |
+|----------|---------|
+| `url` | Full URL string (`cache://tiles/12/3456/7890`) |
+| `resourceType` | `""source""` / `""style""` / `""glyphs""` / `""sprite""` / `""tile""` … |
+| `zoom`, `x`, `y` | Numeric tile coordinates **if** the URL matches the `{z}/{x}/{y}` pattern. |
+| `canonicalTileURL` | The same URL but with the scheme replaced by `http://` (useful for debugging). |
+| `abortController` | You can listen to `abortController.signal` to stop a long-running DB read (rare for IndexedDB). |
 
 ---
 
-## 4️⃣ Put it all together – create the map
+## 3️⃣  Wire everything together in your app entry point
 
 ```ts
-// main.ts (or index.ts)
+// index.ts -----------------------------------------------------------
 import maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css'; // if you use a bundler that handles CSS
-import { registerCacheProtocol } from './registerCacheProtocol';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import { registerCacheProtocol } from './protocol';
+import { putTile } from './db';
 
-// 1️⃣ Register the protocol **before** you instantiate the map
+// ---------------------------------------------------------------
+// 1️⃣  Register the custom protocol **before** any MapLibreMap is created
+// ---------------------------------------------------------------
 registerCacheProtocol();
 
-// 2️⃣ Define a style that points to the custom scheme.
-//    You can embed the style JSON directly, load it from a file, or
-//    use a style URL that already contains the `cache://` URLs.
-const style = {
-  version: 8,
-  sources: {
-    // The source points to the custom scheme.
-    // The `{z}/{x}/{y}` placeholders are *not* expanded by MapLibre;
-    // they are part of the URL string that we later parse.
-    myTiles: {
-      type: 'vector',
-      // Note the trailing slash – MapLibre will append “{z}/{x}/{y}.pbf”
-      // (or just “{z}/{x}/{y}” if you omit the extension in the protocol handler)
-      url: 'cache://tiles',
-    },
-  },
-  layers: [
-    {
-      id: 'my-fill',
-      type: 'fill',
-      source: 'myTiles',
-      'source-layer': 'my_layer_name', // <-- whatever layer name is inside the MVT
-      paint: {
-        'fill-color': '#3bb2d0',
-        'fill-opacity': 0.6,
+// ---------------------------------------------------------------
+// 2️⃣  (Optional) Pre-populate the cache – this would normally be done
+//     by a background fetcher that stores tiles as they are downloaded.
+// ---------------------------------------------------------------
+async function preloadDemoTile() {
+  // Example: fetch a tile from a public source and store it.
+  const demoUrl = 'https://demotiles.maplibre.org/tiles/planet/12/1200/1530.mvt';
+  const resp = await fetch(demoUrl);
+  const arrayBuffer = await resp.arrayBuffer();
+  await putTile(12, 1200, 1530, new Uint8Array(arrayBuffer));
+}
+preloadDemoTile().catch(console.error);
+
+// ---------------------------------------------------------------
+// 3️⃣  Create the map – the style can now reference `cache://` URLs
+// ---------------------------------------------------------------
+const map = new maplibregl.Map({
+  container: 'map', // id of the <div>
+  style: {
+    version: 8,
+    sources: {
+      // The source points to the custom scheme.
+      // Note: you can still use a normal `type: ""vector""` source.
+      // MapLibre will call the protocol handler for each tile request.
+      cached: {
+        type: 'vector',
+        tiles: ['cache://tiles/{z}/{x}/{y}'],
+        // Optional: set a maxzoom/minzoom that matches what you stored.
+        maxzoom: 14,
       },
     },
-  ],
-};
+    layers: [
+      {
+        id: 'land',
+        type: 'fill',
+        source: 'cached',
+        'source-layer': 'land', // depends on the source's layer name
+        paint: {
+          'fill-color': '#e0e0e0',
+        },
+      },
+    ],
+  },
+  center: [0, 0],
+  zoom: 2,
+});
+```
 
-// 3️⃣ Create the map
+### What you just did
+
+| Step | What happens under the hood |
+|------|-----------------------------|
+| **Register protocol** | `maplibregl.addProtocol('cache', handler)` tells the GL JS runtime “whenever you see a URL that starts with `cache://`, call *my* handler instead of doing a normal HTTP fetch”. |
+| **Map creation** | When the style asks for a tile (`cache://tiles/12/1200/1530`), MapLibre parses the URL, extracts `z/x/y`, and invokes `handler(params, abortCtrl)`. |
+| **Handler** | Looks up the tile in IndexedDB (`getTile`). If found, resolves with `{ data: Uint8Array }`. If not, rejects → MapLibre treats it as a 404 and will either show a transparent tile or fall back to a fallback source (if you have one). |
+| **Abort support** | If the user pans/zooms fast enough that a request is no longer needed, MapLibre aborts the `AbortController`. IndexedDB reads are already fast, but you could abort a long-running fetch if you mixed network + cache. |
+| **Headers (optional)** | Adding `cacheControl`, `expires`, or `etag` lets MapLibre’s internal in-memory cache work exactly like a normal HTTP response. Useful if you later switch to a hybrid “network-first, cache-fallback” strategy. |
+
+---
+
+## 4️⃣  Bonus: Hybrid “Network-first, Cache-fallback” handler
+
+If you want the app to **try the network first** and fall back to the IndexedDB cache when offline, just wrap the network fetch in the same handler:
+
+```ts
+function hybridCacheHandler(
+  params: maplibregl.ProtocolParams,
+  abortCtrl: AbortController,
+): Promise<ProtocolResponse> {
+  const url = new URL(params.url);
+  const path = url.pathname.replace(/^\/+/, '');
+  const parts = path.split('/');
+  const z = Number(parts[parts.length - 3]);
+  const x = Number(parts[parts.length - 2]);
+  const y = Number(parts[parts.length - 1]);
+
+  // Build the *real* HTTP URL that the tiles originally live at.
+  // In this example we assume the same pattern under https://mytiles.com/
+  const httpUrl = `https://mytiles.com/tiles/${z}/${x}/${y}.mvt`;
+
+  // 1️⃣ Try network (respect abort)
+  const networkPromise = fetch(httpUrl, { signal: abortCtrl.signal })
+    .then(async (resp) => {
+      if (!resp.ok) throw new Error(`Network error ${resp.status}`);
+      const buf = await resp.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      // Store a copy in IndexedDB for next time
+      await putTile(z, x, y, bytes);
+      return {
+        data: bytes,
+        cacheControl: resp.headers.get('Cache-Control') ?? undefined,
+        expires: resp.headers.get('Expires') ?? undefined,
+        etag: resp.headers.get('ETag') ?? undefined,
+      } as ProtocolResponse;
+    })
+    .catch(() => null); // swallow network errors – we’ll try the cache
+
+  // 2️⃣ If network failed, read from cache
+  const cachePromise = networkPromise.then((result) => {
+    if (result) return result; // network succeeded
+    return getTile(z, x, y).then((bytes) => {
+      if (!bytes) throw new Error('Tile not in cache');
+      return { data: bytes } as ProtocolResponse;
+    });
+  });
+
+  return cachePromise;
+}
+
+// Register under the same scheme (or a new one)
+maplibregl.addProtocol('cache', hybridCacheHandler);
+```
+
+Now the same `cache://tiles/{z}/{x}/{y}` URL works **online** (fast network) **and** **offline** (fallback to IndexedDB).
+
+---
+
+## 5️⃣  Things to keep in mind
+
+| Issue | How to handle |
+|-------|---------------|
+| **Large caches** – IndexedDB quotas differ per browser (≈50 MB on Chrome, 100 MB on Firefox). | Use a simple LRU eviction strategy (e.g., store a `lastAccessed` timestamp with each tile and delete the oldest when you hit a size limit). |
+| **Tile format** – MapLibre expects **",PASS,1.00,,All assertions passed,
+negative — registering a custom protocol in the browser,skills/maplibre-native-gl-js-parity/SKILL.md,"Browser app, MapLibre GL JS, TypeScript. I want to serve vector tiles out of an in-browser IndexedDB cache under a `cache://` scheme, so my style can reference `cache://tiles/{z}/{x}/{y}`. Show me how to register the protocol.
+","Below is a **complete, ready-to-copy TypeScript example** that
+
+1. **Creates an IndexedDB store** for vector-tile blobs (`cache://tiles/{z}/{x}/{y}`)  
+2. **Registers a custom protocol** with `maplibregl.addProtocol` (the promise-based API that shipped in v4.0.0)  
+3. **Uses the protocol in a style** so the map reads tiles directly from the cache, falling back to the network when a tile is missing.
+
+> **TL;DR** – Call `maplibregl.addProtocol('cache', handler)` **before** you instantiate `new maplibregl.Map(...)`. The handler receives the URL parts, looks the tile up in IndexedDB, and resolves with an `ArrayBuffer` (or rejects to let the normal HTTP stack try the original URL).
+
+---
+
+## 1️⃣  Set up a tiny IndexedDB wrapper (using the tiny `idb-keyval` helper)
+
+You can roll your own IndexedDB code, but the **`idb-keyval`** package gives a clean, promise-based API that works in all modern browsers.
+
+```bash
+# npm install idb-keyval
+npm i idb-keyval
+```
+
+```ts
+// src/cache.ts
+import { get, set, del, createStore, Store } from 'idb-keyval';
+
+/**
+ * The IndexedDB store that holds raw MVT bytes.
+ * The key is the tile URL *without* the scheme, e.g. ""tiles/12/3456/7890"".
+ */
+export const tileStore: Store = createStore('mbtiles-cache', 'tiles');
+
+/**
+ * Store a tile.
+ * @param z zoom level
+ * @param x tile column
+ * @param y tile row
+ * @param data raw MVT bytes (ArrayBuffer or Uint8Array)
+ */
+export async function putTile(
+  z: number,
+  x: number,
+  y: number,
+  data: ArrayBuffer | Uint8Array
+): Promise<void> {
+  const key = `tiles/${z}/${x}/${y}`;
+  await set(key, data, tileStore);
+}
+
+/**
+ * Retrieve a tile – returns `undefined` if it is not cached.
+ */
+export async function getTile(
+  z: number,
+  x: number,
+  y: number
+): Promise<ArrayBuffer | undefined> {
+  const key = `tiles/${z}/${x}/${y}`;
+  const value = await get<ArrayBuffer>(key, tileStore);
+  return value;
+}
+
+/**
+ * Remove a tile (optional utility).
+ */
+export async function deleteTile(z: number, x: number, y: number): Promise<void> {
+  const key = `tiles/${z}/${x}/${y}`;
+  await del(key, tileStore);
+}
+```
+
+> **Why the key is `tiles/...` and not `cache://…`?**  
+> `addProtocol` hands you the *full* URL (`cache://tiles/12/3456/7890`). The handler strips the scheme and uses the remainder as the DB key – this keeps the DB tidy and lets you reuse the same store for other schemes if you wish.
+
+---
+
+## 2️⃣  Register the `cache://` protocol
+
+```ts
+// src/protocol.ts
+import maplibregl, { Resource, ResourceResponse } from 'maplibre-gl';
+import { getTile } from './cache';
+
+/**
+ * The protocol handler.
+ *
+ * @param params   The parsed URL parts (see MapLibre docs)
+ * @param abortCtrl  An AbortController that MapLibre will signal if the request is cancelled.
+ *
+ * @returns a Promise that resolves to a ResourceResponse.
+ */
+function cacheProtocolHandler(
+  params: Resource,
+  abortCtrl: AbortController
+): Promise<ResourceResponse> {
+  // `params.url` looks like ""cache://tiles/12/3456/7890""
+  const url = new URL(params.url);
+  const [, zStr, xStr, yStr] = url.pathname.split('/'); // ["""", ""tiles"", ""12"", ""3456"", ""7890""]
+  const z = Number(zStr);
+  const x = Number(xStr);
+  const y = Number(yStr);
+
+  // If the request is aborted (e.g. user pans away), stop the DB lookup.
+  if (abortCtrl.signal.aborted) {
+    return Promise.reject(new Error('request aborted'));
+  }
+
+  // Try to read the tile from IndexedDB.
+  return getTile(z, x, y).then((blob) => {
+    if (!blob) {
+      // No cached tile → reject so MapLibre falls back to the normal HTTP fetch.
+      // The rejection message is ignored; just throw.
+      throw new Error('tile not in cache');
+    }
+
+    // The response shape MapLibre expects:
+    //   data: ArrayBuffer | string | Blob
+    //   cacheControl?: string
+    //   expires?: string
+    //   etag?: string
+    //   modified?: string
+    //   expires?: string
+    //   // …any other HTTP-like headers you want to expose
+    const response: ResourceResponse = {
+      data: blob, // already an ArrayBuffer (or Uint8Array)
+      // optional: you can add caching headers if you like
+      // cacheControl: 'max-age=31536000',
+    };
+    return response;
+  });
+}
+
+/**
+ * Register the protocol **once** (usually at app start, before creating the map).
+ */
+export function registerCacheProtocol(): void {
+  // The first argument is the scheme *without* the trailing colon.
+  maplibregl.addProtocol('cache', cacheProtocolHandler);
+}
+```
+
+### What the handler does
+
+| Step | Why it matters |
+|------|----------------|
+| **Parse the URL** – `new URL(params.url)` | Gives you `pathname`, `search`, etc. |
+| **Extract `z/x/y`** | Those are the keys you stored in IndexedDB. |
+| **Abort handling** – check `abortCtrl.signal.aborted` | Prevents unnecessary DB work when the user quickly pans/zooms. |
+| **`getTile`** – read from IndexedDB | Returns `ArrayBuffer | undefined`. |
+| **If missing → reject** | MapLibre will automatically try the normal network request (useful for a hybrid cache-first strategy). |
+| **If found → resolve** with a `ResourceResponse` containing the raw bytes | MapLibre will treat the bytes as an MVT tile and render it. |
+
+> **Important:** `addProtocol` must be called **before** any `Map` instance is created, otherwise the map will have already resolved the style and fetched tiles using the default HTTP stack.
+
+---
+
+## 3️⃣  Put it all together – a minimal app
+
+```tsx
+// src/index.tsx
+import React, { useEffect } from 'react';
+import ReactDOM from 'react-dom/client';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import { registerCacheProtocol } from './protocol';
+import { putTile } from './cache';
+
+// ------------------------------------------------------------------
+// 1️⃣  Register the custom protocol (once, at startup)
+registerCacheProtocol();
+
+// ------------------------------------------------------------------
+// 2️⃣  (Optional) Pre-populate the cache for demo purposes.
+//    In a real app you would fill the cache while the user browses,
+//    or during an offline-download step.
+async function seedCache() {
+  // Example: fetch a single tile from the network and store it.
+  const z = 12,
+    x = 3456,
+    y = 7890;
+  const remoteUrl = `https://example.com/tiles/${z}/${x}/${y}.pbf`;
+
+  const resp = await fetch(remoteUrl);
+  if (!resp.ok) throw new Error('failed to fetch demo tile');
+  const arrayBuffer = await resp.arrayBuffer();
+
+  await putTile(z, x, y, arrayBuffer);
+  console.log('demo tile cached');
+}
+seedCache().catch(console.error);
+
+// ------------------------------------------------------------------
+// 3️⃣  Create the map – note the style uses the custom scheme.
 const map = new maplibregl.Map({
-  container: 'map', // <div id=""map""></div> in your HTML
-  style,            // the object defined above
+  container: 'map', // <div id=""map""></div> in index.html
+  style: {
+    version: 8,
+    sources: {
+      // The source points at the custom scheme.
+      // MapLibre will call our handler for every tile request.
+      osm: {
+        type: 'vector',
+        tiles: ['cache://tiles/{z}/{x}/{y}'],
+        // Optional: a fallback URL for when a tile is not cached.
+        // MapLibre will try this *after* the protocol handler rejects.
+        // (You can also omit it and let the handler forward to the network.)
+        // fallback: ['https://example.com/tiles/{z}/{x}/{y}.pbf']
+      },
+    },
+    layers: [
+      {
+        id: 'roads',
+        type: 'line',
+        source: 'osm',
+        'source-layer': 'road',
+        paint: {
+          'line-color': '#ff6600',
+          'line-width': 2,
+        },
+      },
+    ],
+  },
   center: [0, 0],
   zoom: 2,
 });
 
-// Optional: show a loading spinner while tiles are being fetched
-map.on('data', (e) => {
-  if (e.sourceId === 'myTiles' && e.isSourceLoaded) {
-    console.log('All cached tiles for the current view are loaded');
+map.addControl(new maplibregl.NavigationControl());
+```
+
+```html
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang=""en"">
+<head>
+  <meta charset=""UTF-8"" />
+  <title>MapLibre GL JS – cache:// protocol demo</title>
+  <style>
+    body, html, #map { margin:0; padding:0; width:100%; height:100%; }
+  </style>
+</head>
+<body>
+  <div id=""map""></div>
+  <script type=""module"" src=""/src/index.tsx""></script>
+</body>
+</html>
+```
+
+### What you’ll see
+
+* If the tile you seeded (`z=12, x=3456, y=7890`) falls inside the current viewport, it will be rendered **directly from IndexedDB** (no network request in the dev-tools “Network” tab).  
+* For any other tile, the handler rejects → MapLibre falls back to the normal HTTP request (or you can provide a `fallback` array in the source definition).
+
+---
+
+## 4️⃣  Full TypeScript signatures (for reference)
+
+```ts
+// maplibre-gl.d.ts (v4+)
+declare module 'maplibre-gl' {
+  export interface Resource {
+    url: string;               // full URL, e.g. ""cache://tiles/12/34/56""
+    kind: 'Tile' | 'Source' | 'Glyphs' | 'SpriteImage' | 'SpriteJSON' | 'Style';
+    // …other fields omitted for brevity
   }
-});
+
+  export interface ResourceResponse {
+    data: ArrayBuffer | string | Blob;
+    cacheControl?: string;
+    expires?: string;
+    etag?: string;
+    modified?: string;
+    // any other HTTP-like headers you want to expose
+  }
+
+  /**
+   * Register a custom protocol.
+   *
+   * @param scheme   The scheme name without the colon, e.g. ""cache"".
+   * @param handler  A function that receives the parsed Resource and an AbortController,
+   *                 and returns a Promise that resolves to a ResourceResponse.
+   */
+  export function addProtocol(
+    scheme: string,
+    handler: (params: Resource, abortCtrl: AbortController) => Promise<ResourceResponse>
+  ): void;
+}
 ```
 
-### What the URL looks like inside the protocol handler
+---
 
-* **Style URL**: `cache://tiles` (the source’s `url` property).  
-* **MapLibre’s internal request**: `cache://tiles/12/3456/7890` (or with `.pbf` if you keep the extension).  
-* **Our handler** parses the pathname, extracts `z/x/y`, looks in IndexedDB, and either returns the cached blob or fetches it from the network and caches it for next time.
+## 5️⃣  Common pitfalls & how to avoid them
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| **No tiles appear, network tab shows 404 for `cache://…`** | The protocol was registered *after* the map was created. | Call `maplibregl.addProtocol` **before** `new maplibregl.Map(...)`. |
+| **Tiles are always fetched from the network, even though they are cached** | Handler rejected (or threw) before returning the cached data. | Verify that `getTile` returns an `ArrayBuffer` and that you **resolve** with `{ data: blob }`. |
+| **AbortController errors** | The handler ignored `abortCtrl.signal`. | Check `abortCtrl.signal.aborted` early and return a rejected promise if true. |
+| **`URL` parsing fails for `cache://…`** | Using `new URL('cache://…')` in older browsers that don’t support custom schemes. | All modern browsers (Chrome ≥ 71, Edge ≥ 79, Firefox ≥ 60, Safari ≥ 12) support it. If you need to support older browsers, split the string manually (`url.split('://')[1]`). |
+| **Large tiles cause UI jank** | The IndexedDB read is done on the main thread. | `idb-keyval` already uses the browser’s async IndexedDB API, which runs off the UI thread. No extra work needed. |
+| **Cache-first + network fallback not working** | The handler resolves with `null` instead of rejecting. | **Reject** (`throw new Error('not cached')`) when the tile is missing; MapLibre will then try the `fallback` URLs or its default HTTP stack. |
 
 ---
 
-## 5️⃣ Quick test – pre-populate the cache (optional)
-
-If you want to ship a few tiles with the app (e.g., a small offline area), you can preload them once:
-
-```ts
-import { putTile } from './tileCache';
-
-// Example: preload tile 0/0/0 (the whole world at zoom 0)
-fetch('https://my.tileserver.com/tiles/0/0/0.pbf')
-  .then(r => r.arrayBuffer())
-  .then(buf => putTile(0, 0, 0, buf))
-  .then(() => console.log('Tile 0/0/0 cached'));
-```
-
-Run this once (e.g., on first launch) and the tile will be served from IndexedDB thereafter.
-
----
-
-## 6️⃣ Things to keep in mind
-
-| Issue | How we handle it |
-|------|-------------------|
-| **Abort / cancellation** | The `abortController` passed to the handler is wired to the `fetch` we do for the network fallback. If the user pans/zooms away before the request finishes, the fetch is aborted automatically. |
-| **Large-scale offline use** | IndexedDB has a per-origin quota (usually ~50 MiB, but browsers may ask the user for more). Consider a strategy to prune old tiles (`delete` on the DB) or to store only a limited zoom range. |
-| **Cache-control headers** | If you want MapLibre’s internal `sourceCache` to respect HTTP caching semantics, forward the `Cache-Control`, `Expires`, `ETag`, etc., from the network response (as shown in the fallback branch). |
-| **Multiple sources** | The example uses a single source (`myTiles`). If you have several, you can either (a) keep a single `cache://` base URL and encode the source name in the path (`cache://mySource/tiles/...`) and add a tiny switch in the handler, or (b) register *different* protocols (`cacheA`, `cacheB`, …) – each with its own handler. |
-| **Tile format** | The handler returns raw `ArrayBuffer`. MapLibre will automatically treat it as an MVT vector tile because the source type is `""vector""`. If you need a different format (e.g., GeoJSON), adjust the source type accordingly. |
-| **Browser support** | `addProtocol` works in all browsers that support MapLibre GL JS ≥ 4.0.0. The only requirement is that the browser supports IndexedDB (all modern browsers do). |
-
----
-
-## 🎉 TL;DR – Minimal copy-paste snippet
-
-```ts
-import maplibregl from 'maplibre-gl';
-import { openDB } from 'idb';
-
-// ---- 1️⃣ Open IndexedDB -------------------------------------------------
-const dbPromise = openDB('tileCache', 1, {
-  upgrade(db) { db.createObjectStore('tiles'); },
-});
-
-async function getTile(z: number, x: number, y: number) {
-  const db = await dbPromise;
-  return db.get('tiles', `${z}/${x}/${y}`);
-}
-async function putTile(z: number, x: number, y: number, data: ArrayBuffer) {
-  const db = await dbPromise;
-  await db.put('tiles', data, `${z}/${x}/${y}`);
-}
-
-// ---- 2️⃣ Register protocol ------------------------------------------------
-maplibregl.addProtocol('cache', async (params, abortCtrl) => {
-  const url = new URL(params.url);
-  const [, zStr, xStr, yStr] = url.pathname.split('/').filter(Boolean);
-  const z = Number(zStr), x = Number(xStr), y = Number(yStr);
-  const cached = await getTile(z, x, y);
-  if (cached) return { data: cached };
-
-  // fallback → network + store
-  const netUrl = `https://my",PASS,1.00,,All assertions passed,
+## 6️⃣  TL",PASS,1.00,,All assertions passed,
