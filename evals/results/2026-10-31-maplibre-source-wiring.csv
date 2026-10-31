@@ -1,0 +1,643 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — custom style layers invisible against hosted tiles,skills/maplibre-source-wiring/SKILL.md,"I'm using a hosted tile provider's style URL and everything looks great. But when I try to write my own custom style against the same tile source, none of my layers show up.
+","The most common reason a custom style draws nothing while the provider’s own style works is that the style’s layers are pointing at the wrong **source-layer** names (or the source itself isn’t wired the same way the provider’s style does).
+
+### 1. Wire the source exactly as the provider does  
+
+**Prefer the TileJSON `url`.**  
+If the provider publishes a TileJSON endpoint (most do), use it:
+
+```js
+map.addSource('provider', {
+  type: 'vector',
+  url: 'https://tiles.example.com/tileset.json'   // <-- TileJSON URL
+});
+```
+
+*Why?*  
+* The TileJSON contains the correct `minzoom`/`maxzoom`, `bounds`, and—most importantly—the list of `vector_layers` (the source-layer names).  
+* Hand-wiring a `tiles` array skips that metadata, so MapLibre may request zoom levels that don’t exist or may not know the layer names.
+
+If the provider only gives you a raw `{z}/{x}/{y}` template, you must add the missing metadata yourself (including `minzoom`, `maxzoom`, and the exact `source-layer` names you learned from their docs).
+
+### 2. Verify the source-layer names  
+
+Open the TileJSON (just fetch the URL in a browser or `curl`). Look for the `vector_layers` array, e.g.:
+
+```json
+{
+  ""vector_layers"": [
+    { ""id"": ""transportation"", ""minzoom"": 5, ""maxzoom"": 14, ""fields"": { ... } },
+    { ""id"": ""water"",          ""minzoom"": 0, ""maxzoom"": 14, ""fields"": { ... } },
+    { ""id"": ""landuse"",        ""minzoom"": 0, ""maxzoom"": 14, ""fields"": { ... } }
+  ]
+}
+```
+
+Your style layers must use **exactly** those `id` values:
+
+```js
+map.addLayer({
+  id: 'my-roads',
+  type: 'line',
+  source: 'provider',
+  'source-layer': 'transportation',   // <-- must match TileJSON
+  paint: { 'line-color': '#f00', 'line-width': 2 }
+});
+```
+
+A typo, a different case, or using a layer name from another schema (e.g., `roads` instead of `transportation`) results in a silent “draw nothing”—no console error.
+
+### 3. Insert your layers below the first label layer  
+
+If you add layers with `map.addLayer()` and omit the second argument, they are placed **above** everything, which can hide the provider’s labels. Insert them before the first `symbol` layer:
+
+```js
+// Find the first symbol layer (usually a label)
+const firstSymbol = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
+// Add your custom layer beneath it
+map.addLayer(myLayer, firstSymbol);
+```
+
+That keeps the basemap’s street names, POI labels, and icons visible.
+
+### 4. Check glyphs and sprites (optional)  
+
+The provider’s style URL already includes working `glyphs` and `sprite` URLs. When you write your own style you must supply them yourself, otherwise:
+
+* Missing `glyphs` → text appears in the browser’s default font (or not at all on older GL versions).  
+* Missing `sprite` → any icon-based `symbol` layers show no icons and log “Image … could not be loaded”.
+
+If you want to reuse the provider’s fonts/icons, copy the `glyphs` and `sprite` values from the provider’s style JSON into your custom style’s root.
+
+### 5. Quick checklist for a blank-layer custom style
+
+| Step | What to verify |
+|------|----------------|
+| **Source definition** | `type: 'vector'`, `url: '<TileJSON>'` (or `tiles` + explicit `minzoom`/`maxzoom`). |
+| **Source-layer names** | Match exactly the `id` values in `vector_layers` of the TileJSON. |
+| **Layer order** | Add layers before the first `symbol` layer (or any other layer you want to stay on top). |
+| **Glyphs / Sprite** | Provide working URLs if you use `text-field` or icons. |
+| **CORS** | The TileJSON, tile URLs, glyphs, and sprite URLs must all return `Access-Control-Allow-Origin:*` (or your domain). |
+| **Feature state (if used)** | Ensure the source has an `id` (use `promoteId` if the identifier lives in `properties`). |
+
+If you follow those steps, your custom style will render on top of the same tile source that the provider’s style uses.",FAIL,0.50,,API call error: Error: Request failed after 4 retries: Error: Internal Server Error: 503 Service Unavailable,
+anti-pattern — addLayer covering basemap labels,skills/maplibre-source-wiring/SKILL.md,"I added my GeoJSON data layer with map.addLayer() and it shows up, but it's drawn on top of all the street names and labels. How do I fix the layer order?
+","### Why it happens  
+
+MapLibre draws layers **bottom-to-top** in the order they appear in the style.  
+When you call `map.addLayer()` without a second argument the new layer is
+appended to the end of the list, so it ends up **above every existing
+symbol (label) layers** and hides the street names.
+
+### Fix – insert the layer *before* the first label layer  
+
+You have two options:
+
+1. **Add the layer in the correct place the first time**  
+2. **Move an already-added layer to a lower position**
+
+Both use the same idea: tell MapLibre the *id of the layer that should stay
+above yours* (usually the first `symbol` layer in the style).
+
+#### 1. Add the layer before the first symbol layer
+
+```js
+// 1️⃣ Find the first symbol (label) layer in the current style
+const firstSymbolLayerId = map.getStyle().layers.find(
+  layer => layer.type === 'symbol'
+).id;
+
+// 2️⃣ Add your GeoJSON source (if you haven’t already)
+map.addSource('my-data', {
+  type: 'geojson',
+  data: myGeojson
+});
+
+// 3️⃣ Add the visual layer *below* the labels
+map.addLayer(
+  {
+    id: 'my-data-fill',
+    type: 'fill',
+    source: 'my-data',
+    paint: {
+      'fill-color': '#ff6600',
+      'fill-opacity': 0.4
+    }
+  },
+  firstSymbolLayerId   // ← second argument = insert before this layer
+);
+```
+
+The second argument to `addLayer` is the **`beforeId`** – the id of the layer
+that should stay on top of the new one. By passing the first symbol layer’s
+id, your data is rendered underneath all street-name and point-of-interest
+labels.
+
+#### 2. Move an existing layer after it’s been added
+
+If the layer is already on the map you can reposition it with `moveLayer`:
+
+```js
+// Find the first symbol layer again (or cache it from step 1)
+const firstSymbolLayerId = map.getStyle().layers.find(
+  layer => layer.type === 'symbol'
+).id;
+
+// Move your layer below the labels
+map.moveLayer('my-data-fill', firstSymbolLayerId);
+```
+
+`moveLayer(layerId, beforeId)` works the same way as `addLayer` – it places
+`layerId` right before `beforeId`.
+
+### Quick-reference checklist
+
+| Step | What to do |
+|------|------------|
+| **Find the label anchor** | `const firstSymbol = map.getStyle().layers.find(l => l.type === 'symbol');` |
+| **Add layer** | `map.addLayer(yourLayerObject, firstSymbol.id);` |
+| **Or reposition** | `map.moveLayer('your-layer-id', firstSymbol.id);` |
+| **Result** | Your data draws **under** all street names, POI labels, and other symbol layers. |
+
+That’s all you need – the layer order is now correct and the labels remain
+visible. Happy mapping!",PASS,1.00,,All assertions passed,
+explicit — TileJSON url vs hand-wired tiles template,skills/maplibre-source-wiring/SKILL.md,"In a MapLibre vector source, should I use the `url` field pointing at a TileJSON endpoint, or just put the {z}/{x}/{y} template straight into the `tiles` array? My tile server offers both.
+","Use the **`url`** field and point it at the TileJSON endpoint.
+
+**Why `url` is preferred when it exists**
+
+| What you get automatically | Why it matters |
+|----------------------------|----------------|
+| Tile URL template(s) | No need to hand-write the `{z}/{x}/{y}` pattern. |
+| `minzoom` / `maxzoom` | MapLibre will request only zoom levels the tileset actually provides, avoiding empty tiles that appear when you hand-wire a `tiles` array without a range. |
+| `bounds` and `attribution` | The map can fit the data to the correct geographic extent and show proper credits without extra config. |
+| `vector_layers` list | The source-layer names and their attribute fields are read from TileJSON, so you can match `source-layer` values correctly without guessing. |
+| Other metadata (e.g., `scheme`, `encoding`) | Any provider-specific flags are applied automatically. |
+
+When you supply a `tiles` array you must manually add the same metadata (`minzoom`, `maxzoom`, `bounds`, etc.). If you omit it, MapLibre assumes defaults (`maxzoom: 22`, `tileSize: 512` for raster, etc.), which can cause tiles to disappear as you zoom, or layers to draw nothing because the `source-layer` names aren’t known.
+
+**When to fall back to `tiles`**
+
+* The provider does **not** expose a TileJSON document (e.g., a raw raster service that only gives you a URL template).  
+* You need a very custom tile URL that isn’t representable in the TileJSON (rare).  
+
+In those cases you’d write:
+
+```json
+{
+  ""type"": ""vector"",
+  ""tiles"": [""https://example.com/tiles/{z}/{x}/{y}.pbf""],
+  ""minzoom"": 0,
+  ""maxzoom"": 14,
+  ""attribution"": ""© Example""
+}
+```
+
+But when the TileJSON endpoint is available, simply do:
+
+```json
+{
+  ""type"": ""vector"",
+  ""url"": ""https://example.com/tiles.json""
+}
+```
+
+MapLibre will fetch the TileJSON, fill in all the missing pieces, and your vector source will be correctly wired with minimal chance of silent failures.",PASS,1.00,,All assertions passed,
+"negative — unrelated question, expression syntax",skills/maplibre-source-wiring/SKILL.md,"How do I color my circle layer based on a numeric population property, so bigger values are darker?
+","Use a **circle-layer** and set its `circle-color` paint property with an expression that maps the numeric `population` value to a color ramp.  
+The most common way is an **interpolate** expression (linear or exponential) that returns a darker color for larger values.
+
+```js
+map.addLayer({
+  id: 'cities',
+  type: 'circle',
+  source: 'my-data',          // whatever source you already have
+  'source-layer': 'cities',   // only needed for vector sources
+  paint: {
+    // radius can also be data-driven if you want size to vary
+    'circle-radius': 6,
+
+    // Color: light gray for low population → dark gray for high population
+    'circle-color': [
+      'interpolate',
+      ['linear'],               // or ['exponential', 1.5] for a non-linear ramp
+      ['get', 'population'],    // the numeric property on each feature
+      0,   '#f0f0f0',           // population = 0 → very light gray
+      1000, '#d9d9d9',
+      5000, '#bdbdbd',
+      20000, '#969696',
+      50000, '#636363',
+      100000, '#252525'         // highest values → dark gray/black
+    ]
+  }
+});
+```
+
+### How it works
+* `['get', 'population']` pulls the numeric property from each feature.
+* `['interpolate', ['linear'], …]` creates a smooth gradient between the stop values you provide.
+* The first number after each color stop is the population threshold; the color that follows is the color to use at that threshold.
+* Larger population values map to the darker colors you define at the higher stops.
+
+You can replace the gray hex values with any colors you prefer (e.g., a blue-to-red ramp) or use a **step** expression if you want discrete buckets instead of a smooth gradient. The same pattern works for other paint properties such as `circle-opacity` or `circle-stroke-color` if you need additional styling.",PASS,1.00,,All assertions passed,
+explicit — naming published tile schemas and their doc URLs,skills/maplibre-source-wiring/SKILL.md,"I'm writing style layers against an unfamiliar vector tile source and need to know the possible source-layer names. What are the major published vector tile schemas I should check, and where are their layer lists documented?
+","**Major published vector-tile schemas and where to find their layer lists**
+
+| Schema | Typical use case | Where the layer list is documented |
+|--------|------------------|------------------------------------|
+| **OpenMapTiles** | The most widely-adopted schema for OpenStreetMap-derived basemaps. It provides a rich set of layers (e.g., `transportation`, `water`, `landuse`, `poi`, …). | <https://openmaptiles.org/schema/> – the “Layers” page lists every source-layer name and the fields it contains. |
+| **Shortbread** | A minimal, vendor-agnostic schema designed for interoperability and easy styling. | <https://shortbread-tiles.org/> – the documentation includes a “Layer list” section that enumerates all source-layer names. |
+| **Protomaps** | The schema used by the Protomaps PMTiles basemap ecosystem; it is flat and simple (e.g., `earth`, `water`, `roads`, `places`). | <https://docs.protomaps.com/basemaps/layers> – a complete list of source-layer names and their attributes. |
+
+**Tip:** If the tile service provides a TileJSON endpoint, the `vector_layers` array inside that document is the authoritative source-layer list for that particular tileset. You can fetch it directly (e.g., `https://example.com/tiles.json`) and inspect the `source-layer` names there.",PASS,1.00,,All assertions passed,
+implicit — literal {z}/{x}/{y} template fetched directly is not a server outage,skills/maplibre-source-wiring/SKILL.md,"My vector source uses tiles: ['https://tiles.example.com/{z}/{x}/{y}.pbf']. I pasted that exact URL into my browser address bar to check it works, and got an HTTP 500 error. Does this mean the tile server is down or broken?
+","No – the 500 you see is almost certainly **not** a sign that the whole tile service is down.  
+When you paste the literal template
+
+```
+https://tiles.example.com/{z}/{x}/{y}.pbf
+```
+
+into a browser the server receives the exact string “{z}/{x}/{y}” as the tile coordinates. Most tile servers treat that as an invalid request and return a 500 (or 404) because they cannot resolve a tile for those placeholders.
+
+### How to verify the endpoint correctly
+
+1. **Replace the placeholders with real numbers** that are inside the tile set’s zoom range.  
+   Example (zoom 0, the whole world tile):
+
+   ```
+   https://tiles.example.com/0/0/0.pbf
+   ```
+
+   If the service supports zoom 0 you should get a binary PBF (often shown as “application/x-protobuf” in the network tab) and a **200** response.
+
+2. **Check a few other zoom levels** to be sure the range is covered, e.g.:
+
+   ```
+   https://tiles.example.com/5/10/12.pbf
+   https://tiles.example.com/14/8192/5461.pbf
+   ```
+
+   If those return 200 with a non-empty body, the server is healthy.
+
+### Why this matters for source wiring
+
+- **`tiles` vs `url`** – If the provider offers a TileJSON endpoint, prefer `url`. MapLibre will fetch the TileJSON, learn the correct `minzoom`/`maxzoom`, and you won’t have to guess the valid zoom range yourself.
+- **Zoom range** – When you hand-wire a `tiles` array you must also supply `minzoom` and `maxzoom`. If you omit them, MapLibre assumes `maxzoom: 22`. Requests for zoom levels that the source does not actually provide will come back empty, which can look like “nothing renders” even though the server is fine.
+- **CORS** – After you confirm the tile URL works, make sure the server sends `Access-Control-Allow-Origin` (or you’re using a same-origin host). A missing CORS header will also result in a blank map, but the network tab will still show a 200 for the tile request.
+
+### Quick checklist
+
+| Step | What to do |
+|------|------------|
+| **1. Test a real tile** | Replace `{z}/{x}/{y}` with numbers (e.g., `0/0/0.pbf`). |
+| **2. Verify status** | Expect **200** and a binary PBF payload. |
+| **3. Confirm zoom range** | Try a few zoom levels; note the highest that returns data. |
+| **4. Add metadata** | In the source definition, set `minzoom` / `maxzoom` (or use `url` to let TileJSON supply them). |
+| **5. Check CORS** | Ensure the response includes `Access-Control-Allow-Origin:*` (or your domain). |
+
+If the real-tile requests succeed and CORS is correct, the source wiring is the next place to look (e.g., matching `source-layer` names, layer order, etc.). If the real-tile requests still return 500, then the tile server itself is having an internal error and you’ll need to contact its maintainer.",PASS,1.00,,All assertions passed,
+"implicit — raster tileSize defaults to 512, classic OSM tiles are 256",skills/maplibre-source-wiring/SKILL.md,"I'm adding tile.openstreetmap.org as a raster source in MapLibre: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'] }. Is anything missing before this will render correctly?
+","You’re almost there – the OSM raster tiles will load, but a couple of source properties are required for the tiles to appear at the correct scale and to keep the style well-formed.
+
+```js
+map.addSource('osm-basemap', {
+  type: 'raster',
+  tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+  tileSize: 256,          // OSM serves 256 px tiles (MapLibre defaults to 512)
+  minzoom: 0,             // optional, but clarifies the usable zoom range
+  maxzoom: 19,            // OSM’s highest zoom level
+  attribution: '&copy; <a href=""https://www.openstreetmap.org/copyright"">OpenStreetMap</a> contributors'
+});
+```
+
+Then add a raster layer (or insert it before the first `symbol` layer if you don’t want it to cover labels):
+
+```js
+map.addLayer({
+  id: 'osm-basemap',
+  type: 'raster',
+  source: 'osm-basemap',
+  paint: {}
+}, firstSymbolLayerId);   // optional – place below labels
+```
+
+**Key points**
+
+| What you need | Why |
+|---------------|-----|
+| `tileSize: 256` | OSM tiles are 256 px; without this they’re rendered at the wrong zoom level (default is 512). |
+| `minzoom` / `maxzoom` (optional) | Gives MapLibre the correct zoom bounds; otherwise it assumes `maxzoom: 22` and may request tiles that don’t exist. |
+| `attribution` | Required by OSM’s license and shows up in the map’s attribution control. |
+| A raster **layer** that references the source (and optionally placed below the first `symbol` layer) | Sources alone don’t draw anything; a layer tells MapLibre how to render them. |
+
+CORS is already handled by the OSM tile server, so no extra configuration is needed. With those additions the OSM raster basemap will render correctly.",PASS,1.00,,All assertions passed,
+anti-pattern — a glyph URL is not a vector tile source (the .pbf collision),skills/maplibre-source-wiring/SKILL.md,"My style's glyphs property points to https://example.com/fonts/{fontstack}/{range}.pbf. Since it's already working and ends in .pbf, can I also register that same URL as a vector tile source, or do I need a separate one for tiles?
+","**Short answer:** No – the URL you use for `glyphs` can’t be registered as a vector-tile source. Glyphs and vector tiles are two completely different kinds of PBF files and they are fetched with different URL patterns.
+
+### Why the same `.pbf` doesn’t work for both
+
+| Resource | What the `.pbf` contains | URL pattern used by MapLibre |
+|----------|--------------------------|------------------------------|
+| **Glyphs** (fonts) | A *font-stack* → *range* → glyph bitmap data (one file per font-stack/range) | `https://example.com/fonts/{fontstack}/{range}.pbf` |
+| **Vector tiles** | Geographic features for a specific tile (z/x/y) | `https://example.com/tiles/{z}/{x}/{y}.pbf` (or a TileJSON `url`) |
+
+Even though both end in “`.pbf`”, the binary format is different:
+
+* **Glyph PBFs** follow the **Mapbox Glyphs** spec – they contain glyph outlines indexed by Unicode code-point ranges.
+* **Vector-tile PBFs** follow the **Mapbox Vector Tile** spec – they contain layers of feature data (geometry + properties) for a single map tile.
+
+MapLibre knows which kind it is expecting from the context:
+
+* When it sees a `glyphs` property, it builds requests like `…/fonts/Open+Sans/0-255.pbf`.
+* When it sees a source of type `""vector""` (or `""raster""`), it builds requests like `…/tiles/12/3456/7890.pbf` or reads the template from a TileJSON.
+
+If you tried to register the glyphs URL as a vector source, MapLibre would request URLs such as `…/fonts/12/3456/7890.pbf`, which the server would not understand (the server only knows about `{fontstack}` and `{range}` tokens). The request would 404 or return the wrong data, and the map would stay blank.
+
+### What you need instead
+
+1. **Keep the glyphs URL where it belongs** – in the style root:
+
+   ```json
+   {
+     ""glyphs"": ""https://example.com/fonts/{fontstack}/{range}.pbf"",
+     ...
+   }
+   ```
+
+2. **Add a separate vector-tile source** that points to the actual tile endpoint (or a TileJSON URL). Example:
+
+   ```js
+   map.addSource('my-tiles', {
+     type: 'vector',
+     url: 'https://example.com/tileset.json'   // TileJSON that contains the {z}/{x}/{y} template
+     // or, if you only have a raw template:
+     // tiles: ['https://example.com/tiles/{z}/{x}/{y}.pbf'],
+     // minzoom: 0,
+     // maxzoom: 14
+   });
+   ```
+
+   *If you have a TileJSON, use `url`; otherwise hand-wire the `tiles` array and supply `minzoom`/`maxzoom` yourself.*
+
+### Quick checklist
+
+- **Glyphs URL** → `glyphs` property only. Do **not** add it as a source.
+- **Vector-tile URL** → `type: ""vector""` source, using `{z}/{x}/{y}` tokens or a TileJSON.
+- Ensure both endpoints have proper CORS headers if they are on a different origin.
+- Verify that the vector source’s `source-layer` names match the schema (TileJSON `vector_layers` or provider docs).
+
+Once you have a proper vector source, your style layers can reference it with `source: ""my-tiles""` and the appropriate `source-layer`. The glyphs will continue to supply the fonts for any `symbol` layers.",PASS,1.00,,All assertions passed,
+implicit — a whole style document is not itself a source,skills/maplibre-source-wiring/SKILL.md,"I found a style JSON online (it has version, sources, layers, sprite, and glyphs) and I just want to reuse one of its background layers on top of my own basemap. Can I add the whole style JSON as a source in my map?
+","No. A MapLibre **style JSON** is a complete description of a map (its own sources, sprite, glyphs, and the full layer stack). It cannot be added to another map as a single source.  
+
+What you can do is **extract the pieces you need** from that style and add them to your own style:
+
+1. **Fetch the style JSON** (or copy it locally) and locate the background layer you want.  
+   ```json
+   {
+     ""id"": ""my-background"",
+     ""type"": ""raster"",          // or ""vector"", ""background"", etc.
+     ""source"": ""bg-tiles"",
+     ""source-layer"": ""land"",    // only for vector sources
+     ""paint"": { … }
+   }
+   ```
+
+2. **Copy the source definition** that the layer references.  
+   ```json
+   ""bg-tiles"": {
+     ""type"": ""raster"",
+     ""tiles"": [""https://example.com/bg/{z}/{x}/{y}.png""],
+     ""tileSize"": 256,
+     ""minzoom"": 0,
+     ""maxzoom"": 14
+   }
+   ```
+
+3. In your own map code, add that source with `map.addSource()`:
+
+   ```js
+   map.addSource('bg-tiles', {
+     type: 'raster',
+     tiles: ['https://example.com/bg/{z}/{x}/{y}.png'],
+     tileSize: 256,
+     minzoom: 0,
+     maxzoom: 14
+   });
+   ```
+
+4. Then add the layer (or just the parts you need) with `map.addLayer()`.  
+   ```js
+   map.addLayer({
+     id: 'my-background',
+     type: 'raster',
+     source: 'bg-tiles',
+     paint: { 'raster-opacity': 0.8 }
+   }, firstSymbolLayerId);   // optional: insert below labels
+   ```
+
+5. **Sprite & glyphs** – background layers that are raster or vector don’t need the original style’s sprite or glyph URLs. Only symbol layers that draw text or icons would require those assets. If you later add such layers, copy the `sprite` and `glyphs` URLs from the original style into your own style’s root.
+
+### Why you can’t add the whole style as a source
+
+* `map.addSource()` expects a **source definition** (TileJSON, raster URL template, GeoJSON, etc.), not a full style object.  
+* A style may contain many sources, each with its own zoom ranges, CORS requirements, and `promoteId` settings. Adding it wholesale would create name collisions and duplicate sprite/glyph definitions.  
+* The only way to use an entire external style is to **replace** your map’s style with `map.setStyle('https://example.com/style.json')`. That discards your existing basemap unless you merge the two styles manually.
+
+### Quick checklist when re-using a layer
+
+| What you need | Where to get it from the external style |
+|---------------|------------------------------------------|
+| Source definition (`type`, `tiles`/`url`, `minzoom`/`maxzoom`, `tileSize`, etc.) | `style.sources[<sourceId>]` |
+| `source-layer` name (for vector sources) | `layer[""source-layer""]` |
+| Paint / layout properties you want to keep | `layer.paint`, `layer.layout` |
+| Optional: sprite / glyph URLs (only if you also copy symbol layers) | `style.sprite`, `style.glyphs` |
+
+By copying just the source and the single layer you want, you can stack that background on top of (or beneath) your own basemap without trying to treat the whole style JSON as a source.",PASS,1.00,,All assertions passed,
+implicit — a mapbox:// URL is not directly usable in MapLibre,skills/maplibre-source-wiring/SKILL.md,"A colleague sent me mapbox://styles/mapbox/streets-v11 for us to use as a vector source in our MapLibre map. Can we just drop that URL into a vector source's `url` field?
+","No. The `mapbox://styles/mapbox/streets-v11` URL is a **style URL**, not a TileJSON endpoint that a vector source can consume.
+
+A MapLibre vector source expects either:
+
+* `url` → a TileJSON document that describes the tileset (e.g., `https://api.mapbox.com/styles/v1/mapbox/streets-v11?access_token=…`), **or**
+* `tiles` → an array of tile-template URLs (`{z}/{x}/{y}.pbf`, `{z}/{x}/{y}.png`, etc.) together with any needed metadata (`minzoom`, `maxzoom`, `tileSize`, …).
+
+The `mapbox://styles/...` shortcut is understood only by Mapbox GL JS (and only when you also supply a valid Mapbox access token). MapLibre does not resolve that scheme, nor does it know how to fetch the underlying vector tiles from it.
+
+If you want to use the Mapbox Streets tiles in MapLibre you have two practical options:
+
+1. **Use the TileJSON endpoint** that the style URL points to, adding your access token manually:
+
+   ```js
+   map.addSource('streets', {
+     type: 'vector',
+     url: 'https://api.mapbox.com/styles/v1/mapbox/streets-v11?access_token=YOUR_TOKEN'
+   });
+   ```
+
+   (Make sure the server sends the proper CORS headers.)
+
+2. **Extract the vector-tile source definitions** from the style JSON and add them yourself, or host a copy of the style JSON and load it with `map.setStyle(...)`. In that case you still need to provide the actual tile URLs (e.g., `mapbox://tiles/...`) and a token.
+
+So you cannot just drop `mapbox://styles/mapbox/streets-v11` into a source’s `url` field; you need a TileJSON URL (or a hand-written `tiles` array) that points to the vector tiles themselves.",PASS,1.00,,All assertions passed,
+"implicit — GeoParquet has no native MapLibre source, needs conversion",skills/maplibre-source-wiring/SKILL.md,"I have my dataset as GeoParquet (a .parquet file). Can I point a MapLibre GeoJSON source's `data` field directly at it, or reference it as a vector tile source?
+","**Short answer:** No. MapLibre’s `geojson` source can only consume raw GeoJSON (or a URL that returns GeoJSON). It does not understand the Parquet file format, and it cannot treat a Parquet file as a vector-tile source either.
+
+**What you can do instead**
+
+| Goal | How to make it work with MapLibre |
+|------|-----------------------------------|
+| **Use the data directly in the browser** | Convert the Parquet file to GeoJSON (e.g., with `parquet-tools`, `pandas`, `geopandas`, or the `pyarrow`-`geopandas` pipeline) and then either:<br>• Inline the GeoJSON in the `data` property, or<br>• Host the resulting `.geojson` file on a server and point `data: ""https://example.com/mydata.geojson""` at it. |
+| **Serve the data as vector tiles** | Turn the Parquet into a tiled vector-tile set (MBTiles, PMTiles, or a live tile server). Typical steps:<br>1. **Export to GeoJSON/FlatGeobuf** (or read directly with `ogr2ogr`).<br>2. **Generate vector tiles** with a tool such as **Tippecanoe**, **t-rex**, **tilemaker**, or **Martin**. The output will be a TileJSON endpoint (or a static tile archive).<br>3. Add it to the map as a `vector` source, e.g.:<br>```json\n{\n  \""type\"": \""vector\"",\n  \""url\"": \""https://mytileserver.com/tiles.json\""\n}\n```<br>or, for a static archive, use the PMTiles pattern (`tiles: [""pmtiles://mytiles.pmtiles""]`). |
+| **Serve on-the-fly from a database** | Load the Parquet into a spatial database (PostGIS, DuckDB with spatial extensions, etc.) and expose it via a vector-tile server such as **pg_tileserv**, **t-rex**, or **TileServer-GL**. Those services publish a TileJSON URL that MapLibre can consume. |
+
+### Why it doesn’t work directly
+
+* **`geojson` source expectations** – The `data` field must be either a JavaScript object that follows the GeoJSON spec or a URL that returns a JSON payload with that same structure. Parquet is a column-oriented binary format; the browser cannot parse it without a custom loader, which MapLibre does not provide.
+* **Vector-tile source expectations** – A `vector` source expects either a TileJSON document (`url`) or an explicit `tiles` URL template that returns Mapbox-compatible vector tiles (`.pbf`). Parquet tiles are not in that format, so MapLibre will treat the request as a failed tile fetch and silently draw nothing.
+
+### Quick conversion example (Node / Python)
+
+**Node (using `parquetjs` + `geojson`):**
+```js
+const parquet = require('parquetjs');
+const fs = require('fs');
+
+async function parquetToGeoJSON(parquetPath, geojsonPath) {
+  const reader = await parquet.ParquetReader.openFile(parquetPath);
+  const cursor = reader.getCursor();
+  const features = [];
+
+  let record = null;
+  while (record = await cursor.next()) {
+    // assume the geometry column is named ""geom"" and is GeoJSON already
+    features.push({
+      type: ""Feature"",
+      geometry: record.geom,
+      properties: {...record, geom: undefined}
+    });
+  }
+
+  const geojson = {type: ""FeatureCollection"", features};
+  fs.writeFileSync(geojsonPath, JSON.stringify(geojson));
+  await reader.close();
+}
+```
+
+**Python (using `geopandas`):**
+```python
+import geopandas as gpd
+gdf = gpd.read_parquet(""mydata.parquet"")
+gdf.to_file(""mydata.geojson"", driver=""GeoJSON"")
+```
+
+After you have `mydata.geojson`, you can add it:
+
+```js
+map.addSource('my-data', {
+  type: 'geojson',
+  data: 'https://example.com/mydata.geojson'   // or the in-memory object
+});
+```
+
+### Bottom line
+
+* **Directly pointing a `geojson` source at a `.parquet` file → not possible.**
+* **Referencing it as a vector-tile source → also not possible unless you first convert the Parquet data into a proper vector-tile set (or serve it through a tile server that emits TileJSON).**
+
+Pick the conversion path that best fits your workflow (one-off static GeoJSON, on-the-fly vector tiles, or a live tile server) and then wire the resulting source into MapLibre as described in the *MapLibre Source Wiring* skill.",PASS,1.00,,All assertions passed,
+implicit — setFeatureState silently does nothing without a feature id,skills/maplibre-source-wiring/SKILL.md,"I have a GeoJSON source of parcel polygons and I want to highlight one on hover using map.setFeatureState(). Each feature has a `parcel_id` in its properties. I call setFeatureState with that value and nothing happens — no error in the console, the paint expression never picks it up, and reading the state back comes up empty. What am I missing?
+","`setFeatureState` works only on features that have an **id** that MapLibre can see.  
+Your parcels are coming from a **GeoJSON** source, and the id lives inside the
+`properties` object (`parcel_id`).  Because the source does not know that this
+property should be used as the feature id, the call
+
+```js
+map.setFeatureState({ source: 'parcels', id: '12345' }, { hover: true })
+```
+
+does nothing – the source has no feature with that id, so the state is never
+attached and `getFeatureState` returns `{}`.
+
+### Fix – promote the property to the feature id
+
+Add `promoteId` when you create the source (or when you later call
+`setData`).  `promoteId` tells MapLibre to copy the value of the given property
+into the feature’s top-level `id` field, making it usable for feature-state.
+
+```js
+map.addSource('parcels', {
+  type: 'geojson',
+  data: parcelsGeojson,          // your FeatureCollection
+  promoteId: 'parcel_id'        // <-- the property that uniquely identifies a parcel
+});
+```
+
+If you have multiple source-layers (e.g., you split the GeoJSON into separate
+layers), you can also pass an object:
+
+```js
+promoteId: { parcels: 'parcel_id' }   // when the source has named layers
+```
+
+### Then the hover logic works
+
+```js
+let hoveredId = null;
+
+map.on('mousemove', 'parcel-fill', (e) => {
+  if (e.features.length === 0) return;
+
+  const id = e.features[0].id;   // now comes from parcel_id
+  if (hoveredId !== null && hoveredId !== id) {
+    map.setFeatureState({ source: 'parcels', id: hoveredId }, { hover: false });
+  }
+  hoveredId = id;
+  map.setFeatureState({ source: 'parcels', id }, { hover: true });
+});
+
+map.on('mouseleave', 'parcel-fill', () => {
+  if (hoveredId !== null) {
+    map.setFeatureState({ source: 'parcels', id: hoveredId }, { hover: false });
+    hoveredId = null;
+  }
+});
+```
+
+### Paint expression
+
+Your layer’s paint can now read the state:
+
+```json
+{
+  ""id"": ""parcel-fill"",
+  ""type"": ""fill"",
+  ""source"": ""parcels"",
+  ""paint"": {
+    ""fill-color"": [
+      ""case"",
+      [""boolean"", [""feature-state"", ""hover""], false],
+      ""#ffcc00"",          // highlighted colour
+      ""#888888""           // default colour
+    ],
+    ""fill-opacity"": 0.6
+  }
+}
+```
+
+### Summary checklist
+
+| What to do | Why |
+|------------|-----|
+| Add `promoteId: 'parcel_id'` to the GeoJSON source definition | Makes `parcel_id` the feature’s `id` so `setFeatureState` can target it |
+| Use the feature’s `id` (not the property) when calling `setFeatureState`/`getFeatureState` | The API expects the top-level id |
+| Ensure the source is added **before** you call `setFeatureState` (e.g., after `map.on('load')`) | Otherwise the source doesn’t exist yet |
+| Keep the id stable (don’t regenerate the GeoJSON without the same `parcel_id`s) | Feature-state is tied to the id, not the geometry |
+
+With `promoteId` in place, `setFeatureState` will attach the hover state,
+the paint expression will react, and `getFeatureState` will return the stored
+value. No further CORS, glyph, or layer-order changes are needed for this
+specific issue.",PASS,1.00,,All assertions passed,
