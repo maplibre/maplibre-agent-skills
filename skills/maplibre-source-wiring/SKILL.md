@@ -35,7 +35,7 @@ all — [maplibre-tile-sources](../maplibre-tile-sources/SKILL.md).
 
 Tiles are addressed by zoom (Z), column (X), and row (Y) — a universal scheme across raster and vector tile sources (see [the OpenStreetMap wiki](https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames) for more information). In a MapLibre source, you reference tiles either directly via a `tiles` URL template or via a `url` pointing to a TileJSON endpoint.
 
-**When a TileJSON endpoint is available, prefer `url`.** MapLibre fetches the document and reads the tile URL template, zoom range, bounds, attribution, and (for vector tiles) the available source-layers automatically. Tile servers like Martin and tileserver-gl generate TileJSON endpoints for every tileset they serve, as do many hosted providers.
+**When a TileJSON endpoint is available, prefer `url`.** MapLibre fetches the document and reads the tile URL template, zoom range (`minzoom`/`maxzoom`), bounds, attribution, and (for vector tiles) the available source-layers automatically. A hand-wired `tiles` array gets none of that: MapLibre has no zoom range unless you supply one, assumes `maxzoom: 22`, and requests zoom levels the tileset doesn't contain, which come back empty — tiles that show and then vanish as you zoom in. Tile servers like Martin and tileserver-gl generate TileJSON endpoints for every tileset they serve, as do many hosted providers.
 
 When no TileJSON endpoint exists — for example, a raw raster tile service that gives you a URL template directly — use the `tiles` array and specify any metadata (minzoom, maxzoom, attribution) in the source definition yourself.
 
@@ -61,7 +61,7 @@ When no TileJSON endpoint exists — for example, a raw raster tile service that
 
 `{z}`, `{x}` and `{y}` are tokens MapLibre replaces with each tile's zoom, column and row before it makes a request. A template pasted into a browser with the braces still in it asks for no real tile, so its status code says nothing about the server. To check the server by hand, request a real tile inside the source's zoom range, such as `/0/0/0.pbf`.
 
-The cost of hand-wiring `tiles` is that MapLibre has no zoom range unless you supply one, and will assume `maxzoom: 22` — requesting zoom levels the tileset doesn't contain, which come back empty. This is why `url` is the default advice wherever a TileJSON endpoint exists. (For PMTiles specifically the same rule applies and the consequence is sharper — see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md).)
+Hand-wiring `tiles` for a PMTiles archive has the same cost, and a sharper one — see [maplibre-pmtiles-patterns](../maplibre-pmtiles-patterns/SKILL.md).
 
 ## Nothing renders: `source-layer` and the tile schema
 
