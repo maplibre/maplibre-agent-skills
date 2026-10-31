@@ -1,0 +1,473 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — interpolate-hcl drops the layer on Native before android-v13.7.1,skills/maplibre-native-gl-js-parity/SKILL.md,false,"One style JSON, shared between our web app (MapLibre GL JS) and our Android app (MapLibre Native, org.maplibre.gl:android-sdk 13.6.1). On Android this layer never draws, while every other layer in the style is fine and there is no crash: `{""id"": ""density"", ""type"": ""fill"", ""source"": ""tracts"", ""source-layer"": ""tracts"", ""paint"": {""fill-color"": [""interpolate-hcl"", [""linear""], [""get"", ""density""], 0, ""#f7fbff"", 5000, ""#08306b""]}}`. The same style is correct in the browser. Where do I look?
+","## TL;DR  
+The layer is being dropped because **`interpolate-hcl` is not implemented in the Android SDK (MapLibre Native 13.6.1)**. The native renderer silently discards the layer and prints a warning to Logcat, so the map looks fine in the browser (where the expression is supported) but the fill never appears on Android.
+
+Below is a step-by-step checklist that shows where to look, why the expression is the culprit, and how to fix or work-around the problem.
+
+---
+
+## 1. Verify that the layer is actually being parsed on Android  
+
+1. **Enable verbose logging** in your Android app (usually done in `Application.onCreate()`):
+
+   ```kotlin
+   // Turn on MapLibre internal logging
+   MapLibre.getInstance(this).setLogLevel(MapLibre.LOG_LEVEL_DEBUG)
+   ```
+
+2. **Run the app and open Logcat** (filter on `MapLibre` or your app’s tag).  
+   When the style is loaded you should see something like:
+
+   ```
+   D/MapLibre: Style loaded, 12 layers, 3 sources
+   W/MapLibre: Expression evaluation error: unknown function: interpolate-hcl
+   ```
+
+   If you see a warning about an *unknown function* or *unsupported expression*, that is the exact reason the layer is omitted.
+
+3. **If you don’t see any warning**, double-check that the style URL you are loading is the same one you test in the browser (no caching, no “style.json?cacheBust=…”) and that the source `tracts` is actually present and loaded (`source.isLoaded()`).
+
+---
+
+## 2. Why `interpolate-hcl` works in the browser but not on Android  
+
+| Platform | Supported colour-interpolation functions |
+|----------|-------------------------------------------|
+| **MapLibre GL JS** (v2.x) | `interpolate`, `interpolate-hcl`, `interpolate-lab`, `interpolate-rgb` |
+| **MapLibre Native (Android SDK 13.6.1)** | `interpolate`, `interpolate-rgb` (only) |
+| **MapLibre Native (iOS, Qt, etc.)** | Same as Android – HCL/LAB not yet ported |
+
+The native code base only implements the “classic” `interpolate` expression that works in RGB space. The HCL variant was added to the JS library because it gives perceptually-smooth colour ramps, but it has not been back-ported to the native SDKs (as of 13.6.1). When the style parser encounters an unknown function it **fails the whole layer**, not the whole style, and the map continues rendering the other layers.
+
+---
+
+## 3. Quick fixes you can apply today  
+
+### 3.1 Replace `interpolate-hcl` with a plain `interpolate` (RGB)
+
+```json
+{
+  ""id"": ""density"",
+  ""type"": ""fill"",
+  ""source"": ""tracts"",
+  ""source-layer"": ""tracts"",
+  ""paint"": {
+    ""fill-color"": [
+      ""interpolate"",
+      [""linear""],
+      [""get"", ""density""],
+      0,   ""#f7fbff"",
+      5000, ""#08306b""
+    ]
+  }
+}
+```
+
+*Pros*: Works everywhere (JS, Android, iOS).  
+*Cons*: Colour ramp is in RGB space, which can look a little “banded” compared with HCL.
+
+### 3.2 Pre-compute a colour property in the source data  
+
+If you need the perceptual smoothness of HCL, compute a new property (e.g. `density_color`) on the server or in a preprocessing step:
+
+```json
+{
+  ""id"": ""density"",
+  ""type"": ""fill"",
+  ""source"": ""tracts"",
+  ""source-layer"": ""tracts"",
+  ""paint"": {
+    ""fill-color"": [""get"", ""density_color""]
+  }
+}
+```
+
+You can generate the hex values with any colour-library that supports HCL (e.g. d3-scale-chromatic, Python `colorspacious`, etc.) and store them as a string attribute.
+
+### 3.3 Upgrade to a newer SDK (when available)
+
+The MapLibre Native team is actively working on adding HCL/LAB support. Keep an eye on the **release notes** of the Android SDK:
+
+- **v14.x** (expected Q4 2026) – adds `interpolate-hcl` and `interpolate-lab`.
+- **v15.x** – full expression parity with the JS library.
+
+If you can afford a beta version, you can try the **`maplibre-native-android`** artifact from the `maplibre-gl-native` GitHub CI builds. Those builds already contain the HCL implementation, but they are not yet officially released.
+
+---
+
+## 4. If you still don’t see the layer after fixing the expression  
+
+| Possible cause | How to check | Fix |
+|----------------|--------------|-----|
+| **Source not loaded** | `map.getStyle().getSource(""tracts"")?.isLoaded()` → `false` | Verify the vector source URL, network connectivity, and that the source-layer name (`tracts`) matches the layer name in the vector tiles. |
+| **Zoom range** | Check `minzoom`/`maxzoom` on the layer (default 0-22). | Adjust or remove the properties. |
+| **Feature filter excludes everything** | Look for a `""filter""` property that might be too restrictive. | Remove or correct the filter. |
+| **Style version mismatch** | The style JSON should be `""version"": 8`. | Update the style to v8 if it’s older. |
+| **Collision with another fill layer** | Layers are rendered in order; a later fill with `fill-opacity: 0` could hide yours. | Re-order layers or set `fill-opacity` explicitly (`1`). |
+| **Android hardware acceleration / GPU driver bug** | Rare, but can happen on very old devices. | Test on a different device or emulator; enable `mapView.setRenderMode(MapView.RenderMode.SOFTWARE)`. |
+
+---
+
+## 5. Example of a minimal “debug” style that works on Android  
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""tracts"": {
+      ""type"": ""vector"",
+      ""url"": ""mapbox://examples.8fgz4egr""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""density"",
+      ""type"": ""fill"",
+      ""source"": ""tracts"",
+      ""source-layer"": ""tracts"",
+      ""paint"": {
+        ""fill-color"": [
+          ""interpolate"",
+          [""linear""],
+          [""get"", ""density""],
+          0,   ""#f7fbff"",
+          5000, ""#08306b""
+        ],
+        ""fill-opacity"": 0.8
+      }
+    }
+  ]
+}
+```
+
+Load this style in the Android app and you should see the polygons coloured correctly. If you replace the `""interpolate""` with `""interpolate-hcl""` you will get the warning again and the layer disappears.
+
+---
+
+## 6. Where to look next (log locations, docs, source)
+
+| Resource | What you’ll find |
+|----------|------------------|
+| **Logcat** (`adb logcat | grep MapLibre`) | Runtime parsing errors, missing functions, source-load failures. |
+| **MapLibre Android SDK source** (`android-sdk/src/main/java/org/maplibre/gl/style/expressions/ExpressionParser.java`) | List of supported expression names. |
+| **MapLibre Native issue tracker** – search for *interpolate-hcl* | Open/closed tickets about HCL support and planned release versions. |
+| **MapLibre GL JS docs** – “Expression reference” | Full list of functions; useful to spot which ones are *JS-only*. |
+| **MapLibre Native release notes** (`CHANGELOG.md`) | When new expression types are added. |
+
+---
+
+## 7. TL;DR checklist for you
+
+1. **Open Logcat** → look for a warning about `interpolate-hcl`.  
+2. **Replace `interpolate-hcl` with `interpolate`** (RGB) or pre-compute colours.  
+3. **Re-load the style** → the fill layer should appear.  
+4. If you need HCL, **wait for SDK ≥ 14** or use a nightly build.  
+
+That’s it – the missing layer is not a bug in your vector tiles, it’s simply a feature that the Android native SDK hasn’t caught up with yet. Once you swap the expression (or upgrade the SDK) the layer will render exactly as it does in the browser. Happy mapping!",FAIL,0.50,,"The output incorrectly claims that the MapLibre Android SDK 13.6.1 'silently discards the layer' with an 'unknown function' Logcat warning. According to the rubric, it should note that 13.6.1 logs a vague '[ParseStyle]: value must be a string' message, which does not identify the specific expression or layer. Additionally, the output inaccurately states that the feature is coming in 'v14.x (expected Q4 2026)', whereas the rubric points out it is already supported in versions 13.7.1 and later.",
+implicit — interpolate-hcl drops the layer on Native before android-v13.7.1,skills/maplibre-native-gl-js-parity/SKILL.md,false,"One style JSON, shared between our web app (MapLibre GL JS) and our Android app (MapLibre Native, org.maplibre.gl:android-sdk 13.6.1). On Android this layer never draws, while every other layer in the style is fine and there is no crash: `{""id"": ""density"", ""type"": ""fill"", ""source"": ""tracts"", ""source-layer"": ""tracts"", ""paint"": {""fill-color"": [""interpolate-hcl"", [""linear""], [""get"", ""density""], 0, ""#f7fbff"", 5000, ""#08306b""]}}`. The same style is correct in the browser. Where do I look?
+","## TL;DR  
+The layer is being dropped because **`interpolate-hcl` is not implemented in the Android SDK (MapLibre Native 13.6.1)**. The native renderer silently discards the layer and prints a warning to Logcat, so the map looks fine in the browser (where the expression is supported) but the fill never appears on Android.
+
+Below is a step-by-step checklist that shows where to look, why the expression is the culprit, and how to fix or work-around the problem.
+
+---
+
+## 1. Verify that the layer is actually being parsed on Android  
+
+1. **Enable verbose logging** in your Android app (usually done in `Application.onCreate()`):
+
+   ```kotlin
+   // Turn on MapLibre internal logging
+   MapLibre.getInstance(this).setLogLevel(MapLibre.LOG_LEVEL_DEBUG)
+   ```
+
+2. **Run the app and open Logcat** (filter on `MapLibre` or your app’s tag).  
+   When the style is loaded you should see something like:
+
+   ```
+   D/MapLibre: Style loaded, 12 layers, 3 sources
+   W/MapLibre: Expression evaluation error: unknown function: interpolate-hcl
+   ```
+
+   If you see a warning about an *unknown function* or *unsupported expression*, that is the exact reason the layer is omitted.
+
+3. **If you don’t see any warning**, double-check that the style URL you are loading is the same one you test in the browser.  
+   (Sometimes a cached style or a different version is being used on the device.)
+
+---
+
+## 2. Why `interpolate-hcl` fails on Android  
+
+| Platform | Supported interpolation functions (as of SDK 13.6.1) |
+|----------|---------------------------------------------------|
+| **MapLibre GL JS** (browser) | `interpolate`, `interpolate-hcl`, `interpolate-lab` |
+| **MapLibre Native (Android / iOS)** | `interpolate` only (linear, exponential, cubic-bezier) – **no HCL/LAB variants** |
+
+The native code base only implements the generic `interpolate` expression. The HCL-specific variant was added to the JS library because it can be evaluated in JavaScript, but the C++ core that the Android SDK wraps does not have a colour-space conversion routine for HCL yet. Consequently the style parser treats the expression as *unknown* and discards the whole layer.
+
+The behaviour is intentional: the native SDK prefers to **fail silently** (the layer is dropped) rather than crash the whole map. That is why you see no crash, just a missing fill.
+
+---
+
+## 3. Quick ways to get the layer working again  
+
+### 3.1 Replace `interpolate-hcl` with a plain `interpolate` (RGB)
+
+```json
+{
+  ""id"": ""density"",
+  ""type"": ""fill"",
+  ""source"": ""tracts"",
+  ""source-layer"": ""tracts"",
+  ""paint"": {
+    ""fill-color"": [
+      ""interpolate"",
+      [""linear""],
+      [""get"", ""density""],
+      0,   ""#f7fbff"",
+      5000, ""#08306b""
+    ]
+  }
+}
+```
+
+*Pros*: Works everywhere (JS, Android, iOS).  
+*Cons*: Colour transition is in RGB space, which can look a bit harsher than HCL but is usually acceptable for a simple choropleth.
+
+### 3.2 Pre-compute a colour ramp in the data source  
+
+If you need the smoother perceptual transition that HCL provides, you can:
+
+1. **Add a new property** (e.g., `density_color`) to each feature in your vector tiles, containing the exact hex colour you want.
+2. Use a simple constant colour expression:
+
+   ```json
+   ""fill-color"": [""get"", ""density_color""]
+   ```
+
+   This moves the colour calculation to the tile-generation step (e.g., Tippecanoe, TileServer, or a custom pipeline) and avoids any runtime expression.
+
+### 3.3 Upgrade to a newer SDK (when available)
+
+The MapLibre Native team is actively working on HCL/LAB support. Keep an eye on the **release notes** for versions **≥ 14.0** (or the next minor release after 13.6.1). When the feature lands you can simply switch back to `interpolate-hcl` without any code changes.
+
+*Tip*: The Android SDK is a thin wrapper around the C++ core. If you are comfortable building the native library yourself, you can pull the latest `maplibre-native` source, enable the `HCL_COLOR_SPACE` compile flag, and rebuild the SDK. That is a more advanced path, but it is possible.
+
+---
+
+## 4. Other things to double-check (just in case)
+
+Even after fixing the expression, the layer could still be invisible for unrelated reasons. Verify each of the following:
+
+| Check | How to verify |
+|-------|---------------|
+| **Source & source-layer names** | In Logcat you’ll see `source ""tracts"" not found` or `source-layer ""tracts"" not found` if they are miss-spelled. |
+| **Zoom range** | If the layer has `minzoom`/`maxzoom` that don’t intersect the current view, it won’t draw. |
+| **Opacity / filter** | `fill-opacity` set to `0` or a filter that evaluates to `false` will hide the layer. |
+| **Tile loading** | Confirm the vector tiles are actually arriving (`Tile load` messages). |
+| **Style version** | The style must be `v8` (or later) – older versions are not fully supported by the native SDK. |
+| **Device GPU limits** | Very large polygons can be culled on low-end devices; try zooming in to a small area. |
+
+If none of the above produce warnings, the missing layer is almost certainly the unsupported expression.
+
+---
+
+## 5. Example of a minimal reproducible style that works on Android
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""tracts"": {
+      ""type"": ""vector"",
+      ""url"": ""mapbox://examples.8fgz4egr""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""density"",
+      ""type"": ""fill"",
+      ""source"": ""tracts"",
+      ""source-layer"": ""tracts"",
+      ""paint"": {
+        ""fill-color"": [
+          ""interpolate"",
+          [""linear""],
+          [""get"", ""density""],
+          0,   ""#f7fbff"",
+          5000, ""#08306b""
+        ],
+        ""fill-opacity"": 0.8
+      }
+    }
+  ]
+}
+```
+
+Load this style on Android and you should see the choropleth fill immediately. Replace the `interpolate` array with `interpolate-hcl` only after the native SDK adds support.
+
+---
+
+## 6. TL;DR Checklist for you
+
+1. **Open Logcat → look for “unknown function: interpolate-hcl”.**  
+2. **Replace `interpolate-hcl` with plain `interpolate`** (or pre-compute colours).  
+3. **Re-run the app** – the fill should appear.  
+4. **If you still don’t see it**, verify source names, zoom range, opacity, and tile loading.  
+5. **Watch for a future SDK release** that adds HCL support, or rebuild the native library yourself.
+
+That’s all there is to it—once the unsupported expression is removed, the layer will render exactly as it does in the browser. Happy mapping!",FAIL,0.50,,"The output incorrectly claims that the MapLibre Native SDK does not support 'interpolate-hcl' at all (suggesting it might be added in v14), whereas it was actually introduced in v13.7.1. It also incorrectly quotes a specific log message about 'unknown function: interpolate-hcl', which the rubric correctly points out is not what the SDK emits (it emits 'value must be a string' instead).",
+implicit — interpolate-hcl drops the layer on Native before android-v13.7.1,skills/maplibre-native-gl-js-parity/SKILL.md,false,"One style JSON, shared between our web app (MapLibre GL JS) and our Android app (MapLibre Native, org.maplibre.gl:android-sdk 13.6.1). On Android this layer never draws, while every other layer in the style is fine and there is no crash: `{""id"": ""density"", ""type"": ""fill"", ""source"": ""tracts"", ""source-layer"": ""tracts"", ""paint"": {""fill-color"": [""interpolate-hcl"", [""linear""], [""get"", ""density""], 0, ""#f7fbff"", 5000, ""#08306b""]}}`. The same style is correct in the browser. Where do I look?
+","## TL;DR  
+The layer is being dropped because **`interpolate-hcl` is not implemented in the Android SDK (MapLibre Native 13.6.1)**. The native renderer silently discards the layer and prints a warning to Logcat, so the map looks fine in the browser (where the expression is supported) but the fill never appears on Android.
+
+Below is a step-by-step checklist that shows where to look, why the expression is the culprit, and how to fix or work-around the problem.
+
+---
+
+## 1. Verify that the layer is actually being parsed on Android  
+
+1. **Enable verbose logging** in your Android app (usually done in `Application.onCreate()`):
+
+   ```kotlin
+   // Turn on MapLibre internal logging
+   MapLibre.getInstance(this).setLogLevel(MapLibre.LOG_LEVEL_DEBUG)
+   ```
+
+2. **Run the app and open Logcat** (filter on `MapLibre` or your app’s tag).  
+   When the style is loaded you should see something like:
+
+   ```
+   D/MapLibre: Style loaded, 12 layers, 3 sources
+   W/MapLibre: Expression evaluation error: unknown function: interpolate-hcl
+   ```
+
+   If you see a warning about an *unknown function* or *unsupported expression*, that is the exact reason the layer is omitted.
+
+3. **If you don’t see any warning**, double-check that the style URL you are loading is the same one you test in the browser.  
+   (Sometimes a cached style or a different version is being used on the device.)
+
+---
+
+## 2. Why `interpolate-hcl` fails on Android  
+
+| Platform | Supported interpolation functions (as of SDK 13.6.1) |
+|----------|---------------------------------------------------|
+| **MapLibre GL JS** (browser) | `interpolate`, `interpolate-hcl`, `interpolate-lab` |
+| **MapLibre Native (Android / iOS)** | `interpolate` only (linear, exponential, cubic-bezier) – **no HCL/LAB variants** |
+
+The native code base only implements the generic `interpolate` expression. The HCL-specific variant was added to the JS library because it can be evaluated in JavaScript, but the C++ core that the Android SDK wraps does not have a colour-space conversion routine for HCL yet. Consequently the style parser treats the expression as *unknown* and discards the whole layer.
+
+The behaviour is intentional: the native SDK prefers to **fail silently** (the layer is dropped) rather than crash the whole map. That is why you see no crash, just a missing fill.
+
+---
+
+## 3. Quick ways to get the layer working again  
+
+### 3.1 Replace `interpolate-hcl` with a plain `interpolate` (RGB)
+
+```json
+{
+  ""id"": ""density"",
+  ""type"": ""fill"",
+  ""source"": ""tracts"",
+  ""source-layer"": ""tracts"",
+  ""paint"": {
+    ""fill-color"": [
+      ""interpolate"",
+      [""linear""],
+      [""get"", ""density""],
+      0,   ""#f7fbff"",
+      5000, ""#08306b""
+    ]
+  }
+}
+```
+
+*Pros*: Works everywhere (JS, Android, iOS).  
+*Cons*: Colour transition is in RGB space, which can look a bit harsher than HCL but is usually acceptable for a simple choropleth.
+
+### 3.2 Pre-compute a colour ramp in the data source  
+
+If you need the smoother perceptual transition that HCL provides, you can:
+
+1. **Add a new property** (e.g., `density_color`) to each feature in your vector tiles, containing the exact hex colour you want.
+2. Use a simple constant colour expression:
+
+   ```json
+   ""fill-color"": [""get"", ""density_color""]
+   ```
+
+   This moves the colour calculation to the tile-generation step (e.g., Tippecanoe, TileServer, or a custom pipeline) and avoids any runtime expression.
+
+### 3.3 Upgrade to a newer SDK (when available)
+
+The MapLibre Native team is actively working on HCL/LAB support. Keep an eye on the **release notes** for versions **≥ 14.0** (or the next minor release after 13.6.1). When the feature lands you can simply switch back to `interpolate-hcl` without any code changes.
+
+*Tip*: The Android SDK is a thin wrapper around the C++ core. If you are comfortable building the native library yourself, you can pull the latest `maplibre-native` source, enable the `HCL_COLOR_SPACE` compile flag, and rebuild the SDK. That is a more advanced path, but it is possible.
+
+---
+
+## 4. Other things to double-check (just in case)
+
+Even after fixing the expression, the layer could still be invisible for unrelated reasons. Verify each of the following:
+
+| Check | How to verify |
+|-------|---------------|
+| **Source & source-layer names** | In Logcat you’ll see `source ""tracts"" not found` or `source-layer ""tracts"" not found` if they are miss-spelled. |
+| **Zoom range** | If the layer has `minzoom`/`maxzoom` that don’t intersect the current view, it won’t draw. |
+| **Opacity / filter** | `fill-opacity` set to `0` or a filter that evaluates to `false` will hide the layer. |
+| **Tile loading** | Confirm the vector tiles are actually arriving (`Tile load` messages). |
+| **Style version** | The style must be `v8` (or later) – older versions are not fully supported by the native SDK. |
+| **Device GPU limits** | Very large polygons can be culled on low-end devices; try zooming in to a small area. |
+
+If none of the above produce warnings, the missing layer is almost certainly the unsupported expression.
+
+---
+
+## 5. Example of a minimal reproducible style that works on Android
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""tracts"": {
+      ""type"": ""vector"",
+      ""url"": ""mapbox://examples.8fgz4egr""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""density"",
+      ""type"": ""fill"",
+      ""source"": ""tracts"",
+      ""source-layer"": ""tracts"",
+      ""paint"": {
+        ""fill-color"": [
+          ""interpolate"",
+          [""linear""],
+          [""get"", ""density""],
+          0,   ""#f7fbff"",
+          5000, ""#08306b""
+        ],
+        ""fill-opacity"": 0.8
+      }
+    }
+  ]
+}
+```
+
+Load this style on Android and you should see the choropleth fill immediately. Replace the `interpolate` array with `interpolate-hcl` only after the native SDK adds support.
+
+---
+
+## 6. TL;DR Checklist for you
+
+1. **Open Logcat → look for “unknown function: interpolate-hcl”.**  
+2. **Replace `interpolate-hcl` with plain `interpolate`** (or pre-compute colours).  
+3. **Re-run the app** – the fill should appear.  
+4. **If you still don’t see it**, verify source names, zoom range, opacity, and tile loading.  
+5. **Watch for a future SDK release** that adds HCL support, or rebuild the native library yourself.
+
+That’s all there is to it—once the unsupported expression is removed, the layer will render exactly as it does in the browser. Happy mapping!",FAIL,0.50,,"The output incorrectly claims that the MapLibre Native logs will say 'Expression evaluation error: unknown function: interpolate-hcl'. As per the rubric, the actual log message is 'value must be a string'. Additionally, the output suggests the SDK version requirement for HCL/LAB support is '14.0' rather than the correct '13.7.1'.",

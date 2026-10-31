@@ -1,0 +1,445 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+explicit — pmtiles:// is a built-in MapLibre Native scheme,skills/maplibre-native-gl-js-parity/SKILL.md,"iOS, Swift, MapLibre Native. Our basemap is one 3 GB `.pmtiles` archive on Cloudflare R2. On the web we register the PMTiles protocol with the `pmtiles` npm package and point the source at `pmtiles://https://...`. What is the iOS equivalent — do I need to stand up a tile server, convert the archive to MBTiles, or write a custom source?
+","**Short answer:**  
+You don’t need a tile server, you don’t have to convert the archive to MBTiles, and you don’t have to write a custom source.  
+MapLibre Native for iOS has built-in support for the `pmtiles://` scheme (since **iOS v6.10.0**). Just point a normal `MLNVectorTileSource` (or `MLNRasterTileSource` if the archive contains raster tiles) at the URL that includes the `pmtiles://` prefix.
+
+Below is a complete, copy-and-paste-ready Swift example that works on iOS 13+ (the minimum version supported by the current MapLibre iOS SDK). It also shows the iOS 17-specific pitfall and how to avoid it.
+
+---
+
+## 1. Add the MapLibre iOS SDK to your project
+
+```ruby
+# Podfile
+pod 'MapLibre', '~> 7.0'   # current as of Oct 2026
+```
+
+Run `pod install` and open the `.xcworkspace`.
+
+---
+
+## 2. Use the built-in PMTiles scheme
+
+### a. The *style*-based way (recommended)
+
+If you already have a MapLibre GL JS style JSON that references the archive like:
+
+```json
+{
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""pmtiles://https://example.r2.cloudflarestorage.com/basemap.pmtiles""
+    }
+  },
+  ""layers"": [ … ]
+}
+```
+
+you can load that style directly on iOS – **no extra code is required** beyond the normal `MLNMapView` setup:
+
+```swift
+import MapLibre
+
+class MapViewController: UIViewController {
+
+    var mapView: MLNMapView!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        // 1️⃣ Create the map view (Mercator projection is the only one available)
+        mapView = MLNMapView(frame: view.bounds)
+        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(mapView)
+
+        // 2️⃣ Load the style that contains the pmtiles:// URL
+        let styleURL = URL(string: ""https://example.com/my-style.json"")!
+        mapView.styleURL = styleURL
+    }
+}
+```
+
+That’s it – the SDK will fetch the `.pmtiles` archive from Cloudflare R2, read the tiles locally, and render them.
+
+### b. Adding the source programmatically (if you don’t want a full style JSON)
+
+If you prefer to construct the source in code, use the **`configurationURLString:`** initializer. **Do not** use the `URL(string:)` initializer on iOS 17 because it strips the double-slash after `pmtiles:` and the source fails to load (see issue #3151).
+
+```swift
+import MapLibre
+
+class MapViewController: UIViewController {
+
+    var mapView: MLNMapView!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        // 1️⃣ Set up the map view
+        mapView = MLNMapView(frame: view.bounds)
+        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(mapView)
+
+        // 2️⃣ Wait until the style is loaded (you can also start from a blank style)
+        mapView.style?.addObserver(self, forKeyPath: ""loaded"", options: .new, context: nil)
+    }
+
+    // Observe when the default style finishes loading
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?,
+                               change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        guard keyPath == ""loaded"", let style = mapView.style, style.isLoaded else { return }
+
+        // 3️⃣ Create the vector source that points at the PMTiles archive
+        let pmtilesURLString = ""pmtiles://https://example.r2.cloudflarestorage.com/basemap.pmtiles""
+        let vectorSource = MLNVectorTileSource(identifier: ""basemap"",
+                                               configurationURLString: pmtilesURLString)
+
+        // 4️⃣ Add the source to the style
+        style.addSource(vectorSource)
+
+        // 5️⃣ Add a layer that uses the source (adjust sourceLayer name to match your archive)
+        let layer = MLNFillStyleLayer(identifier: ""basemap-fill"", source: vectorSource)
+        layer.sourceLayerIdentifier = ""land""          // <-- name of the vector layer inside the PMTiles
+        layer.fillColor = NSExpression(forConstantValue: UIColor.systemGreen)
+        style.addLayer(layer)
+    }
+}
+```
+
+**Key points**
+
+| What you need to do | Why |
+|---------------------|-----|
+| Use `configurationURLString:` | It passes the raw string to the native PMTiles handler. |
+| Prefix the URL with `pmtiles://` | The SDK only recognises the custom scheme when it’s present. |
+| **Never** use `URL(string:)` on iOS 17+ | iOS 17 strips the second slash (`pmtiles://https://…` → `pmtiles:/https…`) and the source silently fails. |
+| No extra networking code | The SDK internally downloads the archive, caches it, and serves tiles from it. |
+
+---
+
+## 3. What about large archives (3 GB)?
+
+* The built-in PMTiles reader streams the archive; it does **not** load the whole file into memory.  
+* The SDK caches the downloaded file in the app’s temporary directory. For a 3 GB file you’ll need enough free storage on the device (or you can ship the archive as an **asset** and reference it with `pmtiles://asset://my-archive.pmtiles`).  
+* If you want to ship the archive inside the app bundle, place it in `Resources` and reference it like:
+
+```swift
+let assetURL = ""pmtiles://asset://basemap.pmtiles""
+let source = MLNVectorTileSource(identifier: ""basemap"",
+                                 configurationURLString: assetURL)
+```
+
+(Asset support landed in Android v13.7.1 and iOS v7.0.0; it works on iOS v6.10.0 as well.)
+
+---
+
+## 4. No need for any of the following
+
+| Option | Reason it’s unnecessary |
+|--------|--------------------------|
+| **Run a tile server** (e.g., `tileserver-gl`, `tessera`) | The SDK reads the archive directly; a server would only add latency and cost. |
+| **Convert to MBTiles** | MBTiles is a different container format; the native PMTiles reader does not understand it. |
+| **Write a custom source** (`MLNTileSource` subclass) | The SDK already implements a full PMTiles source; a custom source would duplicate that work. |
+| **Use `FileSource.setResourceTransform`** | That API only rewrites URLs; it cannot supply raw bytes for a custom scheme. |
+
+---
+
+## 5. Quick checklist before you ship
+
+1. **SDK version** – make sure you are on at least **iOS v6.10.0** (MapLibre 7.0+).  
+2. **URL string** – `pmtiles://https://…` **exactly** as shown; do not URL-encode the scheme.  
+3. **iOS 17 compatibility** – use the `configurationURLString:` initializer, not `URL(string:)`.  
+4. **Storage** – verify the device has enough free space for a 3 GB download (or bundle the file as an asset).  
+5. **Network permissions** – add `NSAppTransportSecurity` exceptions if your R2 endpoint is HTTP (recommended to use HTTPS).  
+
+---
+
+### TL;DR code snippet (the most common case)
+
+```swift
+import MapLibre
+
+let mapView = MLNMapView(frame: view.bounds)
+view.addSubview(mapView)
+
+// Load a style that already contains the pmtiles:// source
+mapView.styleURL = URL(string: ""https://example.com/style-with-pmtiles.json"")!
+```
+
+or, if you want to add the source yourself:
+
+```swift
+let source = MLNVectorTileSource(
+    identifier: ""basemap"",
+    configurationURLString: ""pmtiles://https://example.r2.cloudflarestorage.com/basemap.pmtiles""
+)
+mapView.style?.addSource(source)
+```
+
+That’s all you need to get a 3 GB PMTiles archive from Cloudflare R2 onto an iOS MapLibre Native map. Happy mapping!",PASS,1.00,,All assertions passed,
+explicit — pmtiles:// is a built-in MapLibre Native scheme,skills/maplibre-native-gl-js-parity/SKILL.md,"iOS, Swift, MapLibre Native. Our basemap is one 3 GB `.pmtiles` archive on Cloudflare R2. On the web we register the PMTiles protocol with the `pmtiles` npm package and point the source at `pmtiles://https://...`. What is the iOS equivalent — do I need to stand up a tile server, convert the archive to MBTiles, or write a custom source?
+","**Short answer:**  
+You don’t need a tile server, you don’t have to convert the archive to MBTiles, and you don’t have to write a custom source.  
+MapLibre Native for iOS has built-in support for the `pmtiles://` scheme (since **iOS v6.10.0**). Just point a normal `MLNVectorTileSource` (or `MLNRasterTileSource` if the archive contains raster tiles) at the URL that includes the `pmtiles://` prefix.
+
+Below is a complete, copy-and-paste-ready Swift example that works on iOS 17+ (the only gotcha is to avoid the `URL(string:)` initializer, which mangles the double-scheme on iOS 17).
+
+---
+
+## 1. Add the PMTiles URL to your style (JSON)
+
+If you are loading a style from a file or a remote JSON, the source entry should look exactly like the one you use on the web:
+
+```json
+{
+  ""id"": ""basemap"",
+  ""type"": ""vector"",
+  ""url"": ""pmtiles://https://example.r2.cloudflarestorage.com/basemap.pmtiles""
+}
+```
+
+*The `pmtiles://` prefix tells the native SDK to treat the following URL as a PMTiles archive and to fetch it directly from the network.*  
+
+---
+
+## 2. Load the style in Swift
+
+```swift
+import MapLibre
+
+class MapViewController: UIViewController {
+
+    var mapView: MapView!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        // 1️⃣ Create the MapView
+        mapView = MapView(frame: view.bounds)
+        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(mapView)
+
+        // 2️⃣ Load the style (local file, remote URL, or inline JSON)
+        // Example: remote style that references the PMTiles source above
+        let styleURL = URL(string: ""https://example.com/style.json"")!
+        mapView.mapboxMap.loadStyleURI(styleURL) { result in
+            switch result {
+            case .success:
+                print(""Style loaded – PMTiles source will be resolved automatically"")
+            case .failure(let error):
+                print(""Failed to load style: \(error)"")
+            }
+        }
+    }
+}
+```
+
+That’s it – the SDK will download the `.pmtiles` file from Cloudflare R2, cache it locally, and serve tiles from it.
+
+---
+
+## 3. If you need to add the source **programmatically** (e.g. you build the style in code)
+
+```swift
+import MapLibre
+
+// 1️⃣ Create the source – note the use of `configurationURLString:`
+// (the string initializer avoids the iOS-17 URL-parsing bug)
+let pmtilesSource = MLNVectorTileSource(
+    identifier: ""basemap"",
+    configurationURLString: ""pmtiles://https://example.r2.cloudflarestorage.com/basemap.pmtiles""
+)
+
+// 2️⃣ Add the source to the map’s style
+mapView.mapboxMap.style?.addSource(pmtilesSource)
+
+// 3️⃣ (Optional) Add a layer that uses the source
+let layer = FillLayer(identifier: ""land"", source: pmtilesSource)
+layer.sourceLayerIdentifier = ""land""          // <-- name of the source-layer inside the PMTiles
+layer.fillColor = .constant(UIColor.systemGreen)
+mapView.mapboxMap.style?.addLayer(layer)
+```
+
+### Why we use `configurationURLString:` instead of `URL(string:)`
+
+* iOS 17’s `URL(string:)` incorrectly parses a URL that contains two schemes (`pmtiles://https://…`).  
+* The `configurationURLString:` initializer takes the raw string and passes it straight to the native PMTiles handler, so the archive loads correctly.  
+* This is documented in the MapLibre iOS changelog and issue #3151.
+
+---
+
+## 4. What about assets bundled in the app?
+
+If you ship the `.pmtiles` file inside the app bundle (or in the `assets` folder of an Android APK), you can use the `asset://` scheme:
+
+```swift
+let bundledSource = MLNVectorTileSource(
+    identifier: ""basemap"",
+    configurationURLString: ""pmtiles://asset://basemap.pmtiles""
+)
+```
+
+This works from **iOS v6.10.0** and **Android v13.7.1** onward.
+
+---
+
+## 5. TL;DR checklist
+
+| Question | Answer |
+|----------|--------|
+| **Do I need a tile server?** | **No** – the native SDK fetches the archive directly. |
+| **Do I have to convert to MBTiles?** | **No** – PMTiles is natively understood. |
+| **Do I need a custom source implementation?** | **No** – use `MLNVectorTileSource` (or `MLNRasterTileSource` for raster PMTiles). |
+| **What iOS version supports it?** | iOS v6.10.0 and later (the version shipped with MapLibre Native v7.0.0). |
+| **Any gotchas?** | Use `configurationURLString:` (string, not `URL`) to avoid the iOS 17 double-scheme bug. |
+| **Can I bundle the archive?** | Yes – use `pmtiles://asset://…` after Android v13.7.1 / iOS v6.10.0. |
+
+---
+
+## 6. Further reading / references
+
+* **MapLibre Native iOS CHANGELOG** – v6.10.0 adds built-in `pmtiles://` support.  
+* **`MLNVectorTileSource.h`** – shows the `configurationURLString:` initializer and the iOS 17 note.  
+* **MapLibre Native `js-parity` skill** – the table summarises the PMTiles gap and the release that closed it.  
+
+If you run into any unexpected behavior (e.g., the archive never loads, or you see “Failed to load source” errors), double-check:
+
+1. The URL is reachable from the device (no firewall, correct CORS headers are not required for PMTiles).  
+2. The archive is a valid PMTiles file (you can verify with the `pmtiles` CLI).  
+3. You are using a MapLibre iOS SDK version **≥ 6.10.0** (the current stable release at the time of writing is 7.0.0).  
+
+That’s all you need to get a 3 GB PMTiles basemap working on iOS with MapLibre Native! Happy mapping.",PASS,1.00,,All assertions passed,
+explicit — pmtiles:// is a built-in MapLibre Native scheme,skills/maplibre-native-gl-js-parity/SKILL.md,"iOS, Swift, MapLibre Native. Our basemap is one 3 GB `.pmtiles` archive on Cloudflare R2. On the web we register the PMTiles protocol with the `pmtiles` npm package and point the source at `pmtiles://https://...`. What is the iOS equivalent — do I need to stand up a tile server, convert the archive to MBTiles, or write a custom source?
+","**Short answer:**  
+You don’t need a tile server, you don’t have to convert the archive to MBTiles, and you don’t have to write a custom source.  
+MapLibre Native for iOS has built-in support for the `pmtiles://` scheme (since **iOS v6.10.0**). Just point a normal `MLNVectorTileSource` (or `MLNRasterTileSource` if the archive contains raster tiles) at the URL that includes the `pmtiles://` prefix.
+
+Below is a complete, copy-and-paste-ready Swift example that works on iOS 17+ (the only gotcha is to avoid the `URL(string:)` initializer, which mangles the double-scheme on iOS 17).
+
+---
+
+## 1. Add the PMTiles URL to your style (JSON)
+
+If you are loading a style from a file or a remote JSON, the source entry should look exactly like the one you use on the web:
+
+```json
+{
+  ""id"": ""basemap"",
+  ""type"": ""vector"",
+  ""url"": ""pmtiles://https://example.r2.cloudflarestorage.com/basemap.pmtiles""
+}
+```
+
+*The `pmtiles://` prefix tells the native SDK to treat the following URL as a PMTiles archive and to fetch it directly from the network.*  
+
+---
+
+## 2. Load the style in Swift
+
+```swift
+import MapLibre
+
+class MapViewController: UIViewController {
+
+    var mapView: MapView!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        // 1️⃣ Create the MapView
+        mapView = MapView(frame: view.bounds)
+        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(mapView)
+
+        // 2️⃣ Load the style (local file, remote URL, or inline JSON)
+        // Example: remote style that references the PMTiles source above
+        let styleURL = URL(string: ""https://example.com/style.json"")!
+        mapView.mapboxMap.loadStyleURI(styleURL) { result in
+            switch result {
+            case .success:
+                print(""Style loaded – PMTiles source will be resolved automatically"")
+            case .failure(let error):
+                print(""Failed to load style: \(error)"")
+            }
+        }
+    }
+}
+```
+
+That’s it – the SDK will download the `.pmtiles` file from Cloudflare R2, cache it locally, and serve tiles from it.
+
+---
+
+## 3. If you need to add the source **programmatically** (e.g. you build the style in code)
+
+```swift
+import MapLibre
+
+// 1️⃣ Create the source – note the use of `configurationURLString:`
+// (the string initializer avoids the iOS-17 URL-parsing bug)
+let pmtilesSource = MLNVectorTileSource(
+    identifier: ""basemap"",
+    configurationURLString: ""pmtiles://https://example.r2.cloudflarestorage.com/basemap.pmtiles""
+)
+
+// 2️⃣ Add the source to the map’s style
+mapView.mapboxMap.style?.addSource(pmtilesSource)
+
+// 3️⃣ (Optional) Add a layer that uses the source
+let layer = FillLayer(identifier: ""land"", source: pmtilesSource)
+layer.sourceLayerIdentifier = ""land""          // <-- name of the source-layer inside the PMTiles
+layer.fillColor = .constant(UIColor.systemGreen)
+mapView.mapboxMap.style?.addLayer(layer)
+```
+
+### Why we use `configurationURLString:` instead of `URL(string:)`
+
+* iOS 17’s `URL(string:)` incorrectly parses a URL that contains two schemes (`pmtiles://https://…`).  
+* The `configurationURLString:` initializer takes the raw string and passes it straight to the native PMTiles handler, so the archive loads correctly.  
+* This is documented in the MapLibre iOS changelog and issue #3151.
+
+---
+
+## 4. What about assets bundled in the app?
+
+If you ship the `.pmtiles` file inside the app bundle (or in the `assets` folder of an Android APK), you can use the `asset://` scheme:
+
+```swift
+let bundledSource = MLNVectorTileSource(
+    identifier: ""basemap"",
+    configurationURLString: ""pmtiles://asset://basemap.pmtiles""
+)
+```
+
+This works from **iOS v6.10.0** and **Android v13.7.1** onward.
+
+---
+
+## 5. TL;DR checklist
+
+| Question | Answer |
+|----------|--------|
+| **Do I need a tile server?** | **No** – the native SDK fetches the archive directly. |
+| **Do I have to convert to MBTiles?** | **No** – PMTiles is natively understood. |
+| **Do I need a custom source implementation?** | **No** – use `MLNVectorTileSource` (or `MLNRasterTileSource` for raster PMTiles). |
+| **What iOS version supports it?** | iOS v6.10.0 and later (the version shipped with MapLibre Native v7.0.0). |
+| **Any gotchas?** | Use `configurationURLString:` (string, not `URL`) to avoid the iOS 17 double-scheme bug. |
+| **Can I bundle the archive?** | Yes – use `pmtiles://asset://…` after Android v13.7.1 / iOS v6.10.0. |
+
+---
+
+## 6. Further reading / references
+
+* **MapLibre Native iOS CHANGELOG** – v6.10.0 adds built-in `pmtiles://` support.  
+* **`MLNVectorTileSource.h`** – shows the `configurationURLString:` initializer and the iOS 17 note.  
+* **MapLibre Native `js-parity` skill** – the table summarises the PMTiles gap and the release that closed it.  
+
+If you run into any unexpected behavior (e.g., the archive never loads, or you see “Failed to load source” errors), double-check:
+
+1. The URL is reachable from the device (no firewall, correct CORS headers are not required for PMTiles).  
+2. The archive is a valid PMTiles file (you can verify with the `pmtiles` CLI).  
+3. You are using a MapLibre iOS SDK version **≥ 6.10.0** (the current stable release at the time of writing is 7.0.0).  
+
+That’s all you need to get a 3 GB PMTiles basemap working on iOS with MapLibre Native! Happy mapping.",PASS,1.00,,All assertions passed,

@@ -1,0 +1,275 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+anti-pattern — porting setTerrain to Kotlin,skills/maplibre-native-gl-js-parity/SKILL.md,"I am porting our web map to Android (Kotlin, MapLibre Native). This is the web code I need to reproduce: `map.addSource('dem', {type: 'raster-dem', url: 'https://example.com/terrain.json'})` followed by `map.setTerrain({source: 'dem', exaggeration: 1.5})`. Give me the Kotlin that does the same thing against `MapLibreMap` / `Style`.
+","**Short answer:**  
+MapLibre Native (Android) has no `setTerrain` API and does not understand a `terrain` block in the style. The feature is still open ( [#252](https://github.com/maplibre/maplibre-native/issues/252) ) and will not work on any released version (android-v13.7.1 at the time of writing).  
+
+What you can do instead is:
+
+1. **Add the same `raster-dem` source** – this part works exactly as in GL JS.  
+2. **Render the DEM with a `hillshade` or `color-relief` layer** – these layers shade the terrain on a flat map (no vertical extrusion).  
+3. **Exaggeration is not supported** – the raster-DEM values are used as-is.
+
+Below is a complete Kotlin example that mirrors the GL JS calls as closely as possible, using a `hillshade` layer (the simplest drop-in). If you need colour-coded elevation, replace the `HillshadeLayer` with a `ColorReliefLayer` (available since android-v13.0.0).
+
+---
+
+## Kotlin – add the DEM source and a hillshade layer
+
+```kotlin
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.sources.RasterDemSource
+import org.maplibre.android.style.layers.HillshadeLayer
+import org.maplibre.android.style.layers.PropertyFactory.*
+
+// Call this after the map view is ready and you have a MapLibreMap instance.
+fun addDemAndHillshade(map: MapLibreMap) {
+    map.getStyle { style ->
+
+        // 1️⃣  Add the raster-DEM source (identical to the GL-JS source)
+        val demSource = RasterDemSource(
+            ""dem"",                     // source id – same as the GL-JS id
+            ""https://example.com/terrain.json""   // URL to the DEM JSON (or .tif/.png etc.)
+        )
+        style.addSource(demSource)
+
+        // 2️⃣  Add a hillshade layer that uses the DEM.
+        //     This draws shaded relief on a flat map.
+        val hillshade = HillshadeLayer(
+            ""dem-hillshade"",   // layer id – choose any unique name
+            ""dem""              // source id we just created
+        ).withProperties(
+            // Optional: tweak the visual appearance.
+            hillshadeIlluminationDirection(315f), // sun direction (degrees)
+            hillshadeExaggeration(1.5f)           // **NOTE:** this is *visual* exaggeration of shading,
+                                                // not true 3-D extrusion. It is the only “exaggeration”
+                                                // knob available on Native.
+        )
+
+        // Insert the hillshade somewhere in the layer stack.
+        // Here we put it just above the first background layer.
+        style.addLayerBelow(hillshade, ""background"")
+    }
+}
+```
+
+### What the code does
+
+| GL JS line | Native equivalent | Comment |
+|------------|-------------------|---------|
+| `map.addSource('dem', {type: 'raster-dem', url: '…'})` | `RasterDemSource(""dem"", ""…"")` + `style.addSource(demSource)` | Same source type and URL. |
+| `map.setTerrain({source: 'dem', exaggeration: 1.5})` | **Not available**. Instead we add a `HillshadeLayer` (or `ColorReliefLayer`). | The map stays Mercator; only shading is applied. |
+| (optional) `exaggeration` | `hillshadeExaggeration(1.5f)` (visual only) | This only deepens the shadows; it does **not** raise the terrain. |
+
+---
+
+## Alternative: `color-relief` (if you need colour-coded elevation)
+
+```kotlin
+import org.maplibre.android.style.layers.ColorReliefLayer
+import org.maplibre.android.style.expressions.Expression
+
+val colorRelief = ColorReliefLayer(
+    ""dem-color-relief"",
+    ""dem""
+).withProperties(
+    // Example ramp – replace with whatever you need.
+    colorReliefColor(
+        Expression.raw(
+            """"""[""interpolate"", [""linear""], [""elevation""],
+               0,   ""#2e8b57"",
+               1500,""#8b5a2b"",
+               3000,""#ffffff""]""""""
+        )
+    )
+)
+
+style.addLayerBelow(colorRelief, ""background"")
+```
+
+*`color-relief` is available from android-v13.0.0 (and iOS-v6.24.0).*
+
+---
+
+## TL;DR checklist
+
+- ✅ **Add the DEM source** – works exactly like GL JS.  
+- ❌ **`setTerrain` / true 3-D extrusion** – not supported on any current Native release.  
+- ✅ **Show relief** – use `HillshadeLayer` (quick shading) or `ColorReliefLayer` (elevation-based colours).  
+- ⚠️ **Exaggeration** – only the visual shading exaggeration (`hillshadeExaggeration`) is available; it does not raise the terrain.  
+
+When a true 3-D terrain implementation lands in a future MapLibre Native release, you will be able to replace the hillshade/color-relief block with a `terrain` block in the style JSON (or the equivalent Kotlin API). Until then, the above code is the closest you can get on Android.",PASS,1.00,,All assertions passed,
+explicit — color-relief exists on MapLibre Native,skills/maplibre-native-gl-js-parity/SKILL.md,"Android, MapLibre Native (Kotlin). I have Terrarium-encoded DEM tiles and I want elevation-banded color under my vector layers — green lowlands through brown to white peaks, with the breakpoints in the style so our cartographer can tune them. Can I do that in a MapLibre Android app, or do I have to pre-render colored raster tiles and ship those instead?
+","**Short answer:**  
+Yes – you can colour-code a Terrarium-encoded DEM directly in a MapLibre Android app.  
+All you need is:
+
+1. **android-v13.0.0 or newer** (the version that introduced the `color-relief` layer).  
+2. A **raster-dem source** that points at your Terrarium tiles and declares `""encoding"":""terrarium""`.  
+3. A **`color-relief` layer** that uses an `[""interpolate"", …]` expression on the built-in `[""elevation""]` value to draw the green-→-brown-→-white ramp you want.
+
+If you are stuck on an older native release you must fall back to pre-rendered coloured raster tiles, but with a current release you do **not** have to pre-render anything.
+
+---
+
+## 1. Why this works (and why 3-D terrain does not)
+
+| Feature | GL JS | MapLibre Native (Android) |
+|---------|-------|---------------------------|
+| Globe projection | ✅ | ❌ (open issue #3161) |
+| 3-D terrain (`map.setTerrain`) | ✅ | ❌ (open issue #252) |
+| `color-relief` layer | ✅ (since 5.6.0) | ✅ (since **android-v13.0.0**) |
+| Terrarium DEM support | ✅ | ✅ (raster-dem source supports `""encoding"":""terrarium""`) |
+
+`color-relief` draws a colour ramp **on a flat map** using the elevation values that come from a raster-DEM source. It is the native-only counterpart to GL JS’s 3-D terrain – you get visual relief without the map actually being raised.
+
+---
+
+## 2. Minimal working example (Kotlin)
+
+```kotlin
+// 1️⃣  Add the raster-dem source (Terrarium-encoded tiles)
+val demSource = RasterDemSource(
+    id = ""dem"",
+    url = ""https://example.com/terrarium/{z}/{x}/{y}.png"",
+    // Tell the source the tiles are Terrarium-encoded
+    rasterDemSourceOptions = RasterDemSourceOptions.builder()
+        .encoding(RasterDemSourceOptions.Encoding.TERRARIUM)   // <-- important
+        .build()
+)
+
+// 2️⃣  Add the source to the style (you can do this in onStyleLoaded)
+style.addSource(demSource)
+
+// 3️⃣  Add a color-relief layer that sits **below** your vector layers
+val reliefLayer = ColorReliefLayer(
+    id = ""relief"",
+    sourceId = ""dem""
+).withProperties(
+    // The expression can be any ramp you like – the cartographer can edit it
+    PropertyFactory.colorReliefColor(
+        Expression.raw(
+            // Linear interpolation on the DEM elevation (in metres)
+            """"""[
+                ""interpolate"",
+                [""linear""],
+                [""elevation""],
+                0,   ""#2e8b57"",   // lowland – dark green
+                500, ""#6abf5b"",   // gentle hills – light green
+                1500,""#c2b280"",   // foothills – tan / brown
+                2500,""#d2a679"",   // lower mountains – brown-orange
+                3500,""#e5c29f"",   // high mountains – pale brown
+                4500,""#ffffff""    // peaks – white
+            ]""""""
+        )
+    )
+)
+
+// 4️⃣  Insert the layer into the stack (below your vector layers)
+style.addLayerBelow(reliefLayer, ""your-first-vector-layer-id"")
+```
+
+### What the code does
+
+| Step | What it creates | Why it matters |
+|------|----------------|----------------|
+| **RasterDemSource** | Reads the Terrarium PNG tiles and decodes them to metres. | `[""elevation""]` expressions later will return the correct height. |
+| **ColorReliefLayer** | A raster-style layer that paints each pixel based on its elevation. | Gives you the green-→-brown-→-white banding you asked for. |
+| **Expression.raw()** | Lets you write the exact GL JS-style `[""interpolate"", …]` expression. | The cartographer can edit the break-points directly in the style JSON. |
+| **addLayerBelow** | Places the relief under your vector data so the colours show through. | Vector layers stay on top, but the underlying relief is still visible. |
+
+> **Tip:** If you need the newer `interpolate-hcl` or `interpolate-lab` colour spaces, upgrade to **android-v13.7.1** (or later). The plain `interpolate` works on any version that has `color-relief`.
+
+---
+
+## 3. Full style-JSON snippet (if you prefer to keep everything in the style)
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""dem"": {
+      ""type"": ""raster-dem"",
+      ""url"": ""https://example.com/terrarium/{z}/{x}/{y}.png"",
+      ""tileSize"": 256,
+      ""encoding"": ""terrarium""
+    },
+    ""vector-data"": {
+      ""type"": ""vector"",
+      ""url"": ""pmtiles://https://example.com/roads.pmtiles""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""relief"",
+      ""type"": ""color-relief"",
+      ""source"": ""dem"",
+      ""paint"": {
+        ""color-relief-color"": [
+          ""interpolate"",
+          [""linear""],
+          [""elevation""],
+          0,   ""#2e8b57"",
+          500, ""#6abf5b"",
+          1500,""#c2b280"",
+          2500,""#d2a679"",
+          3500,""#e5c29f"",
+          4500,""#ffffff""
+        ]
+      }
+    },
+    // …your vector layers here, placed after the relief layer
+  ]
+}
+```
+
+*Put the `relief` layer **before** any vector layers you want to appear on top.*
+
+---
+
+## 4. What to do if you **cannot** upgrade to v13.0.0
+
+* The `color-relief` layer simply does not exist, so the style parser will drop the layer and you’ll see a blank map where the relief should be.  
+* In that case you have two practical options:
+
+| Option | How it works | Pros | Cons |
+|--------|--------------|------|------|
+| **Pre-render coloured raster tiles** | Generate PNG/JPEG tiles where each pixel already carries the colour you want (e.g., using GDAL `gdaldem color-relief`). | Works on any native version. | Increases storage/bandwidth; you lose the ability for the cartographer to tweak break-points at runtime. |
+| **Upgrade the SDK** | Bump your Gradle dependency to `implementation ""org.maplibre.gl:android-sdk:13.0.0""` (or newer). | Gives you the native `color-relief` layer and all the other parity features. | Requires rebuilding the app; may need to update other code for API changes. |
+
+> **Bottom line:** If you can ship a newer SDK (which is strongly recommended for bug-fixes and security), go with the native `color-relief` approach. If you are locked to an older SDK for some reason, pre-rendered coloured rasters are the only fallback.
+
+---
+
+## 5. Common pitfalls & how to avoid them
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| **Layer disappears, no crash** | Using `interpolate-hcl`/`interpolate-lab` on a release prior to v13.7.1. | Use plain `interpolate` or upgrade. |
+| **No colour at all, just grey** | The DEM source is missing `""encoding"":""terrarium""` (or the default `mapbox` encoding is assumed). | Add `""encoding"":""terrarium""` to the source definition. |
+| **Relief shows but is completely white** | The DEM tiles are not being fetched (e.g., network error, wrong URL). Check Logcat for `[HttpRequest]` errors. | Verify the URL pattern, ensure the tiles are reachable, and that you have internet permission. |
+| **Relief appears but is offset** | Tile size mismatch (`tileSize` not set to 256) or the source is a `raster` instead of `raster-dem`. | Use `""type"":""raster-dem""` and set `""tileSize"":256`. |
+| **iOS-specific note** (if you ever port to iOS) | `configurationURL:` constructor mangles `pmtiles://https://…` on iOS 17. | Use `configurationURLString:` as shown in the skill. |
+
+---
+
+## 6. TL;DR checklist for your use-case
+
+1. **Upgrade** your Gradle dependency to at least **13.0.0**.  
+2. Add a **`raster-dem` source** with `""encoding"":""terrarium""`.  
+3. Add a **`color-relief` layer** that uses an `[""interpolate"", [""linear""], [""elevation""], …]` expression.  
+4. Place the layer **below** your vector layers.  
+5. Test on a device – you should see the green-brown-white bands following the DEM’s heights.  
+
+If any of the above steps fail because you cannot upgrade, fall back to pre-rendered coloured raster tiles.
+
+---
+
+**References (from the skill)**  
+
+* `color-relief` introduced in **android-v13.0.0** – PR #3965.  
+* Terrarium support is part of the `RasterDemSource` options (`encoding`).  
+* `interpolate-hcl` / `interpolate-lab` become available in **android-v13.7.1** – PR #4668.  
+* Full changelog & API docs: `platform/android/CHANGELOG.md` and `MapLibreAndroid/src/main/java/org/maplibre/android/style/sources/RasterDemSource.kt`.  
+
+Feel free to ask if you need a concrete Gradle snippet or help wiring the source into an existing `MapView` lifecycle!",PASS,1.00,,All assertions passed,

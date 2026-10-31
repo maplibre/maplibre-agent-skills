@@ -1,0 +1,1164 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+explicit — no addProtocol on Native; Android serves app-supplied tile bytes another way,skills/maplibre-native-gl-js-parity/SKILL.md,"Android, Kotlin, MapLibre Native. Our vector tiles (MVT) sit in an encrypted blob on the device. I want the style JSON to reference them as `vault://tiles/{z}/{x}/{y}` and have my own code decrypt each tile and hand back the bytes. On the web I do this with `maplibregl.addProtocol`. What is the equivalent on Android?
+","**Short answer:**  
+MapLibre Native on Android does **not** have an `addProtocol`-style hook.  
+Instead you have two native entry points that let you supply the raw MVT bytes for a custom scheme such as `vault://…`:
+
+| What you want to do | Android-only way to do it | Since which Native version |
+|---------------------|---------------------------|----------------------------|
+| Intercept **any** HTTP-like request (style, sprites, glyphs, tiles, …) and return your own bytes | Provide a custom `HttpRequest` via a `ModuleProvider` (set once before the first `MapView` is created) | **android-v11.0.0** (module-provider API) |
+| Register a **vector-tile source** that asks you for a tile for a given `z/x/y` and you return the MVT bytes | Use a `CustomVectorSource` together with a `CustomVectorTileProvider` | **android-v13.5.0** |
+
+Below is a complete, step-by-step guide for each approach, plus the gotchas you’ll run into.
+
+---
+
+## 1️⃣ Intercept every network request with a custom `HttpRequest`
+
+### When to use it
+* You already have a style JSON that references `vault://tiles/{z}/{x}/{y}` (or any other `vault://…` URL) **and** you want the same style to keep those URLs unchanged.
+* You also want the same hook to serve the style file, sprite sheet, glyphs, etc. (everything that goes through the internal `FileSource`).
+
+### How it works
+`MapLibre.setModuleProvider()` lets you replace the default `ModuleProvider`.  
+From that provider you return a custom `HttpRequest` implementation that:
+
+1. Checks whether the requested URL starts with your scheme (`vault://`).
+2. If **yes**, decrypts the tile (or any other resource) and calls `responder.onResponse(...)` with the raw bytes.
+3. If **no**, forwards the request to the stock implementation so the rest of the map can still fetch normal HTTP/HTTPS resources.
+
+### Minimal Kotlin example
+
+```kotlin
+import org.maplibre.android.MapLibre
+import org.maplibre.android.ModuleProvider
+import org.maplibre.android.http.HttpRequest
+import org.maplibre.android.http.HttpResponder
+
+// ------------------------------------------------------------------
+// 1️⃣  Your own request implementation
+// ------------------------------------------------------------------
+class VaultHttpRequest(
+    private val stock: HttpRequest          // the default request implementation
+) : HttpRequest {
+
+    override fun executeRequest(
+        responder: HttpResponder,
+        nativePtr: Long,
+        resourceUrl: String,
+        dataRange: String?,          // range header, ignore for MVT
+        etag: String?,               // ignore for encrypted blobs
+        modified: String?,           // ignore for encrypted blobs
+        offlineUsage: Boolean
+    ) {
+        // --------------------------------------------------------------
+        // 2️⃣  Does this request belong to our custom scheme?
+        // --------------------------------------------------------------
+        if (!resourceUrl.startsWith(""vault://"")) {
+            // Not ours → let the stock request handle it
+            return stock.executeRequest(
+                responder, nativePtr, resourceUrl,
+                dataRange, etag, modified, offlineUsage
+            )
+        }
+
+        // --------------------------------------------------------------
+        // 3️⃣  Decrypt the tile (or any other resource) yourself
+        // --------------------------------------------------------------
+        // Example URL pattern: vault://tiles/12/3456/7890
+        // You can parse the z/x/y if you need them, or just pass the whole URL.
+        val bytes: ByteArray = Vault.decryptTile(resourceUrl)   // <-- YOUR CODE
+
+        // --------------------------------------------------------------
+        // 4️⃣  Hand the bytes back to the native core
+        // --------------------------------------------------------------
+        // Parameters: (code, contentType, eTag, lastModified, cacheControl,
+        //              expires, retryAfter, body)
+        responder.onResponse(
+            200,                     // HTTP-like status code
+            ""application/x-protobuf"", // MIME type for MVT
+            null, null, null, null, null,
+            bytes
+        )
+    }
+
+    override fun cancelRequest() {
+        // Forward cancellation to the stock request (optional but nice)
+        stock.cancelRequest()
+    }
+}
+
+// ------------------------------------------------------------------
+// 5️⃣  Install the custom ModuleProvider *before* any MapView is created
+// ------------------------------------------------------------------
+val stockProvider = MapLibre.getModuleProvider()   // keep the default implementation
+MapLibre.setModuleProvider(object : ModuleProvider by stockProvider {
+    override fun createHttpRequest(): HttpRequest =
+        VaultHttpRequest(stockProvider.createHttpRequest())
+})
+```
+
+**Important notes**
+
+* **Call `MapLibre.setModuleProvider` only once**, and **before** the first `MapView` (or `MapLibreMap`) is instantiated. Doing it later has no effect.
+* The `HttpResponder` API expects you to give a **real HTTP-like status code** (`200` for success, `404` for not-found, etc.). If you cannot produce the tile, call `responder.handleFailure(HttpRequest.CONNECTION_ERROR, ""msg"")` (or the other two constants) so the core knows the request failed.
+* The `content-type` for an MVT tile should be `""application/x-protobuf""` (or `""application/vnd.mapbox-vector-tile""` – both are accepted).
+* This approach works for **any** resource type, not just vector tiles. If you only need tiles, the second approach below is a bit cleaner.
+
+---
+
+## 2️⃣ Register a `CustomVectorSource` and supply tiles via `CustomVectorTileProvider`
+
+### When to use it
+* You only need to serve **vector tiles** (MVT) and you prefer a source-level API rather than intercepting every HTTP request.
+* You are comfortable creating the source and its layers in code (instead of declaring them in the style JSON).
+
+### How it works
+`CustomVectorSource` is a native source type that asks a `CustomVectorTileProvider` for each tile.  
+Your provider receives the tile coordinates (`z`, `x`, `y`) and returns a `TileData.Mvt` containing the raw bytes.
+
+### Minimal Kotlin example
+
+```kotlin
+import androidx.lifecycle.lifecycleScope
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.FillLayer
+import org.maplibre.android.style.sources.CustomVectorSource
+import org.maplibre.android.style.sources.CustomVectorTileProvider
+import org.maplibre.android.style.sources.TileData
+
+// ------------------------------------------------------------------
+// 1️⃣  Provider that decrypts the tile for a given z/x/y
+// ------------------------------------------------------------------
+val vaultProvider = object : CustomVectorTileProvider {
+    override suspend fun fetchTile(z: Int, x: Int, y: Int): TileData {
+        // Build the URL that matches the one you would have used in the style
+        val url = ""vault://tiles/$z/$x/$y""
+        val bytes = Vault.decryptTile(url)   // <-- YOUR DECRYPTION LOGIC
+        return TileData.Mvt(bytes)           // Wrap as MVT data
+    }
+}
+
+// ------------------------------------------------------------------
+// 2️⃣  Create the source (no URL in the style JSON)
+// ------------------------------------------------------------------
+val vaultSource = CustomVectorSource(
+    id = ""vault"",                     // source identifier used by layers
+    provider = vaultProvider,
+    scope = lifecycleScope,          // coroutine scope for async fetches
+    maxZoom = 14                     // optional, set to your max zoom
+)
+
+// ------------------------------------------------------------------
+// 3️⃣  Add the source and a layer to the style (once the style is loaded)
+// ------------------------------------------------------------------
+mapView.getMapAsync { mapboxMap ->
+    mapboxMap.getStyle { style: Style ->
+
+        // Add the custom source
+        style.addSource(vaultSource)
+
+        // Add a layer that reads from the source
+        val parcelsLayer = FillLayer(""parcels"", ""vault"")
+            .withSourceLayer(""parcels"")   // name of the source-layer inside the MVT
+            .withProperties(
+                // any paint/layout properties you need
+            )
+        style.addLayer(parcelsLayer)
+    }
+}
+```
+
+**Key points**
+
+* The style JSON **must not** contain a source entry for `""vault""`; you create it entirely in code.
+* The `CustomVectorTileProvider` runs on a coroutine (`suspend fun fetchTile`). You can do I/O, decryption, or even network fetches here.
+* If you need to support **offline** usage, you can also cache the decrypted bytes locally and return them from the provider.
+* The `CustomVectorSource` was added in **android-v13.5.0**. If you are on an older release you have to fall back to the `ModuleProvider` approach.
+
+---
+
+## 3️⃣ Which approach should you pick?
+
+| Situation | Recommended API |
+|-----------|-----------------|
+| You already have a **style JSON** that references `vault://…` for tiles **and** you also need to serve sprites/glyphs/etc. from the same scheme | **ModuleProvider + HttpRequest** (approach 1) |
+| You only need to serve **vector tiles** and you are fine creating the source in code | **CustomVectorSource + CustomVectorTileProvider** (approach 2) |
+| You are on a version **< android-v13.5.0** (no `CustomVectorSource`) | Use the **ModuleProvider** method – it works on **android-v11.0.0** and later. |
+| You need **both** (tiles + other assets) but want a cleaner code base | Combine them: keep a `CustomVectorSource` for tiles and a `ModuleProvider` only for the non-tile assets. |
+
+---
+
+## 4️⃣ Common pitfalls & debugging tips
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| The map loads, but **no vector tiles appear** (empty background) | The custom request never calls `responder.onResponse` or returns a non-200 status. | Check the log for `HttpRequest` errors. Make sure you call `responder.onResponse(200, …, bytes)`. |
+| The app crashes with **`java.lang.IllegalArgumentException: Invalid URL`** | You passed a `vault://…` URL to a component that only understands HTTP/HTTPS (e.g., `MLNVectorTileSource(configurationURLString:)` on iOS). | Use the custom source approach (CustomVectorSource) or serve the tiles via `pmtiles://` instead. |
+| **Only some tiles** appear, others are missing | Your decryption routine fails for certain `z/x/y` combos (maybe out-of-range). | Log the incoming `z/x/y` in `fetchTile` and verify the blob contains the expected tile. |
+| **Performance is terrible** (tiles load one-by-one, UI stalls) | Decryption is done on the main thread. | `fetchTile` is `suspend`; do heavy work inside `withContext(Dispatchers.IO) { … }`. |
+| **Style JSON still contains `vault://…` but tiles are not requested** | You installed the `ModuleProvider` **after** the `MapView` was created. | Move the `MapLibre.setModuleProvider` call to `Application.onCreate()` or before you inflate the first `MapView`. |
+| **iOS** – you tried the same code and it didn’t work | The `ModuleProvider` API is Android-only; iOS has **no** equivalent. Use `pmtiles://` or serve the tiles over HTTPS. | On iOS you must either bundle a PMTiles archive (`pmtiles://…`) or expose the tiles via a local HTTP server. |
+
+---
+
+## 5️⃣ Full-working snippet (Android Kotlin)
+
+Below is a self-contained example you can paste into a fresh Android project (minimum MapLibre version **13.7.1** to get both `CustomVectorSource` and `interpolate-hcl/lab` support). Adjust the `Vault.decryptTile` call to your own decryption logic.
+
+```kotlin
+// App.kt (or any early entry point)
+class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+
+        // ---- Install custom ModuleProvider (optional, for non-tile assets) ----
+        val stock = MapLibre.getModuleProvider()
+        MapLibre.setModuleProvider(object : ModuleProvider by stock {
+            override fun createHttpRequest(): HttpRequest =
+                object : HttpRequest {
+                    override fun executeRequest(
+                        responder: HttpResponder,
+                        nativePtr: Long,
+                        resourceUrl: String,
+                        dataRange: String?,
+                        etag: String?,
+                        modified: String?,
+                        offlineUsage: Boolean
+                    ) {
+                        if (!resourceUrl.startsWith(""vault://"")) {
+                            // delegate everything else
+                            return stock.createHttpRequest()
+                                .executeRequest(responder, nativePtr, resourceUrl,
+                                    dataRange, etag, modified, offlineUsage)
+                        }
+
+                        // Decrypt tile bytes
+                        val bytes = Vault.decryptTile(resourceUrl)
+                        responder.onResponse(
+                            200,
+                            ""application/x-protobuf"",
+                            null, null, null, null, null,
+                            bytes
+                        )
+                    }
+
+                    override fun cancelRequest() = stock.createHttpRequest().cancelRequest()
+                }
+        })
+    }
+}
+
+// MainActivity.kt
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var mapView: MapView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Layout contains a MapView with id ""mapView""
+        setContentView(R.layout.activity_main)
+        mapView = findViewById(R.id.mapView)
+
+        mapView.getMapAsync { mapboxMap ->
+            mapboxMap.setStyle(
+                // You can still load a remote style JSON that contains everything
+                // *except* the vault source – we’ll add that in code.
+                Style.Builder().fromUri(""https://example.com/style.json"")
+            ) { style ->
+
+                // ---- 2️⃣ Add the custom vector source ----
+                val vaultSource = CustomVectorSource(
+                    id = ""vault"",
+                    provider = object : CustomVectorTileProvider {
+                        override suspend fun fetchTile(z:",PASS,1.00,,All assertions passed,
+implicit — globe projection is in no MapLibre Native release,skills/maplibre-native-gl-js-parity/SKILL.md,"iOS, Swift, `MLNMapView`. Our style JSON has this at the top level: `""projection"": {""type"": ""globe""}`. In the browser the same style renders as a globe; in the app the map stays flat however far I zoom out. I am on the newest MapLibre iOS from Swift Package Manager. What do I change to get the globe?
+","**Short answer:**  
+At the moment MapLibre Native (the iOS SDK you get from the Swift Package Manager) does **not** implement the `""projection"": {""type"":""globe""}` style key. The map will always stay in the Web-Mercator projection, no matter how far you zoom out. There is no setting you can flip in `MLNMapView` to make the globe appear.
+
+**What you can do instead**
+
+| Option | How it works | Pros | Cons |
+|--------|--------------|------|------|
+| **Leave the style as-is and accept a flat Mercator map** | Nothing to change in code; the style is parsed, the `""projection""` key is ignored. | No extra work, works on every iOS version. | No globe – the visual you see in the browser cannot be reproduced. |
+| **Render the style in a Web View using MapLibre GL JS** | Load a `WKWebView` (or `SFSafariViewController`) that points to a small HTML page which creates a `maplibregl.Map` with the same style URL. | You get the exact same globe rendering that works in the browser. | You lose the native map view (no native gestures, no direct access to `MLNMapView` APIs). |
+| **Wait for native globe support** | The feature is tracked in the native repo: **[#3161 – “globe projection on Native”](https://github.com/maplibre/maplibre-native/issues/3161)**. When a release ships the support, you’ll just need to upgrade the SDK and the same style will work automatically. | No code changes when the feature lands. | You have to wait for the next native release (no ETA yet). |
+
+---
+
+### Why the globe doesn’t work on iOS today
+
+* **MapLibre GL JS** implements the globe projection starting with version 4.0.0 (the style spec key `projection`).  
+* **MapLibre Native** (both Android and iOS) reads the same style JSON, but the renderer has never had a globe implementation. The `""projection""` key is simply ignored, and the map stays in the default Mercator projection.  
+* The missing feature is tracked as an open issue: **[#3161](https://github.com/maplibre/maplibre-native/issues/3161)** – “globe projection on Native”. Until that issue is closed with a release note, there is no API or flag you can enable.
+
+---
+
+### How to keep your code ready for when globe support arrives
+
+1. **Keep the `""projection""` entry in your style** – it will be a no-op now but will automatically take effect once the native SDK adds support.
+2. **Upgrade the SDK** when a new version is released (watch the iOS changelog or the issue above). No code changes are required; the same style JSON will start rendering a globe.
+3. If you need to detect at runtime whether the current SDK can render a globe (e.g., to hide a UI toggle), you can query the SDK version:
+
+```swift
+import MapLibre
+
+let version = MLNVersionString()   // e.g. ""7.0.0""
+print(""MapLibre iOS version: \(version)"")
+
+// No public API yet to ask “is globe supported?” – you have to rely on the version
+// number that the changelog mentions when the feature lands.
+```
+
+When the changelog mentions “globe projection support added”, you can add a version check and enable any UI that toggles the globe.
+
+---
+
+### TL;DR
+
+* **You cannot get a globe on iOS right now** – the native SDK simply does not support the `projection: globe` style key.
+* **Work-arounds:** use a `WKWebView` with MapLibre GL JS, or stay with the flat Mercator map.
+* **Future-proofing:** keep the projection key in your style and upgrade the SDK when issue #3161 is closed. No code changes will be needed at that point.",PASS,1.00,,All assertions passed,
+anti-pattern — porting setTerrain to Kotlin,skills/maplibre-native-gl-js-parity/SKILL.md,"I am porting our web map to Android (Kotlin, MapLibre Native). This is the web code I need to reproduce: `map.addSource('dem', {type: 'raster-dem', url: 'https://example.com/terrain.json'})` followed by `map.setTerrain({source: 'dem', exaggeration: 1.5})`. Give me the Kotlin that does the same thing against `MapLibreMap` / `Style`.
+","**Short answer:**  
+MapLibre Native (Android) has **no `setTerrain` API** and does not understand the `terrain` block in a style. The only thing you can do with a `raster-dem` source on Android today is draw it with a **hillshade** or **color-relief** layer (both render on a flat map). If you really need true 3-D terrain you must either:
+
+1. **Show the map in a WebView** and keep the GL-JS code, **or**  
+2. **Wait for a future native release** that implements terrain (tracked in issue #252).
+
+Below is the Kotlin you can use **right now** to add the same `raster-dem` source and then render it with a hillshade (or color-relief) layer. The code will compile against `MapLibreMap` / `Style` on Android v13.7.1 (or later).
+
+---
+
+## 1️⃣ Add the `raster-dem` source
+
+```kotlin
+// Assuming you already have a MapLibreMap instance called `mapLibreMap`
+mapLibreMap.getMapAsync { map ->
+    map.getStyle { style ->
+
+        // 1️⃣ raster-dem source (identical to the GL-JS source)
+        val demSource = RasterDemSource(
+            ""dem"",                     // source id – same as the GL-JS id
+            ""https://example.com/terrain.json""   // URL to the DEM JSON
+        )
+        style.addSource(demSource)
+
+        // -----------------------------------------------------------------
+        // 2️⃣ (Optional) Add a hillshade layer – this is the closest native
+        //    equivalent to “terrain” but it stays flat.
+        // -----------------------------------------------------------------
+        val hillshadeLayer = HillshadeLayer(""dem-hillshade"", ""dem"").apply {
+            // Example: make the hillshade a little brighter
+            hillshadeExaggeration(1.5)   // same numeric value you used for exaggeration
+        }
+        style.addLayerBelow(hillshadeLayer, ""water"") // insert wherever you need
+
+        // -----------------------------------------------------------------
+        // 3️⃣ (Optional) Add a color-relief layer – works from v13.0.0 onward.
+        // -----------------------------------------------------------------
+        // val colorReliefLayer = ColorReliefLayer(""dem-relief"", ""dem"").apply {
+        //     // Simple grayscale ramp; replace with any interpolate-hcl/lab you like
+        //     setProperties(
+        //         PropertyFactory.colorReliefColor(
+        //             Expression.interpolate(
+        //                 Expression.linear(),
+        //                 Expression.get(""elevation""),
+        //                 Expression.stop(0, Color.parseColor(""#2e8b57"")),
+        //                 Expression.stop(1500, Color.parseColor(""#8b5a2b"")),
+        //                 Expression.stop(3000, Color.parseColor(""#ffffff""))
+        //             )
+        //         )
+        //     )
+        // }
+        // style.addLayerBelow(colorReliefLayer, ""water"")
+    }
+}
+```
+
+### What the code does
+
+| Step | GL-JS equivalent | Native equivalent |
+|------|------------------|-------------------|
+| `map.addSource('dem', {type:'raster-dem', url:'…'})` | `RasterDemSource` added to the style | ✅ Same source type, same id, same URL |
+| `map.setTerrain({source:'dem', exaggeration:1.5})` | **Not supported** in native | ❌ No API. Use a **hillshade** or **color-relief** layer instead. The `hillshadeExaggeration(1.5)` call mimics the GL-JS `exaggeration` factor, but the map stays flat. |
+
+---
+
+## 2️⃣ Why there is no `setTerrain` on Android
+
+| Feature | GL-JS | MapLibre Native (Android) | Current status |
+|---------|-------|---------------------------|----------------|
+| 3-D terrain (`map.setTerrain`) | ✅ since GL-JS 4.0 | ❌ not implemented | Open issue #252 (tracked) |
+| Hillshade (`hillshade` layer) | ✅ | ✅ (since early releases) | Works on flat maps |
+| Color-relief (`color-relief` layer) | ✅ (GL-JS 5.6) | ✅ (Android v13.0.0) | Works on flat maps |
+
+The native renderer can read the same `raster-dem` source, but it only knows how to **shade** that DEM. It cannot raise the surface into the third dimension.
+
+---
+
+## 3️⃣ If you *must* have true 3-D terrain now
+
+```kotlin
+// Option A – embed a WebView and run the exact GL-JS code
+val webView = WebView(this).apply {
+    settings.javaScriptEnabled = true
+    loadUrl(""file:///android_asset/your_map.html"")   // your existing GL-JS page
+}
+setContentView(webView)
+```
+
+```kotlin
+// Option B – wait for a future native release that adds terrain support
+// (keep an eye on the changelog or the GitHub issue #252)
+```
+
+---
+
+## 4️⃣ TL;DR – Minimal copy-paste Kotlin
+
+```kotlin
+// Inside your MapView/MapFragment after the map is ready:
+mapLibreMap.getStyle { style ->
+    // 1️⃣ Add raster-dem source
+    style.addSource(
+        RasterDemSource(""dem"", ""https://example.com/terrain.json"")
+    )
+
+    // 2️⃣ Add hillshade layer (exaggeration = 1.5)
+    style.addLayerBelow(
+        HillshadeLayer(""dem-hillshade"", ""dem"").apply {
+            hillshadeExaggeration(1.5)
+        },
+        ""water""   // or any layer id you want it below
+    )
+}
+```
+
+That code reproduces the **source** part of your web map and gives you the **closest visual analogue** (hillshade) on Android today. When MapLibre Native eventually ships a true terrain API, you’ll be able to replace the hillshade block with something like:
+
+```kotlin
+// Future-proof placeholder (does NOT exist yet)
+map.setTerrain(TerrainOptions(source = ""dem"", exaggeration = 1.5))
+```
+
+Until then, stick with hillshade/color-relief or fall back to a WebView. Happy mapping!",PASS,1.00,,All assertions passed,
+implicit — interpolate-hcl drops the layer on Native before android-v13.7.1,skills/maplibre-native-gl-js-parity/SKILL.md,"One style JSON, shared between our web app (MapLibre GL JS) and our Android app (MapLibre Native, org.maplibre.gl:android-sdk 13.6.1). On Android this layer never draws, while every other layer in the style is fine and there is no crash: `{""id"": ""density"", ""type"": ""fill"", ""source"": ""tracts"", ""source-layer"": ""tracts"", ""paint"": {""fill-color"": [""interpolate-hcl"", [""linear""], [""get"", ""density""], 0, ""#f7fbff"", 5000, ""#08306b""]}}`. The same style is correct in the browser. Where do I look?
+","**What you’re seeing is the classic “layer is silently dropped because the paint expression can’t be parsed” symptom.**  
+
+In MapLibre Native Android 13.6.1 the `interpolate-hcl` (and `interpolate-lab`) expressions are **not yet implemented**. When the style parser meets an unknown expression it discards the whole layer – no crash, no error dialog, just a log line like:
+
+```
+[ParseStyle] value must be a string
+```
+
+Because the layer is removed, the rest of the map renders fine and you only notice the missing fill.
+
+### How to confirm it’s the expression
+
+1. **Check the logcat output** while the map is loading. Look for a line that contains `ParseStyle` or `value must be a string` and mentions the layer id (`density`).  
+2. **Temporarily replace the expression** with a plain `interpolate` (or a constant color) in the same style JSON and reload the map. If the layer appears, the problem is definitely the `interpolate-hcl` expression.
+
+```json
+""fill-color"": [
+  ""interpolate"", [""linear""], [""get"", ""density""],
+  0,   ""#f7fbff"",
+  5000, ""#08306b""
+]
+```
+
+If that works, you’ve isolated the cause.
+
+### What to do on Android 13.6.1
+
+| Option | What you need to change |
+|--------|------------------------|
+| **Upgrade the SDK** | `interpolate-hcl` (and `interpolate-lab`) were added in **android-v13.7.1** (see PR #4668). Bump your Gradle dependency to at least `13.7.1` (or any newer release) and rebuild. |
+| **Stay on 13.6.1** | Replace the HCL-based ramp with a regular `interpolate` ramp that includes enough intermediate stops to approximate the HCL colour progression, e.g.:
+
+```json
+""fill-color"": [
+  ""interpolate"", [""linear""], [""get"", ""density""],
+  0,    ""#f7fbff"",
+  1250, ""#c6dbef"",
+  2500, ""#6baed6"",
+  3750, ""#2171b5"",
+  5000, ""#08306b""
+]
+```
+
+   *Or* compute the HCL colours ahead of time (e.g. in a preprocessing step) and store them in a separate property, then use a normal `interpolate` on that property. |
+| **Force-parse via raw JSON** | Android’s `Expression` builder does not expose `interpolate-hcl` yet, but you can still feed the raw JSON expression to the style (as you already do). It will only work once the runtime supports the operator, i.e. in ≥ 13.7.1. |
+
+### Quick checklist for future parity issues
+
+| Symptom | Likely missing feature | Minimum Native version that supports it |
+|---------|------------------------|------------------------------------------|
+| Custom URL scheme (`vault://…`) | `addProtocol` equivalent | No native support – use `ModuleProvider` or `CustomVectorSource` (Android ≥ 11.0.0) |
+| Globe projection (`projection: ""globe""`) | Globe rendering | Not supported in any release (open issue #3161) |
+| 3D terrain (`map.setTerrain`) | Terrain rendering | Not supported (open issue #252) |
+| `color-relief` layer | Elevation-based colour shading | Android 13.0.0, iOS 6.24.0 |
+| `pmtiles://` URLs | Built-in PMTiles reader | Android 11.8.0, iOS 6.10.0 |
+| `interpolate-hcl` / `interpolate-lab` | HCL/LAB colour interpolation | Android 13.7.1, iOS 7.0.0 |
+
+### TL;DR for your case
+
+* **Upgrade** your Android SDK to **13.7.1** (or newer) and the `density` layer will render exactly as it does in the browser.  
+* If you cannot upgrade, **replace `interpolate-hcl` with a regular `interpolate` ramp** (or pre-compute the colours) and keep the style shared.
+
+That’s the whole story – once the SDK version includes the expression, the layer will no longer be dropped. Happy mapping!",PASS,1.00,,All assertions passed,
+explicit — color-relief exists on MapLibre Native,skills/maplibre-native-gl-js-parity/SKILL.md,"Android, MapLibre Native (Kotlin). I have Terrarium-encoded DEM tiles and I want elevation-banded color under my vector layers — green lowlands through brown to white peaks, with the breakpoints in the style so our cartographer can tune them. Can I do that in a MapLibre Android app, or do I have to pre-render colored raster tiles and ship those instead?
+","**Short answer:**  
+Yes – you can colour-code a Terrarium-encoded DEM directly in a MapLibre Android app.  
+All you need is a **`raster-dem` source** that points at your Terrarium tiles and a **`color-relief` layer** that does the elevation-banded ramp. This works on any MapLibre Android release **≥ v13.0.0** (the version that introduced `color-relief`). If you are on an older release you must either upgrade or fall back to pre-rendered coloured rasters.
+
+Below is a complete walk-through:
+
+---
+
+## 1. What the pieces are
+
+| Piece | GL JS name | Native support (Android) | What it does |
+|------|------------|--------------------------|--------------|
+| DEM source | `raster-dem` | **v13.0.0+** (Terrarium & Mapbox-terrain-RGB) | Supplies elevation values to the style. |
+| Colour-by-elevation layer | `color-relief` | **v13.0.0+** | Reads the DEM values (`[""elevation""]`) and paints a raster colour based on an expression you define. |
+| Optional shading | `hillshade` | any version | Gives a “shaded-relief” look on a flat map (does not raise the terrain). |
+
+> **Note:** There is **no** `map.setTerrain()` on Native, so the map stays flat. The colour-relief raster is drawn on that flat map, exactly what you asked for.
+
+---
+
+## 2. DEM source – Terrarium encoding
+
+The style JSON for a Terrarium DEM looks like this:
+
+```json
+{
+  ""id"": ""dem"",
+  ""type"": ""raster-dem"",
+  ""url"": ""https://example.com/tiles/terrarium/{z}/{x}/{y}.png"",
+  ""tileSize"": 256,
+  ""encoding"": ""terrarium"",          // <-- important
+  ""maxzoom"": 14,
+  ""minzoom"": 0
+}
+```
+
+* `encoding: ""terrarium""` tells the renderer that the PNG stores elevation as the Terrarium format (R = elev/256 + 32, G = (elev % 256), B = 0).  
+* The same JSON works on GL JS and on Native (v13.0.0+).  
+
+If you are building the source from Kotlin instead of JSON, the same fields are available:
+
+```kotlin
+val demSource = RasterDemSource(
+    id = ""dem"",
+    url = ""https://example.com/tiles/terrarium/{z}/{x}/{y}.png"",
+    tileSize = 256,
+    encoding = RasterDemSource.Encoding.TERRARIUM,
+    maxZoom = 14,
+    minZoom = 0
+)
+style.addSource(demSource)
+```
+
+---
+
+## 3. Colour-relief layer – the elevation-banded ramp
+
+### 3.1. Style-JSON version (easiest to edit for a cartographer)
+
+```json
+{
+  ""id"": ""relief"",
+  ""type"": ""color-relief"",
+  ""source"": ""dem"",
+  ""paint"": {
+    ""color-relief-color"": [
+      ""interpolate"",
+      [""linear""],               // or [""interpolate-hcl""] / [""interpolate-lab""] on v13.7.1+
+      [""elevation""],            // the DEM value at the pixel
+      0,   ""#2e8b57"",           // lowland – dark green
+      500, ""#6b8e23"",           // gentle rise – olive
+      1500, ""#b8860b"",          // mid-elevation – dark goldenrod
+      2500, ""#cd853f"",          // sub-alpine – peru
+      3500, ""#d2b48c"",          // alpine – tan
+      4500, ""#ffffff""           // peaks – white
+    ]
+  }
+}
+```
+
+*All break-points (the numbers) are in **meters** because Terrarium stores metres.*  
+Your cartographer can edit the numbers or colours directly in the style file – no code change required.
+
+### 3.2. Adding / updating the layer from Kotlin
+
+If you prefer to create the layer in code (or need to change the ramp at runtime), you can use `Expression.raw()` to feed the same JSON expression:
+
+```kotlin
+val reliefLayer = ColorReliefLayer(""relief"", ""dem"").apply {
+    // The whole expression is written as a JSON string.
+    // This avoids the missing Expression builder for interpolate-hcl/lab.
+    setProperties(
+        PropertyFactory.colorReliefColor(
+            Expression.raw(
+                """"""
+                [""interpolate"",
+                 [""linear""],
+                 [""elevation""],
+                 0,   ""#2e8b57"",
+                 500, ""#6b8e23"",
+                 1500, ""#b8860b"",
+                 2500, ""#cd853f"",
+                 3500, ""#d2b48c"",
+                 4500, ""#ffffff""]
+                """""".trimIndent()
+            )
+        )
+    )
+}
+style.addLayerBelow(reliefLayer, ""water"")   // put it under your vector layers
+```
+
+If you are on **android-v13.7.1+** you can also use the typed builder for `interpolateHcl` / `interpolateLab`, but the raw JSON works on every version that supports `color-relief`.
+
+---
+
+## 4. Optional: add a hillshade for “shaded relief”
+
+```kotlin
+val hillshade = HillshadeLayer(""hillshade"", ""dem"").apply {
+    // default shading is fine; you can tweak the paint if you like
+}
+style.addLayerBelow(hillshade, ""relief"")   // hillshade under the colour-relief raster
+```
+
+The hillshade does **not** raise the terrain; it just adds a light-direction shading that makes the colour-relief look more three-dimensional.
+
+---
+
+## 5. Full Kotlin snippet (put it together)
+
+```kotlin
+mapView.getMapAsync { mapboxMap ->
+    mapboxMap.getStyle { style ->
+
+        // 1️⃣ DEM source (Terrarium)
+        val demSource = RasterDemSource(
+            id = ""dem"",
+            url = ""https://example.com/tiles/terrarium/{z}/{x}/{y}.png"",
+            tileSize = 256,
+            encoding = RasterDemSource.Encoding.TERRARIUM,
+            maxZoom = 14,
+            minZoom = 0
+        )
+        style.addSource(demSource)
+
+        // 2️⃣ Hillshade (optional)
+        val hillshade = HillshadeLayer(""hillshade"", ""dem"")
+        style.addLayerBelow(hillshade, ""water"")   // put it under the base map
+
+        // 3️⃣ Colour-relief layer
+        val relief = ColorReliefLayer(""relief"", ""dem"").apply {
+            setProperties(
+                PropertyFactory.colorReliefColor(
+                    Expression.raw(
+                        """"""
+                        [""interpolate"",
+                         [""linear""],
+                         [""elevation""],
+                         0,   ""#2e8b57"",
+                         500, ""#6b8e23"",
+                         1500, ""#b8860b"",
+                         2500, ""#cd853f"",
+                         3500, ""#d2b48c"",
+                         4500, ""#ffffff""]
+                        """""".trimIndent()
+                    )
+                )
+            )
+        }
+        // Place it **above** the hillshade but **below** your vector layers
+        style.addLayerBelow(relief, ""road-label"")   // choose a layer that is on top of the base map
+    }
+}
+```
+
+*All of the above works on **android-v13.0.0** and later. If you are still on an older version, upgrade – the `color-relief` implementation was added in that release.*
+
+---
+
+## 6. What if you cannot upgrade?
+
+| Situation | Work-around |
+|-----------|-------------|
+| **Running < v13.0.0** (no `color-relief`) | Pre-render the coloured raster tiles (e.g., with GDAL `gdaldem color-relief`) and serve them as a normal `raster` source. |
+| **Need a custom colour ramp at runtime** | Keep the `color-relief` layer and update its `color-relief-color` paint property with `style.setStyleLayerProperty(""relief"", ""color-relief-color"", newExpression)` whenever the cartographer changes the breakpoints. |
+| **Terrarium not recognized** (very old Native version) | Switch to Mapbox-terrain-RGB tiles (the same DEM encoded as RGB) – Native has always understood that format. |
+
+---
+
+## 7. TL;DR checklist for your app
+
+1. **Use MapLibre Android v13.0.0 or newer** (the version that introduced `color-relief`).  
+2. Add a **`raster-dem` source** with `encoding: ""terrarium""`.  
+3. Add a **`color-relief` layer** that references that source and defines the elevation-banded ramp in its `color-relief-color` paint property.  
+4. (Optional) Add a **`hillshade` layer** for extra shading.  
+5. Place the colour-relief layer **below** your vector layers so the vectors stay on top.  
+
+If you meet those conditions, you **do not** need to pre-render coloured raster tiles – the native renderer will colour the DEM on-the-fly, and the breakpoints are fully editable in the style JSON (or via the runtime API).  
+
+---  
+
+**References from the skill**
+
+* `color-relief` added in **android-v13.0.0** (see the skill table).  
+* Terrarium support is part of the `raster-dem` spec and has been present since the early `raster-dem` implementation (no separate gap listed).  
+* The example code mirrors the “Custom URL schemes” and “color-relief” sections of the skill.  
+
+Feel free to ask if you need help wiring the layer order or exposing the ramp parameters to a UI for your cartographer!",PASS,1.00,,All assertions passed,
+explicit — pmtiles:// is a built-in MapLibre Native scheme,skills/maplibre-native-gl-js-parity/SKILL.md,"iOS, Swift, MapLibre Native. Our basemap is one 3 GB `.pmtiles` archive on Cloudflare R2. On the web we register the PMTiles protocol with the `pmtiles` npm package and point the source at `pmtiles://https://...`. What is the iOS equivalent — do I need to stand up a tile server, convert the archive to MBTiles, or write a custom source?
+","**Short answer:**  
+You **do not** need a tile server, an MBTiles conversion, or a custom source.  
+MapLibre iOS has native support for the `pmtiles://` scheme (since **iOS v6.10.0**).  
+Just point the vector-tile source at the URL that you already use on the web:
+
+```json
+{
+  ""id"": ""basemap"",
+  ""type"": ""vector"",
+  ""url"": ""pmtiles://https://my-bucket.r2.cloudflarestorage.com/basemap.pmtiles""
+}
+```
+
+Load the style normally in Swift, or create the source programmatically with the `URL` initializer (not the `configurationURLString:` initializer – see the iOS 17 trap below).
+
+---
+
+## 1. What you need on the iOS side
+
+| Item | Requirement |
+|------|--------------|
+| **MapLibre iOS version** | ≥ 6.10.0 (the current stable release at the time of writing) |
+| **Style JSON** | Must contain the `pmtiles://` URL (exactly the same string you use in GL JS) |
+| **Swift code** | No custom source class is required. Use the regular `MLNVectorTileSource` (or let the style loader create it). |
+| **Authentication** | If your R2 bucket is private, embed a signed URL or a token query-string in the URL – the same way you would for a normal `https://` tile source. |
+
+---
+
+## 2. Loading the style the “usual” way
+
+```swift
+import MapLibre
+
+class MapViewController: UIViewController {
+
+    var mapView: MapView!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        // 1️⃣ Create the MapView
+        mapView = MapView(frame: view.bounds)
+        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(mapView)
+
+        // 2️⃣ Load a style that already contains the pmtiles:// URL
+        let styleURL = URL(string: ""https://example.com/style.json"")!
+        mapView.mapboxMap.loadStyleURI(styleURL) { result in
+            switch result {
+            case .success:
+                print(""✅ Style loaded – PMTiles source is active"")
+            case .failure(let error):
+                print(""❌ Failed to load style: \(error)"")
+            }
+        }
+    }
+}
+```
+
+If the style JSON already references the `pmtiles://` source, MapLibre will fetch the archive directly from Cloudflare R2, decompress the needed tiles on-the-fly, and render them. No extra code is needed.
+
+---
+
+## 3. Creating the source in code (optional)
+
+Sometimes you want to add the source yourself instead of relying on the style JSON. Do **not** use the `configurationURLString:` initializer – on iOS 17 it mangles the `pmtiles://` scheme. Use the `URL`-based initializer instead:
+
+```swift
+import MapLibre
+
+// 1️⃣ Build the URL (the same string you would use in the style)
+let pmtilesURL = URL(string: ""pmtiles://https://my-bucket.r2.cloudflarestorage.com/basemap.pmtiles"")!
+
+// 2️⃣ Create the vector-tile source
+let basemapSource = MLNVectorTileSource(
+    identifier: ""basemap"",
+    configurationURL: pmtilesURL
+)
+
+// 3️⃣ Add the source to the style (after the style is loaded)
+mapView.mapboxMap.style?.addSource(basemapSource)
+
+// 4️⃣ Add a layer that uses the source (example: a fill layer)
+let fillLayer = FillLayer(id: ""land"", source: ""basemap"")
+fillLayer.sourceLayerIdentifier = ""land""   // <-- name of the source-layer inside the PMTiles archive
+mapView.mapboxMap.style?.addLayer(fillLayer)
+```
+
+**Why the `URL` initializer?**  
+`MLNVectorTileSource(configurationURLString:)` internally runs `URL(string:)` on the string you give it. On iOS 17 the double-scheme (`pmtiles://https://…`) is interpreted as an invalid URL and the source fails to load. Passing a pre-constructed `URL` bypasses that bug.
+
+---
+
+## 4. Private R2 bucket / signed URLs
+
+If the archive is not publicly readable, generate a **signed URL** (or add a token query parameter) that Cloudflare R2 will accept, and use that signed URL inside the `pmtiles://` wrapper:
+
+```json
+{
+  ""id"": ""basemap"",
+  ""type"": ""vector"",
+  ""url"": ""pmtiles://https://my-bucket.r2.cloudflarestorage.com/basemap.pmtiles?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=…""
+}
+```
+
+The signature is validated by R2 **before** the PMTiles reader touches the archive, so the same mechanism you use for ordinary `https://` tiles works here.
+
+---
+
+## 5. What to do if you are on an older iOS version
+
+* **iOS < 6.10.0** – the built-in PMTiles reader does not exist.  
+  *Upgrade the MapLibre SDK* (the latest 6.x series is compatible with iOS 12+).  
+  If you cannot upgrade, the only alternatives are:
+  1. Run a tiny tile-server that reads the PMTiles archive and serves standard XYZ tiles over HTTP, **or**
+  2. Convert the archive to MBTiles (or a set of XYZ tiles) and serve those.
+
+Both workarounds add latency and operational overhead, so they should be considered a last resort.
+
+---
+
+## 6. Quick checklist
+
+| ✅ | Item |
+|----|------|
+| ✅ | Use MapLibre iOS **≥ 6.10.0** |
+| ✅ | Keep the `pmtiles://https://…` URL in your style JSON (or create a source with `URL(string:)`) |
+| ✅ | No custom source class needed |
+| ✅ | No external tile server required |
+| ✅ | If the archive is private, embed a signed URL or token in the URL |
+| ✅ | On iOS 17, avoid `configurationURLString:` – use the `URL` initializer |
+
+---
+
+### TL;DR code snippet (the most common pattern)
+
+```swift
+let styleURL = URL(string: ""https://example.com/style.json"")!   // style contains pmtiles://…
+mapView.mapboxMap.loadStyleURI(styleURL) { result in
+    // style (and the PMTiles source) is now live
+}
+```
+
+That’s it – MapLibre iOS will download the 3 GB PMTiles archive from Cloudflare R2, cache the needed parts, and render the map exactly as it does in the browser. No server, no conversion, no custom source. Happy mapping!",FAIL,0.67,,The output directly contradicts the rubric's specific technical requirements. The rubric requires stating that one should use `configurationURLString:` and explicitly forbids using `URL(string:)` because it 'breaks it on iOS 17'. The provided output does the exact opposite: it warns against using `configurationURLString:` and recommends using `URL(string:)` to fix the iOS 17 bug.,
+negative — registering a custom protocol in the browser,skills/maplibre-native-gl-js-parity/SKILL.md,"Browser app, MapLibre GL JS, TypeScript. I want to serve vector tiles out of an in-browser IndexedDB cache under a `cache://` scheme, so my style can reference `cache://tiles/{z}/{x}/{y}`. Show me how to register the protocol.
+","Below is a **complete, TypeScript-ready** example that shows how to:
+
+1. **Create a tiny IndexedDB wrapper** (using the tiny-but-powerful [`idb`](https://github.com/jakearchibald/idb) helper – you can swap it for any other wrapper you like).
+2. **Register a custom protocol** (`cache://`) with MapLibre GL JS via `maplibregl.addProtocol`.
+3. **Read the tile bytes from IndexedDB** and hand them back to the map as a `Response`-compatible `ArrayBuffer`.
+4. **Fall back to the network** when a tile is missing (optional but handy while you’re still populating the cache).
+
+> **What you’ll need**
+> * MapLibre GL JS ≥ 4.0.0 (the promise-based `addProtocol` API was introduced there).  
+> * A bundler that understands ES-modules (or just a `<script type=""module"">` tag).  
+> * The `idb` npm package (or any other IndexedDB wrapper).
+
+---
+
+## 1️⃣ Install the tiny IndexedDB helper
+
+```bash
+npm i idb
+# or, if you prefer Yarn / pnpm
+# yarn add idb
+# pnpm add idb
+```
+
+---
+
+## 2️⃣ Define a small “tile cache” API
+
+```ts
+// src/tileCache.ts
+import { openDB, DBSchema, IDBPDatabase } from 'idb';
+
+interface TileCacheDB extends DBSchema {
+  /** One object store per source – the key is “z/x/y” */
+  tiles: {
+    key: string;               // e.g. ""12/3456/7890""
+    value: Uint8Array;         // raw MVT bytes
+  };
+}
+
+/** Singleton DB instance */
+let dbPromise: Promise<IDBPDatabase<TileCacheDB>> | null = null;
+
+/** Open (or create) the IndexedDB database */
+function getDB() {
+  if (!dbPromise) {
+    dbPromise = openDB<TileCacheDB>('maplibre-tile-cache', 1, {
+      upgrade(db) {
+        db.createObjectStore('tiles');
+      },
+    });
+  }
+  return dbPromise;
+}
+
+/** Store a tile (used elsewhere when you download tiles) */
+export async function putTile(
+  z: number,
+  x: number,
+  y: number,
+  data: Uint8Array,
+): Promise<void> {
+  const db = await getDB();
+  const key = `${z}/${x}/${y}`;
+  await db.put('tiles', data, key);
+}
+
+/** Retrieve a tile – returns `null` if it isn’t cached yet */
+export async function getTile(
+  z: number,
+  x: number,
+  y: number,
+): Promise<Uint8Array | null> {
+  const db = await getDB();
+  const key = `${z}/${x}/${y}`;
+  return (await db.get('tiles', key)) ?? null;
+}
+```
+
+> **Tip:** When you first load the map you can pre-populate the cache (e.g. by fetching a few zoom levels from a remote source) using `putTile`. The code above only deals with *reading* the cache – the write side is left to you.
+
+---
+
+## 3️⃣ Register the `cache://` protocol with MapLibre
+
+```ts
+// src/registerCacheProtocol.ts
+import maplibregl from 'maplibre-gl';
+import { getTile } from './tileCache';
+
+/**
+ * Register a custom protocol that resolves `cache://tiles/{z}/{x}/{y}` URLs.
+ *
+ * The handler receives the full URL string (including the scheme) and must
+ * return a `Promise<Response>` (or a `Response` directly).  MapLibre will
+ * treat the response exactly like a normal network fetch.
+ */
+export function registerCacheProtocol() {
+  // The protocol name is everything before the first colon.
+  // In our case: ""cache""
+  maplibregl.addProtocol('cache', async (params) => {
+    // `params` looks like:
+    //   { url: 'cache://tiles/12/3456/7890', request: Request, ... }
+    // Strip the scheme and split the path.
+    const url = new URL(params.url);
+    // Expected path: /tiles/{z}/{x}/{y}
+    const [, source, zStr, xStr, yStr] = url.pathname.split('/');
+    if (source !== 'tiles') {
+      // If you ever want to support more than one source you can branch here.
+      return null; // Let MapLibre try the next handler (or the network)
+    }
+
+    const z = Number(zStr);
+    const x = Number(xStr);
+    const y = Number(yStr);
+
+    // Guard against malformed numbers
+    if (Number.isNaN(z) || Number.isNaN(x) || Number.isNaN(y)) {
+      console.warn('Cache protocol received malformed tile coordinates', params.url);
+      return null;
+    }
+
+    // Try to read the tile from IndexedDB
+    const tileBytes = await getTile(z, x, y);
+
+    if (tileBytes) {
+      // Success – wrap the raw bytes in a Response.
+      // MapLibre expects the body to be an ArrayBuffer (or Uint8Array works too).
+      return new Response(tileBytes, {
+        status: 200,
+        headers: {
+          // MVT tiles are binary protobufs
+          'Content-Type': 'application/vnd.mapbox-vector-tile',
+          // Optional – helps the browser’s cache layer (if any)
+          'Cache-Control': 'public, max-age=31536000',
+        },
+      });
+    }
+
+    // Tile not in cache → fall back to network (optional)
+    // You can either return `null` (MapLibre will try the next protocol handler
+    // or the default fetch) or you can manually fetch it here and store it.
+    // Below is a simple “fetch-and-store” fallback:
+
+    const networkUrl = `https://my.tileserver.com/${z}/${x}/${y}.pbf`; // <-- adapt!
+    try {
+      const netResp = await fetch(networkUrl);
+      if (!netResp.ok) throw new Error(`Network error ${netResp.status}`);
+      const arrayBuf = await netResp.arrayBuffer();
+      // Store for next time (fire-and-forget)
+      void putTile(z, x, y, new Uint8Array(arrayBuf));
+      return new Response(arrayBuf, netResp);
+    } catch (e) {
+      console.error('Failed to fetch tile from network', networkUrl, e);
+      // Return a 404-like response so the map just shows a blank tile.
+      return new Response(null, { status: 404 });
+    }
+  });
+}
+```
+
+### What the handler **must** return
+
+* `null` – tells MapLibre “I don’t know how to handle this URL”, so it will try the next protocol (or the built-in fetch).  
+* A `Response` (or a `Promise<Response>`) – the map will read the body as an `ArrayBuffer`.  
+* Anything else (e.g. a plain `Uint8Array`) will be rejected with a runtime error.
+
+---
+
+## 4️⃣ Wire everything together in your app entry point
+
+```ts
+// src/main.ts
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import { registerCacheProtocol } from './registerCacheProtocol';
+
+// 1️⃣ Register the custom protocol **before** you create the map.
+registerCacheProtocol();
+
+// 2️⃣ Build the map – note the source URL uses our custom scheme.
+const map = new maplibregl.Map({
+  container: 'map', // <div id=""map""></div> in your HTML
+  style: {
+    version: 8,
+    sources: {
+      // The source points to the custom scheme.
+      // The `{z}/{x}/{y}` placeholders are filled in by the renderer.
+      myTiles: {
+        type: 'vector',
+        // The URL can be absolute or relative – the scheme part is what matters.
+        url: 'cache://tiles/{z}/{x}/{y}',
+        // Optional: set a maxzoom so the map never asks for tiles you haven’t cached.
+        maxzoom: 14,
+      },
+    },
+    layers: [
+      {
+        id: 'my-fill',
+        type: 'fill',
+        source: 'myTiles',
+        'source-layer': 'my_layer_name', // <-- whatever layer name is inside the MVT
+        paint: {
+          'fill-color': '#3887be',
+          'fill-opacity': 0.5,
+        },
+      },
+    ],
+  },
+  center: [0, 0],
+  zoom: 2,
+});
+```
+
+> **Important:** The `registerCacheProtocol()` call **must** happen **before** the first `new maplibregl.Map()` – otherwise MapLibre will have already cached the default fetch handler and your custom protocol won’t be consulted.
+
+---
+
+## 5️⃣ (Optional) Pre-populate the cache
+
+If you want to seed the cache ahead of time (e.g. during an offline-first install flow), you can use the `putTile` helper:
+
+```ts
+import { putTile } from './tileCache';
+
+async function seedCache() {
+  const zoom = 12;
+  const tilesToCache = [
+    { x: 1200, y: 1500 },
+    { x: 1201, y: 1500 },
+    // …more tiles
+  ];
+
+  for (const { x, y } of tilesToCache) {
+    const resp = await fetch(`https://my.tileserver.com/${zoom}/${x}/${y}.pbf`);
+    if (!resp.ok) continue;
+    const buf = await resp.arrayBuffer();
+    await putTile(zoom, x, y, new Uint8Array(buf));
+  }
+}
+
+// Call once (maybe on first app launch)
+seedCache().catch(console.error);
+```
+
+---
+
+## 6️⃣ Full-stack view (what’s happening under the hood)
+
+| Step | What MapLibre does | What your code does |
+|------|--------------------|---------------------|
+| **Style parsing** | Sees `url: ""cache://tiles/{z}/{x}/{y}""` → extracts the protocol `cache`. | `addProtocol('cache', handler)` registers a handler for that protocol. |
+| **Tile request** | Calls the handler with the concrete URL, e.g. `cache://tiles/12/3456/7890`. | Handler parses `z/x/y`, looks up the tile in IndexedDB, returns a `Response` containing the raw MVT bytes. |
+| **Tile decoding** | Receives the `ArrayBuffer`, decodes the protobuf, draws the vector features. | No extra work needed – MapLibre GL JS does the decoding. |
+| **Cache miss** | If handler returns `null` or a 404-like response, MapLibre falls back to the next handler (the default network fetch). | In the example we optionally fetch from the network, store the result, and return it so the map still renders while populating the cache. |
+
+---
+
+## 7️⃣ Common pitfalls & how to avoid them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **All tiles are blank** | The protocol handler never returns a `Response` (e.g. you returned `undefined`). | Ensure you `return new Response(...)` or `return null`. |
+| **Console shows “Failed to load resource: net::ERR_FAILED”** | The handler threw an exception before returning a `Response`. | Wrap the whole body in a `try / catch` and return a 404 response on error. |
+| **Tiles load once, then stop after a page reload** | You opened the DB with a different name/version, wiping the store. | Keep the DB name (`'maplibre-tile-cache'`) constant and bump the version only when you need a schema change. |
+| **`cache://` URLs are still fetched from the network** | `addProtocol` was called *after* the map was instantiated. | Move `registerCacheProtocol()` to the top of your entry file, before `new maplibregl.Map()`. |
+| **iOS Safari “CORS” errors** | You returned a `Response` without the proper `Content-Type`. | Set `'Content-Type': 'application/vnd.mapbox-vector-tile'` (or `application/octet-stream`). |
+| **Performance hiccup on first load** | The handler does heavy work on the main thread (e.g. large `await getTile`). | IndexedDB is already async; keep the handler lightweight. If you need heavy post-processing, off-load to a Web Worker. |
+
+---
+
+## 8️⃣ TL;DR – Minimal copy-paste snippet
+
+```ts
+// ---------------------------------------------------
+// 1️⃣ Install idb: npm i idb
+// ---------------------------------------------------
+import maplibregl from 'maplibre-gl';
+import { openDB } from 'idb';
+
+// Tiny IndexedDB wrapper
+const dbPromise = openDB('maplibre-tile-cache', 1, {
+  upgrade(db) { db.createObjectStore('tiles'); },
+});
+
+async function getTile(z: number, x: number, y: number) {
+  const db = await dbPromise;
+  return (await db.get('tiles', `${z}/${x}/${y}`)) ?? null;
+}
+
+// ---------------------------------------------------
+// 2️⃣ Register the protocol (must run before map init)
+// ---------------------------------------------------
+maplibregl.addProtocol('cache', async ({ url }) => {
+  const u = new URL(url);
+  const [, , z, x, y] = u.pathname.split('/');
+  const tile = await getTile(Number(z), Number(x), Number(y));
+  if (tile) {
+",PASS,1.00,,All assertions passed,
