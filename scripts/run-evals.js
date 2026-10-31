@@ -693,8 +693,7 @@ export function dayCost(cost) {
  * What each config may spend, by `passCost` over its requests as `sizeConfig`
  * measures them. The day's plan rests on every one of these, so a config that
  * cannot be sized throws here, before the run spends anything, rather than
- * running at no cost: the 2026-10-30 run planned both its configs that way
- * after a change to what `sizeConfig` returns, and nothing noticed.
+ * running at no cost.
  */
 export function costsOf(configs, { limits }) {
   return new Map(
