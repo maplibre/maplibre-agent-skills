@@ -11,6 +11,7 @@ import {
   buildCommand,
   childEnv,
   combineAttempts,
+  costsOf,
   dayCost,
   dayRefusal,
   daySpent,
@@ -33,6 +34,7 @@ import {
   SIGKILL_AFTER_MS,
   withoutUnwrittenSkills
 } from './run-evals.js';
+import { listEvalConfigs } from './lib/eval-verdicts.js';
 
 function workspace() {
   const root = mkdtempSync(join(tmpdir(), 'run-evals-'));
@@ -1577,6 +1579,29 @@ describe('dayCost', () => {
     assert.equal(
       dayCost({ firstPass: 30000, largest: 7900 }),
       30000 + 4 * 7900
+    );
+  });
+});
+
+describe('costsOf', () => {
+  const limits = { tokensPerMinute: 8000, templateTokens: 74 };
+
+  it("measures every eval config's cost from its requests as sizeConfig sizes them", () => {
+    const configs = listEvalConfigs();
+    const costs = costsOf(configs, { limits });
+    assert.ok(configs.length > 0);
+    for (const config of configs) {
+      const cost = costs.get(config);
+      assert.ok(cost.requests > 0, `${config} has no sized request`);
+      assert.ok(cost.largest > 0, `${config} has no largest request`);
+      assert.ok(cost.firstPass >= cost.largest, `${config} adds up wrong`);
+    }
+  });
+
+  it('throws for a config it cannot size, before the run spends anything', () => {
+    assert.throws(
+      () => costsOf(['evals/prompts/maplibre-unwritten.yaml'], { limits }),
+      /ENOENT/
     );
   });
 });

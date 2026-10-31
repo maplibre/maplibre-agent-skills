@@ -690,6 +690,22 @@ export function dayCost(cost) {
 }
 
 /**
+ * What each config may spend, by `passCost` over its requests as `sizeConfig`
+ * measures them. The day's plan rests on every one of these, so a config that
+ * cannot be sized throws here, before the run spends anything, rather than
+ * running at no cost: the 2026-10-30 run planned both its configs that way
+ * after a change to what `sizeConfig` returns, and nothing noticed.
+ */
+export function costsOf(configs, { limits }) {
+  return new Map(
+    configs.map((config) => [
+      config,
+      passCost(sizeConfig(config, { limits }).sizes)
+    ])
+  );
+}
+
+/**
  * The configs a run can grade, and the ones whose SKILL.md is not written yet.
  * Such a config is a new skill's rubric round: its tests run at baseline by
  * dispatch (`--baseline`), and there is no skill to grade until the file
@@ -1537,22 +1553,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const tokensPerDay = Number(
     process.env.EVAL_TOKENS_PER_DAY || TOKENS_PER_DAY_DEFAULT
   );
-  const costs = new Map();
-  for (const config of order) {
-    try {
-      costs.set(config, passCost(sizeConfig(config, { limits })));
-    } catch (error) {
-      console.log(
-        `${skillOf(config)}: not sized (${error.message}), so planned at no cost.`
-      );
-    }
-  }
+  const costs = costsOf(order, { limits });
 
   if (args.dryRun) {
     for (const config of order) {
-      const cost = costs.get(config);
       console.log(
-        `${skillOf(config)}: may need ${cost ? dayCost(cost) : 'an unknown number of'} of the day's ${tokensPerDay} generator tokens.`
+        `${skillOf(config)}: may need ${dayCost(costs.get(config))} of the day's ${tokensPerDay} generator tokens.`
       );
     }
     console.log(
