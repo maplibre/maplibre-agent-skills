@@ -169,8 +169,9 @@ A single combined tileset is defensible in one narrow case: a self-contained art
 5. **tippecanoe** (generate vector tiles from GeoJSON) — [github.com/felt/tippecanoe](https://github.com/felt/tippecanoe)
 6. **Leaflet** — [leaflet.js](https://leafletjs.com/)
 7. **MapLibre GL Leaflet** — [github.com/maplibre/maplibre-gl-leaflet](https://github.com/maplibre/maplibre-gl-leaflet)
-8. **Cloud-native geospatial formats**: FlatGeobuf ([flatgeobuf.org](https://flatgeobuf.org/)), GeoParquet ([GeoParquet](https://geoparquet.org/)), Cloud-Optimized GeoTIFF ([COG website](https://cogeo.org/))
-9. **awesome-maplibre** — [github.com/maplibre/awesome-maplibre](https://github.com/maplibre/awesome-maplibre)
+8. **Leaflet migration guide** — [maplibre.org/maplibre-gl-js/docs/guides/leaflet-migration-guide/](https://maplibre.org/maplibre-gl-js/docs/guides/leaflet-migration-guide/)
+9. **Cloud-native geospatial formats**: FlatGeobuf ([flatgeobuf.org](https://flatgeobuf.org/)), GeoParquet ([GeoParquet](https://geoparquet.org/)), Cloud-Optimized GeoTIFF ([COG website](https://cogeo.org/))
+10. **awesome-maplibre** — [github.com/maplibre/awesome-maplibre](https://github.com/maplibre/awesome-maplibre)
 
 ---
 
