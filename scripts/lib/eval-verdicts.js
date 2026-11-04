@@ -350,7 +350,7 @@ function rerunSignal(tests) {
   const each = tests
     .map(
       (test) =>
-        `${String(test.description).replace(/\|/g, '\\|')}: ${test.attempts.join(', ')}`
+        `${String(test.description).replace(/\\/g, '\\\\').replace(/\|/g, '\\|')}: ${test.attempts.join(', ')}`
     )
     .join('; ');
   return `re-ran ${tests.length} test${tests.length === 1 ? '' : 's'} (${each})`;
