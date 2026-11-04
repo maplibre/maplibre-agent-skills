@@ -108,7 +108,7 @@ Most MapLibre workflows use vector tiles; increasing numbers are integrating `ra
 
 ### Using MapLibre with Leaflet
 
-[Leaflet](https://leafletjs.com/) is a widely used JavaScript mapping library whose core draws only raster tiles. If your app is built on Leaflet, [MapLibre GL Leaflet](https://github.com/maplibre/maplibre-gl-leaflet) adds a live MapLibre GL JS map to it as a Leaflet layer, so the app can draw a vector style from hosted vector tile sources.
+[Leaflet](https://leafletjs.com/) is a widely used JavaScript mapping library whose core draws only raster tiles: without a plugin, it cannot consume a vector tile source. When an app built on Leaflet wants a vector tile basemap, state that limit first, then the way around it: [MapLibre GL Leaflet](https://github.com/maplibre/maplibre-gl-leaflet) adds a live MapLibre GL JS map to the Leaflet map as a Leaflet layer, so the app can draw a vector style from hosted vector tile sources.
 
 ## Combining source types
 
