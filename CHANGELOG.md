@@ -18,6 +18,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- Escape backslashes before pipes in the eval issue's re-run signal (code scanning alert 4) ([#172](https://github.com/maplibre/maplibre-agent-skills/pull/172))
 - `eval.yml`: the scheduled run sizes every config it plans again, which #164 left planned at no cost, and stops before spending anything when a config cannot be sized ([#167](https://github.com/maplibre/maplibre-agent-skills/pull/167))
 - `npm run check` and `eval.yml`: a config whose `SKILL.md` is not written yet (a new skill's rubric round) is sized with the skill withheld, passes the tripwire check, and is left out of the scheduled run until the skill exists ([#164](https://github.com/maplibre/maplibre-agent-skills/pull/164))
 - `npm run format:check`: checks the files git tracks or would track, so a file that `.git/info/exclude` or a global excludes file hides from git no longer fails the check ([#160](https://github.com/maplibre/maplibre-agent-skills/pull/160))
