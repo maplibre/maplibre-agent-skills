@@ -8,6 +8,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Fixed
 
+- `maplibre-tile-sources`: states that Leaflet's core draws only raster tiles before recommending MapLibre GL Leaflet, in the paragraph a short answer is drawn from ([#181](https://github.com/maplibre/maplibre-agent-skills/pull/181))
 - `maplibre-source-wiring`: states what a hand-wired `tiles` source costs (no zoom range unless you supply one) in the paragraph that recommends `url`, so a short answer still says it ([#168](https://github.com/maplibre/maplibre-agent-skills/pull/168))
 - `maplibre-source-wiring`: keeps its failure modes out of the tips or gotchas section of an answer to an unrelated question ([#163](https://github.com/maplibre/maplibre-agent-skills/pull/163))
 - `maplibre-pmtiles-patterns`: the layer names are the `vector_layers` array of `pmtiles show --metadata`, which plain `show` prints only as `<object>`; `verify` checks the archive structure, not tile contents ([#157](https://github.com/maplibre/maplibre-agent-skills/pull/157))
