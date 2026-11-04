@@ -1,6 +1,6 @@
 ---
 name: maplibre-native-gl-js-parity
-description: Where MapLibre Native (Android, iOS) and MapLibre GL JS differ, release by release — custom URL schemes (`addProtocol`), globe projection, 3D terrain, `interpolate-hcl` and `interpolate-lab`, the `color-relief` layer, and PMTiles — with the Native release that closed each gap, the tracking issue for each still open, and what to do on Native instead. Use when a style or feature that works in the browser does nothing in an Android or iOS app, when porting MapLibre GL JS code to Kotlin or Swift, or when deciding whether a MapLibre feature exists on Native.
+description: Six places where MapLibre Native (Android, iOS) and MapLibre GL JS differ, release by release — custom URL schemes (`addProtocol`), globe projection, 3D terrain, `interpolate-hcl` and `interpolate-lab`, the `color-relief` layer, and PMTiles — with the Native release that closed each gap, the tracking issue for each still open, and what to do on Native instead. Use when a style or feature that works in the browser does nothing in an Android or iOS app, or when porting MapLibre GL JS code to Kotlin or Swift.
 metadata:
   status: verified
 ---
@@ -20,7 +20,7 @@ These are symptoms as you would observe them, before you know the cause:
 - **Elevation-banded color on a phone without pre-rendered tiles:** a `color-relief` layer, on Native since android-v13.0.0 and ios-v6.24.0.
 - **A `.pmtiles` archive in an iOS or Android app:** no tile server, conversion, or package; `pmtiles://` is built in since android-v11.8.0 and ios-v6.10.0.
 
-**Not this skill.** A question about a browser app alone has no Native caveat to add. The gaps outside this table are on MapLibre Native's [`js-parity` label](https://github.com/maplibre/maplibre-native/issues?q=label%3Ajs-parity).[1]
+**Scope.** The table's six gaps are the ones where a model answering without this skill gets the API or the release wrong. The renderers differ in other places too. For a feature not in the table, find the release that added it in the Native CHANGELOGs.[5] [6] The `js-parity` label tracks open gaps,[1] but some open issues there describe shipped features.
 
 ## The gaps, and what to do on Native
 
@@ -184,7 +184,7 @@ Since android-v13.7.1 an archive bundled in the APK loads with `pmtiles://asset:
 
 ## References
 
-1. [**MapLibre Native `js-parity` label**](https://github.com/maplibre/maplibre-native/issues?q=label%3Ajs-parity) — every open gap between the two renderers
+1. [**MapLibre Native `js-parity` label**](https://github.com/maplibre/maplibre-native/issues?q=label%3Ajs-parity) — Native's tracking issues for gaps between the two renderers
 2. [**maplibre-native#3562**](https://github.com/maplibre/maplibre-native/issues/3562) — custom URL schemes (`addProtocol`) on Native
 3. [**maplibre-native#3161**](https://github.com/maplibre/maplibre-native/issues/3161) — globe projection on Native
 4. [**maplibre-native#252**](https://github.com/maplibre/maplibre-native/issues/252) — 3D terrain on Native
