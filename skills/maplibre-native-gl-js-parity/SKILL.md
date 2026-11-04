@@ -157,23 +157,23 @@ On an earlier release the paint value does not parse and the whole layer is drop
 
 ## PMTiles: built in, with one iOS trap
 
-Native reads a PMTiles archive directly through its own `pmtiles://` scheme, since android-v11.8.0 and ios-v6.10.0 ([#2882](https://github.com/maplibre/maplibre-native/pull/2882)):[5] [6] no tile server, no MBTiles conversion, no custom source, and no `pmtiles` package or `URLProtocol` subclass. Put the scheme in front of the archive's full URL in the style:
+Native reads a PMTiles archive directly through its own `pmtiles://` scheme, since android-v11.8.0 and ios-v6.10.0 ([#2882](https://github.com/maplibre/maplibre-native/pull/2882)):[5] [6] no tile server, no MBTiles conversion, no custom source, and no `pmtiles` package or `URLProtocol` subclass. Put the scheme in front of the archive's full URL in the style, here a test archive MapLibre hosts:
 
 ```json
-{ "basemap": { "type": "vector", "url": "pmtiles://https://example.com/basemap.pmtiles" } }
+{ "world": { "type": "vector", "url": "pmtiles://https://demotiles.maplibre.org/pmtiles/vector/world.pmtiles" } }
 ```
 
-That style entry works on Android and iOS alike. A source built in Swift code uses `configurationURLString:`, the initializer that takes the string as is. `URL(string:)` mangles `pmtiles://https://` on iOS 17, so a source made with `configurationURL:` never loads ([#3151](https://github.com/maplibre/maplibre-native/issues/3151)):[8]
+That style entry works on Android and iOS alike. MapLibre's iOS guide covers local archives and raster sources too.[11] A vector source built in Swift code uses `configurationURLString:`, the initializer that takes the string as is. `URL(string:)` mangles `pmtiles://https://` on iOS 17, so a source made with `configurationURL:` never loads ([#3151](https://github.com/maplibre/maplibre-native/issues/3151)):[8]
 
 ```swift
-let basemap = MLNVectorTileSource(
-    identifier: "basemap",
-    configurationURLString: "pmtiles://https://example.com/basemap.pmtiles"
+let world = MLNVectorTileSource(
+    identifier: "world",
+    configurationURLString: "pmtiles://https://demotiles.maplibre.org/pmtiles/vector/world.pmtiles"
 )
-style.addSource(basemap)
+style.addSource(world)
 ```
 
-- ❌ `MLNVectorTileSource(identifier: "basemap", configurationURL: URL(string: "pmtiles://https://…")!)`: the `URL` form is the one iOS 17 breaks.
+- ❌ `MLNVectorTileSource(identifier: "world", configurationURL: URL(string: "pmtiles://https://…")!)`: the `URL` form is the one iOS 17 breaks, though the iOS guide's samples use it.
 
 Since android-v13.7.1 an archive bundled in the APK loads with `pmtiles://asset://…`.[5]
 
@@ -191,9 +191,10 @@ Since android-v13.7.1 an archive bundled in the APK loads with `pmtiles://asset:
 5. [**MapLibre Native Android CHANGELOG**](https://github.com/maplibre/maplibre-native/blob/main/platform/android/CHANGELOG.md) — 11.0.0 custom `ModuleProvider` ([#2231](https://github.com/maplibre/maplibre-native/pull/2231)); 11.8.0 PMTiles ([#2882](https://github.com/maplibre/maplibre-native/pull/2882)); 13.0.0 `color-relief` ([#3965](https://github.com/maplibre/maplibre-native/pull/3965)); 13.5.0 `CustomVectorSource` ([#4377](https://github.com/maplibre/maplibre-native/pull/4377)); 13.7.1 `interpolate-lab` and `interpolate-hcl` ([#4668](https://github.com/maplibre/maplibre-native/pull/4668)) and `pmtiles://asset://` ([#4602](https://github.com/maplibre/maplibre-native/pull/4602))
 6. [**MapLibre Native iOS CHANGELOG**](https://github.com/maplibre/maplibre-native/blob/main/platform/ios/CHANGELOG.md) — 6.0.0 the `MGL` to `MLN` prefix change; 6.10.0 PMTiles; 6.24.0 `color-relief`; 7.0.0 `interpolate-lab` and `interpolate-hcl`
 7. [**Android API, android-v13.7.1**](https://github.com/maplibre/maplibre-native/tree/android-v13.7.1/platform/android/MapLibreAndroid/src/main/java/org/maplibre/android) — `ModuleProvider.java`, `http/HttpRequest.java`, `http/HttpResponder.java`, `module/http/HttpRequestImpl.java`, `module/http/HttpRequestUtil.java`, `style/sources/CustomVectorSource.kt`, `style/sources/CustomVectorTileProvider.kt`, `style/sources/TileData.kt`, `style/layers/ColorReliefLayer.java`, `style/layers/PropertyFactory.java`, `style/expressions/Expression.java`
-8. [**`MLNVectorTileSource.h`**](https://github.com/maplibre/maplibre-native/blob/main/platform/darwin/src/MLNVectorTileSource.h) — the `configurationURLString:` initializer and its iOS 17 note; [maplibre-native#3151](https://github.com/maplibre/maplibre-native/issues/3151)
+8. [**`MLNVectorTileSource.h`**](https://github.com/maplibre/maplibre-native/blob/main/platform/darwin/src/MLNVectorTileSource.h) — the `configurationURLString:` initializer and its iOS 17 note
 9. [**MapLibre GL JS CHANGELOG**](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md) — 4.0.0 promise-based `addProtocol`; 5.6.0 `color-relief`
 10. [**MapLibre Native resource loading, ios-v7.0.0**](https://github.com/maplibre/maplibre-native/tree/ios-v7.0.0/platform) — `default/src/mln/storage/main_resource_loader.cpp` (the schemes Native reads itself), `darwin/src/MLNNetworkConfiguration.h` (`sessionConfiguration`), `darwin/core/http_file_source.mm` (the `URLSession` built from it and the `NSHTTPURLResponse` check)
+11. [**MapLibre Native for iOS: PMTiles**](https://maplibre.org/maplibre-native/ios/latest/documentation/maplibre-native-for-ios/pmtiles/) — remote and local archives, vector and raster sources
 
 ---
 
