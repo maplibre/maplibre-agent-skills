@@ -786,6 +786,35 @@ describe('classificationBlock', () => {
     assert.match(block, /\| maplibre-fonts-glyphs \| pass \| — \|/);
   });
 
+  it('escapes backslashes before pipes in rerun descriptions', () => {
+    const summary = withConfigs([
+      {
+        skill: 'maplibre-cartography',
+        verdict: 'fail',
+        signatures: [],
+        retry: {
+          tests: [
+            {
+              description: String.raw`path\|with\slashes`,
+              attempts: ['fail'],
+              verdict: 'fail'
+            }
+          ]
+        }
+      }
+    ]);
+    const block = classificationBlock({
+      summary,
+      evalResult: 'failure',
+      publish: { commit: 'success', sync: 'success', statusCommit: 'success' }
+    });
+    assert.ok(
+      block.includes(
+        String.raw`| maplibre-cartography | fail | re-ran 1 test (path\\\|with\\slashes: fail) |`
+      )
+    );
+  });
+
   it('names the rate-limit waits of both attempts, by host', () => {
     const summary = withConfigs([
       {
