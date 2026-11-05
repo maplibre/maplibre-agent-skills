@@ -5,12 +5,17 @@ import {
   breakingNotes,
   extractTerms,
   findHits,
+  findRow,
   issueBody,
   issueMarker,
   lineMatches,
+  linkedNumbers,
+  parseRows,
   parseWatchList,
+  rowMentions,
   selectReleases,
-  splitNotes
+  splitNotes,
+  tableRows
 } from './lib/release-watch.js';
 
 // Trimmed from the real MapLibre GL JS v6.0.0 release body. Note the shape that
@@ -384,5 +389,210 @@ describe('selectReleases', () => {
       selectReleases(releases, { published_at: '2026-02-01T00:00:00Z' }),
       []
     );
+  });
+});
+
+// Trimmed from real MapLibre Native release bodies: android-v13.0.0 (#3965),
+// android-v13.7.1 (#4602) and the android-v2026.11.2-globe prerelease (#4533).
+// None of these notes announces a removal.
+const NATIVE_NOTES = `### ✨ Features and improvements
+
+- core: Update Hillshade Algorithms and add Color-Relief Layer support ([#3965](https://github.com/maplibre/maplibre-native/pull/3965))
+- Load PMTiles archives bundled in the APK \`assets/\` directory with \`pmtiles://asset://...\` URLs. Asset requests now read only the requested byte range ([#4602](https://github.com/maplibre/maplibre-native/pull/4602)).
+- feat(core): render the map as a globe when the style sets \`"projection": {"type": "globe"}\` ([#4533](https://github.com/maplibre/maplibre-native/pull/4533)).
+- Make symbol guard checks opt-in, so symbol-dense tiles load faster. To keep them, set the environment variable \`MLN_SYMBOL_GUARDS=1\` before the first map loads.
+`;
+
+const PARITY = {
+  path: 'skills/maplibre-native-gl-js-parity/SKILL.md',
+  content: [
+    '| Feature | MapLibre GL JS | MapLibre Native |',
+    '| ------- | -------------- | --------------- |',
+    '| Globe projection (`projection: globe`) | Yes | No release; [#3161](https://github.com/maplibre/maplibre-native/issues/3161) open |',
+    '| 3D terrain (`map.setTerrain`) | Yes | No release; [#252](https://github.com/maplibre/maplibre-native/issues/252) open |',
+    '| `color-relief` layer | 5.6.0 | android-v13.0.0 ([#3965](https://github.com/maplibre/maplibre-native/pull/3965)) |',
+    '| PMTiles | `addProtocol` | Built in ([#2882](https://github.com/maplibre/maplibre-native/pull/2882)) |'
+  ].join('\n')
+};
+
+const row = (fields) => ({
+  repo: 'maplibre/maplibre-native',
+  skill: 'maplibre-native-gl-js-parity',
+  ...fields
+});
+
+const ROWS = [
+  row({ row: 'Globe projection', terms: 'globe' }),
+  row({ row: '3D terrain', terms: 'terrain' }),
+  row({ row: '`color-relief`', terms: 'color-relief, colorrelief' }),
+  row({ row: 'PMTiles', terms: 'pmtiles' })
+];
+
+describe('tableRows', () => {
+  it('skips the header and separator, and trims the first cell', () => {
+    const rows = tableRows(PARITY.content);
+    assert.equal(rows.length, 4);
+    assert.equal(rows[0].first, 'Globe projection (`projection: globe`)');
+    assert.equal(rows[0].line, 3);
+  });
+});
+
+describe('linkedNumbers', () => {
+  it("reads the issues and pull requests a line links in the repo, and no other repo's", () => {
+    const line =
+      '[#1](https://github.com/maplibre/maplibre-native/issues/1), [#2](https://github.com/maplibre/maplibre-native/pull/2), https://github.com/maplibre/maplibre-gl-js/issues/3';
+    assert.deepEqual(linkedNumbers(line, 'maplibre/maplibre-native'), [
+      '1',
+      '2'
+    ]);
+  });
+});
+
+describe('rowMentions', () => {
+  const mentions = rowMentions(NATIVE_NOTES, ROWS, [PARITY]);
+  const onRow = (name) => mentions.filter((m) => m.row === name);
+
+  it("flags a note that adds a row's feature, whatever its case", () => {
+    const [relief] = onRow('`color-relief`');
+    assert.match(relief.note, /Color-Relief Layer support/);
+    assert.equal(relief.term, 'color-relief');
+  });
+
+  it('reads every note, not only the ones that announce a removal', () => {
+    assert.equal(breakingNotes(NATIVE_NOTES).length, 0);
+    assert.equal(onRow('Globe projection').length, 1);
+    assert.equal(onRow('PMTiles').length, 1);
+  });
+
+  it('places the row at its file:line', () => {
+    const [relief] = onRow('`color-relief`');
+    assert.equal(relief.path, PARITY.path);
+    assert.equal(relief.line, 5);
+  });
+
+  it('leaves a note that mentions no row alone', () => {
+    assert.ok(mentions.every((m) => !m.note.includes('MLN_SYMBOL_GUARDS')));
+    assert.equal(onRow('3D terrain').length, 0);
+  });
+
+  it("flags a note that links the row's issue without naming its feature", () => {
+    const [hit] = rowMentions(
+      '- Fix a crash on resume ([#3161](https://github.com/maplibre/maplibre-native/issues/3161))',
+      ROWS,
+      [PARITY]
+    );
+    assert.equal(hit.row, 'Globe projection');
+    assert.equal(hit.term, '#3161');
+  });
+
+  it('matches an issue number whole, and only in the watched repo', () => {
+    const body = [
+      '- Fix label overlap ([#2520](https://github.com/maplibre/maplibre-native/pull/2520))',
+      '- Port the fix from maplibre/maplibre-gl-js#252'
+    ].join('\n');
+    assert.deepEqual(rowMentions(body, ROWS, [PARITY]), []);
+  });
+
+  it('still reports a listed row its skill no longer has, without a location', () => {
+    const [hit] = rowMentions(
+      NATIVE_NOTES,
+      [row({ row: 'A row that was renamed', terms: 'globe' })],
+      [PARITY]
+    );
+    assert.equal(hit.path, null);
+  });
+});
+
+describe('issueBody with table row mentions', () => {
+  const mentions = rowMentions(NATIVE_NOTES, ROWS, [PARITY]);
+  const only = issueBody({
+    repo: 'maplibre/maplibre-native',
+    tag: 'android-v13.0.0',
+    url: 'https://example.invalid/android-v13.0.0',
+    publishedAt: '2026-08-01T10:00:00Z',
+    hits: [],
+    mentions,
+    runUrl: ''
+  });
+
+  it('says the release mentions a table row when nothing was removed', () => {
+    assert.match(only, /Its release notes mention a skill table row/);
+    assert.doesNotMatch(only, /announce a removal/);
+  });
+
+  it('cites each row as file:line under the note that mentions it', () => {
+    assert.match(only, /Color-Relief Layer support/);
+    assert.match(
+      only,
+      /`skills\/maplibre-native-gl-js-parity\/SKILL\.md:5`: the "`color-relief`" row/
+    );
+  });
+
+  it('reports removals and row mentions in one issue', () => {
+    const both = issueBody({
+      repo: 'maplibre/maplibre-gl-js',
+      tag: 'v6.0.0',
+      url: 'https://example.invalid/v6.0.0',
+      publishedAt: '2026-07-22T10:00:00Z',
+      hits: findHits(GL_JS_V6, [
+        { path: 'skills/x/SKILL.md', content: 'see dist/maplibre-gl.js' }
+      ]),
+      mentions,
+      runUrl: ''
+    });
+    assert.match(both, /announce a removal/);
+    assert.match(both, /They also mention a skill table row/);
+  });
+});
+
+describe('parseRows', () => {
+  it('reads the rows list, and leaves it out of the watch list', () => {
+    const source = [
+      'watch:',
+      '  - repo: maplibre/maplibre-native',
+      "    why: 'Native.'",
+      '',
+      'rows:',
+      '  - repo: maplibre/maplibre-native',
+      '    skill: maplibre-native-gl-js-parity',
+      "    row: 'Globe projection'",
+      "    terms: 'globe'",
+      ''
+    ].join('\n');
+    assert.equal(parseWatchList(source).length, 1);
+    assert.deepEqual(parseRows(source), [
+      row({ row: 'Globe projection', terms: 'globe' })
+    ]);
+  });
+
+  it('reads the committed rows: each is in its skill, and every row of that table that links the repo is listed', () => {
+    const rows = parseRows(
+      readFileSync('.github/release-watch/watch.yml', 'utf8')
+    );
+    assert.ok(rows.length >= 6);
+    const files = [...new Set(rows.map((r) => r.skill))].map((skill) => ({
+      path: `skills/${skill}/SKILL.md`,
+      content: readFileSync(`skills/${skill}/SKILL.md`, 'utf8')
+    }));
+    for (const entry of rows) {
+      assert.ok(
+        findRow(entry, files),
+        `${entry.skill} has no table row starting "${entry.row}"`
+      );
+    }
+    for (const file of files) {
+      const listed = rows.filter((r) => file.path.includes(`/${r.skill}/`));
+      for (const repo of new Set(listed.map((r) => r.repo))) {
+        for (const tableRow of tableRows(file.content)) {
+          if (linkedNumbers(tableRow.text, repo).length === 0) continue;
+          assert.ok(
+            listed.some(
+              (r) => r.repo === repo && tableRow.first.startsWith(r.row)
+            ),
+            `${file.path}:${tableRow.line} links ${repo} but is not under rows:`
+          );
+        }
+      }
+    }
   });
 });

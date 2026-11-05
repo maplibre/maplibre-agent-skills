@@ -5,8 +5,10 @@
  * Reads the watch list in `.github/release-watch/watch.yml`, fetches each repo's
  * releases newer than the watermark in `.github/release-watch/state.json`, and
  * for every release whose notes announce a removal, rename, or deprecation,
- * reports the skill lines that still carry the affected name. One issue per
- * release with hits, labeled `release-watch` and `needs-triage`.
+ * reports the skill lines that still carry the affected name. It also reports
+ * any note that mentions a skill table row listed under `rows:` in the watch
+ * list. One issue per release with either, labeled `release-watch` and
+ * `needs-triage`.
  *
  * Hard limits, by design: it never opens a pull request, never edits a skill
  * file, and never closes an issue. The parsing and matching rules live in
@@ -34,8 +36,10 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   parseWatchList,
+  parseRows,
   selectReleases,
   findHits,
+  rowMentions,
   issueBody,
   issueMarker,
   issueTitle
@@ -199,7 +203,9 @@ const runUrl = process.env.GITHUB_RUN_ID
   ? `${process.env.GITHUB_SERVER_URL}/${selfRepo}/actions/runs/${process.env.GITHUB_RUN_ID}`
   : '';
 
-const watchList = parseWatchList(readFileSync(args.watch, 'utf8'));
+const watchSource = readFileSync(args.watch, 'utf8');
+const watchList = parseWatchList(watchSource);
+const tableRows = parseRows(watchSource);
 const state = existsSync(args.state)
   ? JSON.parse(readFileSync(args.state, 'utf8'))
   : {};
@@ -253,7 +259,12 @@ for (const entry of watchList) {
 
   for (const release of candidates) {
     const hits = findHits(release.body ?? '', skillFiles);
-    if (hits.length === 0) {
+    const mentions = rowMentions(
+      release.body ?? '',
+      tableRows.filter((row) => row.repo === entry.repo),
+      skillFiles
+    );
+    if (hits.length === 0 && mentions.length === 0) {
       // A release with no hits files nothing. An issue per release regardless
       // would bury the ones that matter under weekly noise; the run summary is
       // the record that it was read.
@@ -261,10 +272,16 @@ for (const entry of watchList) {
       continue;
     }
 
+    const found = [
+      hits.length > 0 ? `${hits.length} hit(s)` : '',
+      mentions.length > 0 ? `${mentions.length} table row mention(s)` : ''
+    ]
+      .filter(Boolean)
+      .join(', ');
     const marker = issueMarker(entry.repo, release.tag_name);
     if (filed.has(marker)) {
       summary.push(
-        `- ${entry.repo} ${release.tag_name}: ${hits.length} hit(s), issue already filed`
+        `- ${entry.repo} ${release.tag_name}: ${found}, issue already filed`
       );
       continue;
     }
@@ -276,6 +293,7 @@ for (const entry of watchList) {
       url: release.html_url,
       publishedAt: release.published_at,
       hits,
+      mentions,
       runUrl
     });
 
@@ -288,7 +306,7 @@ for (const entry of watchList) {
       filed.add(marker);
       issuesFiled++;
     }
-    summary.push(`- ${entry.repo} ${release.tag_name}: ${hits.length} hit(s)`);
+    summary.push(`- ${entry.repo} ${release.tag_name}: ${found}`);
   }
 
   // Watermark advances past every release read, hits or not, so a rerun is
