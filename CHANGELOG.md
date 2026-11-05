@@ -4,10 +4,15 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ## [Unreleased]
 
-<!-- bump: patch -->
+<!-- bump: minor -->
+
+### Added
+
+- `maplibre-native-gl-js-parity`: six places where MapLibre Native and GL JS differ, release by release, with the Native release that closed each gap, the tracking issue for each still open, and what to do on Native instead ([#165](https://github.com/maplibre/maplibre-agent-skills/pull/165))
 
 ### Fixed
 
+- `maplibre-mapbox-migration`: recommends OpenFreeMap by URL in the tile-source step and gives the v1.13 fork as the reason a Mapbox v2 call fails, in the paragraphs a short answer is drawn from ([#178](https://github.com/maplibre/maplibre-agent-skills/pull/178))
 - `maplibre-tile-sources`: states that Leaflet's core draws only raster tiles before recommending MapLibre GL Leaflet, in the paragraph a short answer is drawn from ([#181](https://github.com/maplibre/maplibre-agent-skills/pull/181))
 - `maplibre-source-wiring`: states what a hand-wired `tiles` source costs (no zoom range unless you supply one) in the paragraph that recommends `url`, so a short answer still says it ([#168](https://github.com/maplibre/maplibre-agent-skills/pull/168))
 - `maplibre-source-wiring`: keeps its failure modes out of the tips or gotchas section of an answer to an unrelated question ([#163](https://github.com/maplibre/maplibre-agent-skills/pull/163))
