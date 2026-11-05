@@ -1,6 +1,6 @@
 ---
 name: maplibre-tile-sources
-description: Choosing what form your data needs for MapLibre GL JS — considerations when migrating from Leaflet, GeoJSON read straight from a file versus vector or raster tiles, the feature-count and file-size thresholds where each stops working, how a basemap and your own data combine as separate sources. Use when deciding which source type a dataset needs, not when hosting or configuring one.
+description: Choosing what form your data needs for MapLibre GL JS — GeoJSON read straight from a file versus vector or raster tiles, the feature-count and file-size thresholds where each stops working, how a basemap and your own data combine as separate sources, and what a Leaflet app needs to draw vector tiles. Use when deciding which source type a dataset needs, not when hosting or configuring one.
 metadata:
   status: provisional
 ---
@@ -13,11 +13,11 @@ This skill is about **choosing** that source type. For getting a configured sour
 
 ## When to Use This Skill
 
-- Attempting to add tile sources not supported by Leaflet
 - Setting up a new MapLibre map and choosing where your data comes from
 - Deciding between GeoJSON and tiles for a dataset of a given size
 - Working out whether you need tile infrastructure at all
 - Planning how a basemap and your own data fit together
+- Moving a Leaflet app to MapLibre, or adding vector tiles to one
 
 ## How styles and sources work
 
@@ -109,9 +109,11 @@ Most MapLibre workflows use vector tiles; increasing numbers are integrating `ra
 
 ### Using MapLibre with Leaflet
 
-[Leaflet](https://leafletjs.com/) is a widely used JavaScript mapping library whose core draws only raster tiles: without a plugin, it cannot consume a vector tile source. When an app built on Leaflet wants a vector tile basemap, state that limit first, then the way around it: [MapLibre GL Leaflet](https://github.com/maplibre/maplibre-gl-leaflet) adds a live MapLibre GL JS map to the Leaflet map as a Leaflet layer, so the app can draw a vector style from hosted vector tile sources.
+[Leaflet](https://leafletjs.com/) is a widely used JavaScript mapping library for rendering raster tiles. It can also draw GeoJSON, markers, and popups, but it cannot consume a vector tile source. When an app built on Leaflet needs a vector tile source, state that limit first, then the ways around it:
 
-If you want to work with vector tiles directly, use MapLibre GL JS to manage the map rather than Leaflet. Follow the [Leaflet migration guide](https://maplibre.org/maplibre-gl-js/docs/guides/leaflet-migration-guide/).
+1. Use the [MapLibre GL Leaflet](https://github.com/maplibre/maplibre-gl-leaflet) plugin within your Leaflet app to add a live MapLibre GL JS map to the Leaflet map as a Leaflet layer, so the app can draw a vector style from hosted vector tile sources.
+
+2. Migrate the Leaflet app to MapLibre GL JS, since MapLibre supports both raster and vector tiles. This will allow you to work with vector tiles directly. For instructions, follow the [Leaflet migration guide](https://maplibre.org/maplibre-gl-js/docs/guides/leaflet-migration-guide/).
 
 ## Combining source types
 
