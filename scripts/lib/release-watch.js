@@ -3,9 +3,11 @@
  *
  * The job: given an upstream release body, decide which of its notes announce a
  * removal, rename, or deprecation, pull the machine-readable names out of those
- * notes, and report where those names still appear in our skill files. Nothing
- * here talks to the network or the filesystem, so it can all be tested against
- * fixture release bodies.
+ * notes, and report where those names still appear in our skill files. It also
+ * reports any note that mentions a skill table row listed under `rows:` in the
+ * watch list, since a release can make a row wrong without removing anything.
+ * Nothing here talks to the network or the filesystem, so it can all be tested
+ * against fixture release bodies.
  *
  * The rules below were written against real release bodies (MapLibre GL JS v6,
  * Martin, planetiler, tippecanoe), not against an idea of what a release body
@@ -307,6 +309,112 @@ export function findHits(body, files) {
   return hits;
 }
 
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function cells(line) {
+  return line.split('|').slice(1, -1);
+}
+
+function isSeparatorRow(line) {
+  return /^\|[\s:|-]+\|\s*$/.test(line);
+}
+
+/**
+ * The body rows of every Markdown table in `content`, as `{ line, text, first }`
+ * with `first` the trimmed first cell. A header row (the one before a `| --- |`
+ * line) is not a body row.
+ */
+export function tableRows(content) {
+  const lines = content.split(/\r?\n/);
+  const rows = [];
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i];
+    if (!text.startsWith('|') || isSeparatorRow(text)) continue;
+    if (isSeparatorRow(lines[i + 1] ?? '')) continue;
+    rows.push({ line: i + 1, text, first: (cells(text)[0] ?? '').trim() });
+  }
+  return rows;
+}
+
+/** The issue and pull request numbers of `repo` that `line` links. */
+export function linkedNumbers(line, repo) {
+  const link = new RegExp(
+    `github\\.com/${escapeRegExp(repo)}/(?:issues|pull)/(\\d+)`,
+    'g'
+  );
+  return [...new Set([...line.matchAll(link)].map((m) => m[1]))];
+}
+
+/**
+ * Where a `rows:` entry sits: the table row of its skill's SKILL.md whose first
+ * cell starts with the entry's `row` text, or null when no row does.
+ */
+export function findRow(entry, files) {
+  const file = files.find((f) => {
+    const parts = f.path.split(/[\\/]/);
+    return parts.at(-1) === 'SKILL.md' && parts.at(-2) === entry.skill;
+  });
+  if (!file) return null;
+  const row = tableRows(file.content).find((r) =>
+    r.first.startsWith(entry.row)
+  );
+  return row ? { path: file.path, line: row.line, text: row.text } : null;
+}
+
+function mentionedTerm(text, terms, numbers, repo) {
+  const lowered = text.toLowerCase();
+  const term = terms.find((t) => lowered.includes(t.toLowerCase()));
+  if (term) return term;
+  const number = numbers.find((n) =>
+    new RegExp(
+      `(?<![\\w/])#${n}(?!\\d)|github\\.com/${escapeRegExp(repo)}/(?:issues|pull)/${n}(?!\\d)`
+    ).test(text)
+  );
+  return number ? `#${number}` : null;
+}
+
+/**
+ * Table row mentions: every note in a release, removal or not, that contains a
+ * row's terms (case-insensitive) or links an issue or pull request the row
+ * links. `rows` are the watch list's `rows:` entries for the release's repo.
+ *
+ * Returns `[{ note, heading, row, skill, path, line, term }]`; `path` and `line`
+ * are null when the row is no longer in its skill, which `npm test` catches.
+ */
+export function rowMentions(body, rows, files) {
+  const seen = new Set();
+  const notes = splitNotes(body).filter((note) => {
+    if (seen.has(note.text)) return false;
+    seen.add(note.text);
+    return true;
+  });
+  const mentions = [];
+  for (const entry of rows) {
+    const where = findRow(entry, files);
+    const terms = String(entry.terms ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const numbers = where ? linkedNumbers(where.text, entry.repo) : [];
+    for (const note of notes) {
+      const term = mentionedTerm(note.text, terms, numbers, entry.repo);
+      if (!term) continue;
+      mentions.push({
+        note: note.text,
+        heading: note.heading,
+        row: entry.row,
+        skill: entry.skill,
+        path: where?.path ?? null,
+        line: where?.line ?? null,
+        term
+      });
+    }
+  }
+  return mentions;
+}
+
 /** The stable per-release marker that makes a rerun idempotent. */
 export function issueMarker(repo, tag) {
   return `<!-- release-watch: ${repo}@${tag} -->`;
@@ -331,12 +439,31 @@ function groupBy(hits, key) {
  * those two facts and stops — it never asserts that a model gets something
  * wrong, and it never proposes an edit.
  */
-export function issueBody({ repo, tag, url, publishedAt, hits, runUrl }) {
+export function issueBody({
+  repo,
+  tag,
+  url,
+  publishedAt,
+  hits,
+  mentions = [],
+  runUrl
+}) {
   const shown = hits.slice(0, MAX_HITS);
+  const said = [];
+  if (hits.length > 0) {
+    said.push(
+      "Its release notes announce a removal, rename, or deprecation whose name still appears in this repository's skill content."
+    );
+  }
+  if (mentions.length > 0) {
+    said.push(
+      `${hits.length > 0 ? 'They also mention' : 'Its release notes mention'} a skill table row that this release may have made out of date.`
+    );
+  }
   const out = [
     issueMarker(repo, tag),
     '',
-    `[${repo} ${tag}](${url}) was published on ${publishedAt.slice(0, 10)}. Its release notes announce a removal, rename, or deprecation whose name still appears in this repository's skill content.`,
+    `[${repo} ${tag}](${url}) was published on ${publishedAt.slice(0, 10)}. ${said.join(' ')}`,
     '',
     'These are string matches, not verified defects. Each one is either content to correct, or a mention that is still accurate in context — a maintainer decides which.',
     ''
@@ -360,10 +487,26 @@ export function issueBody({ repo, tag, url, publishedAt, hits, runUrl }) {
     );
   }
 
+  for (const [note, noteMentions] of groupBy(mentions, (m) => m.note)) {
+    out.push(
+      '### Table row mentioned',
+      '',
+      `> ${note.replace(/\n/g, ' ')}`,
+      ''
+    );
+    for (const m of noteMentions) {
+      const where = m.path ? `\`${m.path}:${m.line}\`` : `\`${m.skill}\``;
+      out.push(
+        `- ${where}: the "${m.row}" row of \`${m.skill}\`, on \`${m.term}\``
+      );
+    }
+    out.push('');
+  }
+
   out.push(
     '### Scope',
     '',
-    'This is a Class A report only: a release note said a name is going away, and that name is still in our files. It does not cover new features a model may not know about (Class B) or content a newer model may already get right (Class C).',
+    'This report covers two things: a name a release note says is going away that is still in our files (Class A), and a release note that mentions a skill table row listed under `rows:` in `.github/release-watch/watch.yml`. It does not cover other new features a model may not know about (Class B) or content a newer model may already get right (Class C).',
     ''
   );
 
@@ -376,16 +519,34 @@ export function issueBody({ repo, tag, url, publishedAt, hits, runUrl }) {
 }
 
 /**
- * The watch list's YAML, in the restricted subset `.github/release-watch/watch.yml`
- * is written in: a `watch:` key holding a list of entries, each a flat map of
- * scalars. A quoted value may continue onto following indented lines, which is
- * how Prettier folds a long one. Deliberately not a general YAML parser — this
- * repository takes no runtime dependencies, and the file it reads is one we
- * control.
+ * The watch list's `watch:` entries, the repositories whose releases are read.
  */
 export function parseWatchList(source) {
+  return parseList(source, 'watch').filter((entry) => entry.repo);
+}
+
+/**
+ * The watch list's `rows:` entries: skill table rows a release can make wrong
+ * without removing anything, each with the repo whose release notes are read
+ * for it, the skill, the start of the row's first cell, and its terms.
+ */
+export function parseRows(source) {
+  return parseList(source, 'rows').filter(
+    (entry) => entry.repo && entry.skill && entry.row && entry.terms
+  );
+}
+
+/**
+ * One top-level list of the watch list's YAML, in the restricted subset
+ * `.github/release-watch/watch.yml` is written in: a key holding a list of
+ * entries, each a flat map of scalars. A quoted value may continue onto
+ * following indented lines, which is how Prettier folds a long one.
+ * Deliberately not a general YAML parser — this repository takes no runtime
+ * dependencies, and the file it reads is one we control.
+ */
+function parseList(source, listKey) {
   const entries = [];
-  let inWatch = false;
+  let inList = false;
   let current = null;
   let lastKey = null;
 
@@ -393,11 +554,11 @@ export function parseWatchList(source) {
     const line = raw.replace(/\s+$/, '');
     if (!line.trim() || line.trim().startsWith('#')) continue;
 
-    if (/^watch:\s*$/.test(line)) {
-      inWatch = true;
+    if (line === `${listKey}:`) {
+      inList = true;
       continue;
     }
-    if (!inWatch) continue;
+    if (!inList) continue;
     if (/^\S/.test(line)) break; // a new top-level key ends the list
 
     const item = /^\s*-\s*(.*)$/.exec(line);
@@ -418,13 +579,11 @@ export function parseWatchList(source) {
     }
   }
 
-  return entries
-    .map((entry) =>
-      Object.fromEntries(
-        Object.entries(entry).map(([key, value]) => [key, scalar(value)])
-      )
+  return entries.map((entry) =>
+    Object.fromEntries(
+      Object.entries(entry).map(([key, value]) => [key, scalar(value)])
     )
-    .filter((entry) => entry.repo);
+  );
 }
 
 function scalar(value) {

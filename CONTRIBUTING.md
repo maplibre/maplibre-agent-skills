@@ -267,6 +267,8 @@ From those notes it takes only what the author put in backticks, on the reasonin
 
 Every match is then reported as `file:line` beside the release note that contradicts it, in one issue per release labeled `release-watch` and `needs-triage`. A release with no matches files nothing — an issue per release either way would bury the ones that matter — but it is listed in the workflow run summary as read. The matches are string matches, not verified defects: some are content to correct, and some are mentions that are still accurate in context.
 
+**Table rows.** A release can also make a skill wrong without removing anything: the `maplibre-native-gl-js-parity` table says no Native release draws a globe, and the release that ships one makes that row out of date. The `rows:` list in `watch.yml` names such rows, each with the repository whose releases can change it and the terms its release notes would use. For each row the watch reads every note of that repository's releases, removal or not, and reports a note that contains one of the row's terms (case-insensitive) or links an issue or pull request the row links, citing the row as `file:line` in the same issue as the release's other matches. `npm test` fails when a listed row is missing from its skill, or when a row of that table links the repository and is not listed.
+
 **Running it yourself.** `--dry-run` prints the issues it would file and writes nothing. To reproduce the v6 case against the content as it stood before the fix in [#59](https://github.com/maplibre/maplibre-agent-skills/pull/59):
 
 ```bash
