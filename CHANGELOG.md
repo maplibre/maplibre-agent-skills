@@ -24,6 +24,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- Release watch: also flags a release note that mentions a row of the `maplibre-native-gl-js-parity` table, such as the first Native release to draw a globe ([#184](https://github.com/maplibre/maplibre-agent-skills/pull/184))
 - Escape backslashes before pipes in the eval issue's re-run signal (code scanning alert 4) ([#172](https://github.com/maplibre/maplibre-agent-skills/pull/172))
 - `eval.yml`: the scheduled run sizes every config it plans again, which #164 left planned at no cost, and stops before spending anything when a config cannot be sized ([#167](https://github.com/maplibre/maplibre-agent-skills/pull/167))
 - `npm run check` and `eval.yml`: a config whose `SKILL.md` is not written yet (a new skill's rubric round) is sized with the skill withheld, passes the tripwire check, and is left out of the scheduled run until the skill exists ([#164](https://github.com/maplibre/maplibre-agent-skills/pull/164))
