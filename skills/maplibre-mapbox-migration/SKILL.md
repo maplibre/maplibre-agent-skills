@@ -2,7 +2,7 @@
 name: maplibre-mapbox-migration
 description: Migrating from Mapbox GL JS to MapLibre GL JS — package, import and namespace changes, removing the access token, replacing mapbox:// styles, tile sources, plugin equivalents (draw, geocoder, directions, compare), and Mapbox v2-only APIs such as setFog and the free camera. Use when moving an existing Mapbox map to MapLibre, or when a migrated map shows a blank map, a mapbox:// or 401 error, or a missing Mapbox method or plugin.
 metadata:
-  status: provisional
+  status: verified
 ---
 
 # Mapbox to MapLibre Migration
@@ -222,7 +222,6 @@ Most of your map code does not change:
 - [MapLibre Style Specification](https://maplibre.org/maplibre-style-spec/) and [GL JS API reference](https://maplibre.org/maplibre-gl-js/docs/API/): everything the guide does not cover
 - [MapLibre Style Specification, `sky`](https://maplibre.org/maplibre-style-spec/sky/), [`Map.setSky`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#setsky), [`Map.calculateCameraOptionsFromCameraLngLatAltRotation`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#calculatecameraoptionsfromcameralnglataltrotation) and [`CameraOptions`](https://maplibre.org/maplibre-gl-js/docs/API/type-aliases/CameraOptions/): the replacements for Mapbox's `fog` and free camera
 - [MapLibre GL JS CHANGELOG](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md)
-- Topic structure and comparison elements adapted from the `mapbox-maplibre-migration` skill in [mapbox-agent-skills](https://github.com/mapbox/mapbox-agent-skills). Copyright (c) Mapbox, Inc. for adapted portions.
 
 ---
 
