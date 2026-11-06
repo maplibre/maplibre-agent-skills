@@ -145,9 +145,7 @@ npx gl-style-validate style.json
 
 ### 6. Update Plugins (If Used)
 
-Many Mapbox plugins work with MapLibre unchanged, and many have been forked or replaced with MapLibre-native versions. Where a MapLibre-native alternative exists, prefer it for long-term compatibility.
-
-Check the User Interface Plugins, Geocoding & Search Plugins, and Map Rendering Plugins sections of [awesome-maplibre](https://github.com/maplibre/awesome-maplibre) to find compatible plugins and alternatives.
+When asked which Mapbox plugins will still work, open the answer by sending the reader to [awesome-maplibre](https://github.com/maplibre/awesome-maplibre) to look up each plugin: its User Interface Plugins, Geocoding & Search Plugins, and Map Rendering Plugins sections list compatible plugins and alternatives. Many Mapbox plugins work with MapLibre unchanged, and many have been forked or replaced with MapLibre-native versions, so check each one there and in its own README rather than listing plugins or their MapLibre status from memory. Where a MapLibre-native alternative exists, prefer it for long-term compatibility.
 
 ### 7. Replace Mapbox APIs (Search, Directions, etc.)
 
