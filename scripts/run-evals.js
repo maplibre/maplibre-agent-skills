@@ -1,107 +1,18 @@
 #!/usr/bin/env node
 /**
- * Runs the eval configs the drift check covers, one bounded child per
- * config, and leaves a complete record whatever happens.
+ * Runs each eval config that is due in its own bounded `npm run eval:graded`
+ * child and records its `pass`, `fail` or `error` verdict in the work dir as
+ * soon as it has one, for the publish job. Configs named on the command line
+ * or in INPUT_CONFIGS, or a `--shard` slice, run whether due or not.
  *
- * The bound is promptfoo's own: `PROMPTFOO_MAX_EVAL_TIME_MS` arms a global timer
- * (`getMaxEvalTimeMs`, node_modules/promptfoo/dist/src/logger-*.js,
- * read at node_modules/promptfoo/dist/src/evaluator-*.js), and on
- * expiry every unprocessed test becomes an ERROR row reading "Evaluation
- * exceeded max duration of Nms" (`createMaxDurationTimeoutResult`, same file) before the eval finalizes and writes its outputs. A job-level kill
- * writes nothing at all, which is how the 2026-08-30 run ended with six hours
- * spent and no evidence of what happened.
+ * Configs run with their skill injected, and a second child may re-run the
+ * tests a config's first child did not pass, RETRY_REPEATS more times. Only
+ * `--baseline` or INPUT_BASELINE=true starts a baseline run instead: it
+ * withholds the skill from every config, keeps configs whose SKILL.md is not
+ * written yet, and never re-runs a test.
  *
- * Each config asks for two output files: the dated CSV the publish job commits,
- * and a JSON sidecar in the work dir that carries the failure reason behind each
- * row (`-o, --output <paths...>` is variadic, node_modules/promptfoo/dist/src/main.js,
- * and both are written before the exit code is set). The CSV's
- * ERROR rows have an empty output and an empty grader reason, so the sidecar is
- * the only place the error text survives.
- *
- * The hard kill that backs that bound goes to the child's process group, never
- * to the child alone. `npm run` forwards no signals, so a SIGTERM to the wrapper
- * ends the wrapper and leaves promptfoo running: the three configs killed in the
- * 2026-09-06 run outlived their kills by 2h40m (source-wiring), 36 minutes
- * (terrain-rendering) and 13 minutes (tile-sources), all of them still spending
- * the same Groq and Gemini keys, which rate-limited every config that came after
- * them. So the child is spawned `detached` (its own group), signalled as `-pid`,
- * and the group is SIGKILLed if it has not emptied SIGKILL_AFTER_MS later —
- * promptfoo's backoff sleeps do not honor SIGTERM promptly. Because a detached
- * child also survives a Ctrl-C on the runner, SIGINT, SIGTERM and SIGHUP on the
- * parent SIGKILL the group before the runner exits.
- *
- * After every config it appends `skill:pass|fail|error` to `<work>/verdicts.txt`
- * and rewrites `<work>/summary.json`, so a run cut off halfway still hands the
- * publish job a record it can report.
- *
- * A test that did not pass runs twice more, since the generator is
- * nondeterministic even at temperature 0. A second child hands the first
- * attempt's sidecar to promptfoo's `--filter-failing`, so only those tests run,
- * and `combineAttempts` judges each test on all its graded attempts: a failure
- * on any attempt stands, a test no attempt failed passes on its graded passes,
- * and only a test no attempt graded is an `error`. So a re-run grades what a
- * provider error left ungraded and shows whether a failure repeats, which the
- * run log and the drift issue list per attempt; it never turns a failure into
- * a pass. Baseline runs are not re-run, since their gap tests are meant to
- * fail; neither is a config the bound cut off, nor one with more than
- * MAX_RETRIED_TESTS tests down.
- *
- * A run grades only the configs that are due (`planRun`): those whose inputs
- * (scripts/lib/eval-inputs.js) differ from what their last graded run recorded
- * in `<run name>.json` beside its CSVs, and, with EVAL_REGRADE_DAYS set as the
- * scheduled run sets it, those whose last grade is that many days old, which is
- * what shows a provider changing a model behind its pinned id. A run with
- * nothing due runs nothing and succeeds. Configs named by hand, or a shard, run
- * as named.
- *
- * A week of evals is bigger than the generator key's day: a full pass over
- * every config needs more generator tokens than the Groq key's daily free-tier
- * cap, which is how the last four configs ended as `error` every Sunday from
- * 2026-09-06 on (#108). So every run plans its own day. It measures the
- * generator's limits (`measureLimits`), sizes each due config's requests by
- * them, and runs each one, longest-waiting first by the day each last got a
- * verdict (`lastGraded`), whose worst case, re-runs included, fits in what
- * EVAL_TOKENS_PER_DAY has left after what the run has spent. What does not fit
- * is first in line the next day, so how many days a round of due configs takes
- * follows from how many there are and how big they are, and nothing has to be
- * retuned as they grow. When Groq refuses a request for its daily limit, which
- * only promptfoo's debug log records in Groq's words (`dayRefusal`), no further
- * config starts; a day already spent is caught before the first (`daySpent`). `--shard k/n` (or EVAL_SHARD) takes the k-th of n contiguous
- * slices of the discovered config list by hand; it never shapes an explicit
- * config list — that combination is refused as ambiguous rather than quietly
- * running a subset of what the caller named.
- *
- * Each config's requests are paced: promptfoo gets a `--delay` long enough
- * (`paceMs`) that Groq's per-minute limit has room for the config's largest
- * request again before the next one goes out. Without it nearly every request
- * after a config's first drew a 429 for the minute, and promptfoo 0.122 sizes
- * its wait after one from Groq's daily-request refill header
- * (`x-ratelimit-reset-requests`, read first by `parseRateLimitHeaders` in
- * node_modules/promptfoo/dist/src/fetch-*.js) rather than from the
- * seconds Groq states: 86 s or more per request from 2026-10-16 to 10-22. Each
- * child's bound is whatever the run's budget has left after the least time the
- * configs planned after it need at their pace (`boundFor`, `reserveAfter`), so
- * a config that meets a slow judge uses slack the others do not need, and no
- * per-config cap is left for a bigger config to outgrow. After every child, the
- * rate-limit waits its debug log records go into the run log by host
- * (`rateLimitWaits`).
- *
- * The judge has a day too, and planning by the generator's day alone met it
- * at the end of the runs of 2026-10-22, 10-23 and 10-24: Google refused the
- * judge after 21 to 24 gradings each day. Google reports the judge's limits in
- * no header and states a daily quota only in a refusal's body, which promptfoo
- * does not keep, and promptfoo retries each refused grading for about twenty
- * minutes before it files an ERROR row. So after a child whose grading met
- * rate limits and left its config short of a pass, the run asks the judge once
- * itself (`judgeDaySpent`). When Google refuses that for a daily quota, nothing
- * is re-run and no further config starts. A config either provider's day cut
- * off is an `error` with `dayCut`: its CSVs go to the verdict artifact rather
- * than to the results the publish job commits (`setAside`), so it is first in
- * line the next day, and it does not fail the run. A run that graded no config
- * at all fails.
- *
- * Config and output paths are validated before they are placed in the `npm run`
- * argv, which a shell receives.
+ * evals/README.md ("CI") says how a run plans its day, paces requests, re-runs
+ * failures, bounds each child and ends on a provider's daily limit.
  *
  *   node scripts/run-evals.js --dry-run
  *   node scripts/run-evals.js evals/prompts/maplibre-cartography.yaml
@@ -159,37 +70,28 @@ import { lastGraded } from './lib/results-history.js';
 
 const BUDGET_MINUTES_DEFAULT = 240;
 
-// How many generator tokens one day of the Groq key holds: its free tier's
-// published daily limit, which Groq reports in no response header. eval.yml
-// sets it, and this matches. A run that finds the day spent sooner, because
-// Groq refuses a request for its daily limit, stops there and says so.
+// The Groq key's daily tokens: its free tier's limit, which no header reports.
 const TOKENS_PER_DAY_DEFAULT = 200000;
 
-// How many more times a test that did not pass is run. The failure stands
-// whatever they say; two re-runs show whether it repeats, and grade a test a
-// provider error left ungraded.
+// How many more times a test that did not pass runs. A failure stands
+// whatever the re-runs say.
 export const RETRY_REPEATS = 2;
 
-// More tests down than this in one config is not sampling noise, and running
-// them again would spend the generator key's daily tokens on a known result.
+// More tests down than this in one config is not noise, so none is re-run.
 export const MAX_RETRIED_TESTS = 2;
 
-// Below this there is no point starting a config: promptfoo's own queue timeout
-// is 300s, so a shorter slice buys ERROR rows and nothing else.
+// A shorter bound yields only ERROR rows: promptfoo's queue timeout is 300 s.
 const MIN_CONFIG_MS = 5 * 60000;
 
-// The bound is soft — promptfoo's queue timeout and its backoff sleeps do not
-// honor the abort — so a hard kill follows it. That kill loses the config's CSV,
-// which is why it sits well past the bound rather than on it.
+// How far past its soft bound a child is killed: the kill loses the config's
+// CSV, so it comes well after the bound rather than on it.
 const KILL_GRACE_MS = 10 * 60000;
 
-// How long the process group gets to exit on SIGTERM before it is SIGKILLed:
-// promptfoo's backoff sleeps do not honor SIGTERM promptly, and a survivor keeps
-// spending the run's API keys.
+// How long a child's process group gets to exit on SIGTERM before SIGKILL.
 export const SIGKILL_AFTER_MS = 30 * 1000;
 
-// A human abort has to take the group with it: `detached` puts the child
-// outside the terminal's foreground group, so Ctrl-C alone would not reach it.
+// While a child runs, any of these makes the runner SIGKILL the child's
+// group, which Ctrl-C alone would not reach because the child is `detached`.
 const ABORT_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 export function parseArgs(argv) {
@@ -210,12 +112,7 @@ export function parseArgs(argv) {
   return args;
 }
 
-/**
- * `k/n` → the k-th of n contiguous slices, 1-based so the workflow's
- * `EVAL_SHARD=1/2` reads the way a human says it. The format is strict:
- * anything else — `0/2`, `3/2`, `1-2`, an empty string — is a loud error
- * rather than a silently full (or silently empty) run.
- */
+/** Parses `k/n` into a 1-based `{ index, count }`; throws on anything else. */
 export function parseShard(value) {
   const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value ?? '');
   if (!match) {
@@ -233,13 +130,7 @@ export function parseShard(value) {
   return { index, count };
 }
 
-/**
- * The k-th of n contiguous slices of an already-sorted config list. Contiguous
- * rather than round-robin so a human can predict a day's slice from the
- * alphabetical list. Slice sizes differ by at most one, earlier slices taking
- * the remainder — 9 configs in halves is 5 then 4, in quarters 3,2,2,2 — so a
- * slice is never empty while there are at least n configs.
- */
+/** The k-th of n contiguous slices, earlier slices taking the remainder. */
 export function shardOf(configs, { index, count }) {
   const base = Math.floor(configs.length / count);
   const extra = configs.length % count;
@@ -249,20 +140,10 @@ export function shardOf(configs, { index, count }) {
 }
 
 /**
- * The unchanged `npm run eval:graded` call, with the second output path added.
- * Never combine configs into one invocation: promptfoo merges the defaultTest
- * blocks of combined configs (last one wins), which would inject a single
- * skill's SKILL.md into every test.
- *
- * These args reach a shell through `npm run`; npm quotes them, but the runner
- * does not rely on that — every path is checked here before it enters argv, so a
- * hostile or mistyped config name is rejected rather than forwarded.
- *
- * `retryOf` is the first attempt's sidecar. The re-run it builds writes its own
- * `-retry` files beside the first attempt's, so the publish job commits both.
- *
- * `delayMs` is the config's pace (`paceMs`). It follows the script's own
- * `--delay`, and promptfoo keeps the last value it is given.
+ * The `npm run eval:graded` call for one config. Never combine configs into
+ * one invocation: promptfoo merges their defaultTest blocks, so every test
+ * would get the last config's skill. `delayMs` follows the script's own
+ * `--delay`, since promptfoo keeps the last one.
  */
 export function buildCommand({
   config,
@@ -277,7 +158,7 @@ export function buildCommand({
   const stem = `${name}-${skill}${retryOf === null ? '' : '-retry'}`;
   const csvPath = join(resultsDir, `${stem}.csv`);
   const jsonPath = join(workDir, `${stem}.json`);
-  // The last point before the child process, so this covers every caller.
+  // `npm run` hands these args to a shell; checking here covers every caller.
   if (!isSafeCliPath(config)) {
     throw new Error(
       `Refusing to build a command with an unusable config path: ${JSON.stringify(config)}`
@@ -318,13 +199,7 @@ export function buildCommand({
   };
 }
 
-/**
- * A child's environment. `PROMPTFOO_RETRY_5XX` has promptfoo retry a 5xx with
- * backoff (`fetchWithRetries`, node_modules/promptfoo/dist/src/fetch-*.js)
- * instead of filing it as an ERROR row: the judge's "This model is currently
- * experiencing high demand" 503 cost a test its grade on 2026-10-16, 10-22 and
- * 10-24.
- */
+/** A child's environment: its time bound, its log dir and retries on a 5xx. */
 export function childEnv({ boundMs, env = process.env, logDir = null }) {
   return {
     ...env,
@@ -334,12 +209,7 @@ export function childEnv({ boundMs, env = process.env, logDir = null }) {
   };
 }
 
-/**
- * The last refusal for the key's daily limit in Groq's own words, with the
- * limit and usage it states, or null. promptfoo files such a refusal as "timed
- * out ... in queue" once its retries give up, so the wording survives only in
- * the response body Groq sent, which promptfoo's debug log keeps.
- */
+/** Limit and usage from the last tokens-per-day refusal in `text`, or null. */
 export function dayRefusal(text) {
   const all = [
     ...String(text ?? '').matchAll(
@@ -351,13 +221,7 @@ export function dayRefusal(text) {
   return { tokensPerDay: Number(limit), used: Number(used) };
 }
 
-/**
- * The rate-limit waits a child's debug log records, by host: how many and how
- * long in all. promptfoo logs each one as "Rate limited on URL <url>: HTTP
- * <status>" and then "Rate limited, waiting <n>ms" (fetchWithRetries,
- * node_modules/promptfoo/dist/src/fetch-*.js), and only
- * at debug level, so the CI log never shows them otherwise.
- */
+/** The rate-limit waits a debug log records: count and total ms by host. */
 export function rateLimitWaits(text) {
   const waits = new Map();
   let host = 'unknown host';
@@ -420,12 +284,8 @@ async function probe({ pin, apiKey, fetch }) {
 }
 
 /**
- * The generator's limits as Groq reports them now, so a run never sizes its
- * requests by numbers that have since changed: tokens per minute from the
- * `x-ratelimit-limit-tokens` header of one minimal request, and the chat
- * template as that request's `usage.prompt_tokens` minus its two one-token
- * messages. Costs about 77 tokens. Null when the pin is not a Groq model or
- * Groq cannot be reached; the run then keeps the last measured defaults.
+ * Groq's tokens per minute and chat template size, measured with one minimal
+ * request; null when the pin is not a Groq model or nothing usable comes back.
  */
 export async function measureLimits({
   pin,
@@ -450,11 +310,7 @@ export async function measureLimits({
   }
 }
 
-/**
- * What Groq says when the key's day is spent: one minimal request refused for
- * its tokens per day, with the limit and the usage the refusal states. Null
- * when the request goes through or is refused for anything else.
- */
+/** Groq's refusal of a minimal request for tokens per day, or null. */
 export async function daySpent({ pin, apiKey, fetch = globalThis.fetch }) {
   const response = await probe({ pin, apiKey, fetch });
   if (response?.status !== 429) return null;
@@ -477,10 +333,8 @@ const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models';
 export const GEMINI_HOST = new URL(GEMINI).host;
 
 /**
- * Google's refusal of the judge for a daily quota: the quota, its limit and
- * the model, read from the `google.rpc.QuotaFailure` in a 429's body whose
- * violation names a per-day quota, such as
- * `GenerateRequestsPerDayPerProjectPerModel-FreeTier`; or null.
+ * The per-day quota a Google 429 body's `google.rpc.QuotaFailure` names, with
+ * its limit and model, or null.
  */
 export function judgeRefusal(text) {
   let body;
@@ -507,11 +361,8 @@ export function judgeRefusal(text) {
 }
 
 /**
- * What Google says when the judge's day is spent: one minimal request to the
- * pinned judge, refused for a per-day quota. Null when the request goes
- * through, is refused for anything else, or the judge is not a Gemini model.
- * A request that goes through spends one of the judge's requests for the day,
- * so the run asks only after a config's grading has met rate limits.
+ * Google's refusal of one minimal request to the judge for a per-day quota, or
+ * null. A request that goes through spends one of the judge's daily requests.
  */
 export async function judgeDaySpent({
   pin,
@@ -533,8 +384,7 @@ export async function judgeDaySpent({
     if (response?.status === 200) return null;
     const text = await response.text();
     const said = response.status === 429 ? judgeRefusal(text) : null;
-    // Any other answer is logged in Google's words, so a refusal this does not
-    // recognize can still be read in the run log.
+    // Any other answer goes to the run log in Google's words.
     if (!said) {
       log(
         `  Google answered the judge's probe with ${response.status}, not a daily quota: ${googleMessage(text)}`
@@ -557,20 +407,14 @@ function googleMessage(text) {
   return String(text ?? '').slice(0, 500);
 }
 
-/**
- * How far apart one config's requests go so that none meets Groq's per-minute
- * limit: the limit refills in a minute, and the largest request needs this
- * share of it back before the next one is sent.
- */
+/** Request spacing that keeps a config under Groq's per-minute limit. */
 export function paceMs({ largest, tokensPerMinute }) {
   return Math.ceil((60000 * largest) / tokensPerMinute);
 }
 
 /**
- * The least time the configs after this one need, of those the day's tokens
- * still hold: each one's requests at its pace. `rest` is the remaining run
- * order; `tokensLeft` is what the day has once this config's worst case is
- * spent, and the configs are taken the way `runEvals` will take them.
+ * The least time the configs in `rest` need at their pace, counting only those
+ * that `tokensLeft` holds when taken as `runEvals` takes them.
  */
 export function reserveAfter({ rest, costs, tokensLeft, tokensPerMinute }) {
   let reserve = 0;
@@ -586,10 +430,7 @@ export function reserveAfter({ rest, costs, tokensLeft, tokensPerMinute }) {
   return reserve;
 }
 
-/**
- * How long this config may take: whatever the run's budget has left after
- * `reserveMs`, the least time the configs planned after it need.
- */
+/** What the run's budget has left for this config after `reserveMs`. */
 export function boundFor({ elapsedMs, budgetMs, reserveMs = 0 }) {
   const remaining = budgetMs - elapsedMs - reserveMs;
   if (remaining < MIN_CONFIG_MS) return { skip: true, boundMs: 0 };
@@ -597,16 +438,9 @@ export function boundFor({ elapsedMs, budgetMs, reserveMs = 0 }) {
 }
 
 /**
- * One config's verdict from what the child left behind. A sidecar that is
- * missing, unparseable, or not shaped like promptfoo's output is an `error` —
- * "no verdict" — and never a pass or a fail, so an unread run cannot move a
- * skill's status in either direction.
- *
- * A killed config is an `error` whatever its rows say, but promptfoo often has
- * written its sidecar by then (its own PROMPTFOO_MAX_EVAL_TIME_MS timer fires
- * before the hard kill), and that sidecar names why the config ran long. So the
- * classified signatures are kept and `killed` is appended to them: the issue
- * table then reads `rate-limit-exhausted, killed` rather than just `killed`.
+ * One config's verdict from what its child left. A missing or unreadable
+ * sidecar is an `error`, never a pass or a fail, and a killed config is an
+ * `error` that keeps its sidecar's signatures, with `killed` added.
  */
 export function verdictFor({
   exitCode = null,
@@ -668,11 +502,7 @@ export function verdictFor({
   }
 }
 
-/**
- * Whether a config's first attempt has its failing tests run again: a
- * with-skill run whose sidecar was read and that the bound did not cut off,
- * with at least one and at most MAX_RETRIED_TESTS tests that did not pass.
- */
+/** Whether the tests a config's first attempt did not pass run again. */
 export function shouldRetry({ baseline = false, killed = false, verdict }) {
   if (baseline || killed || verdict.counts === null) return false;
   if (verdict.signatures.includes('max-duration')) return false;
@@ -680,21 +510,12 @@ export function shouldRetry({ baseline = false, killed = false, verdict }) {
   return down > 0 && down <= MAX_RETRIED_TESTS;
 }
 
-/**
- * The most one config can spend of the generator key's day: its first pass at
- * every request's full size, plus the re-runs shouldRetry allows at its largest
- * request. `cost` is what `passCost` measured.
- */
+/** The most generator tokens one config can spend, re-runs included. */
 export function dayCost(cost) {
   return cost.firstPass + MAX_RETRIED_TESTS * RETRY_REPEATS * cost.largest;
 }
 
-/**
- * What each config may spend, by `passCost` over its requests as `sizeConfig`
- * measures them. The day's plan rests on every one of these, so a config that
- * cannot be sized throws here, before the run spends anything, rather than
- * running at no cost.
- */
+/** Each config's `passCost`; a config that cannot be sized throws here. */
 export function costsOf(configs, { limits }) {
   return new Map(
     configs.map((config) => [
@@ -704,12 +525,7 @@ export function costsOf(configs, { limits }) {
   );
 }
 
-/**
- * The configs a run can grade, and the ones whose SKILL.md is not written yet.
- * Such a config is a new skill's rubric round: its tests run at baseline by
- * dispatch (`--baseline`), and there is no skill to grade until the file
- * exists, so a scheduled run or a blank dispatch leaves it out.
- */
+/** Splits off configs with no SKILL.md yet, which only a baseline run takes. */
 export function withoutUnwrittenSkills(
   configs,
   { missing = missingSkillFiles } = {}
@@ -724,12 +540,7 @@ export function withoutUnwrittenSkills(
   return { run, skipped };
 }
 
-/**
- * Every config, the longest-waiting first: those that never got a verdict,
- * then by the day they last got one (`lastGraded`), oldest first. How often a
- * config is graded is whatever this order and the day's tokens make it; there
- * is no cadence for the set of configs to outgrow.
- */
+/** The configs, longest-waiting first: never graded, then by oldest grade. */
 export function longestWaiting({ configs, graded }) {
   const since = (config) => graded.get(skillOf(config)) ?? '';
   return [...configs].sort(
@@ -751,12 +562,11 @@ const listed = (names) =>
     : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 
 /**
- * Which configs a run grades, and why. A config is due when its `inputs`
- * differ from those `recorded` by its last graded run (`graded` gives that
- * run's day), or when it has no such run or record; with `regradeDays` set,
- * also when its last grade is that many days old. Changed configs go first,
- * then the aged ones, each longest-waiting first. `later` names the rest and
- * why each one is not due.
+ * Which configs a run grades, and why. A config is due when it has no graded
+ * run, or when its inputs are unreadable, unrecorded by that run or changed
+ * since; with `regradeDays` set, also when that grade is that many days old.
+ * Changed configs go first, then aged ones, each longest-waiting first, and
+ * `later` holds the rest.
  */
 export function planRun({
   configs,
@@ -813,13 +623,10 @@ function sumTokenUsage(a, b) {
 }
 
 /**
- * A config's verdict once its failing tests have run again. Rows are matched to
- * tests by their vars, as `--filter-failing` matches them, and each test is
- * judged on all its graded attempts: it fails when any attempt failed, passes
- * when none did and at least one was graded, and is an `error` only when no
- * attempt was graded. A test that passed the first time was not run again, so
- * its one pass stands. A re-run with no readable output adds no attempts,
- * which leaves the first attempt's verdict unchanged.
+ * A config's verdict once its failing tests have run again, with rows matched
+ * to tests by their vars as `--filter-failing` matches them. A test fails when
+ * any attempt failed, passes when none did and at least one was graded, and is
+ * an `error` only when no attempt was graded.
  */
 export function combineAttempts({ firstText, retryText = null }) {
   const first = JSON.parse(firstText);
@@ -842,8 +649,7 @@ export function combineAttempts({ firstText, retryText = null }) {
       attempts: [],
       error: null
     };
-    // Each row is read by classifyEval itself, so an attempt means the same
-    // thing here as it does in a config's single run.
+    // classifyEval reads each row, as it reads a config's single run.
     const attempt = classifyEval({ results: { results: [row] } });
     test.attempts.push(attempt.verdict);
     if (attempt.verdict === 'error') test.error = attempt.errors[0];
@@ -896,21 +702,10 @@ function readSidecar(path) {
 }
 
 /**
- * One `npm run eval:graded` child, killed as a process group when it overruns.
- *
- * `npm run` is a wrapper: it spawns a shell, which spawns promptfoo, and it
- * forwards nothing it receives. Signalling the child alone therefore reaps the
- * wrapper and orphans the promptfoo process holding the API keys — the whole
- * 2026-09-06 failure. `detached: true` gives the child its own process group so
- * `-pid` reaches every descendant, and the promise is not resolved while that
- * group still has members: SIGKILL follows SIGTERM `sigkillAfterMs` later, and
- * the next config starts only once the group is gone.
- *
- * That same detachment takes the child out of the terminal's foreground group,
- * so a Ctrl-C on the runner no longer reaches it: while a child is live the
- * runner catches SIGINT, SIGTERM and SIGHUP, SIGKILLs the group — a human abort
- * has no use for promptfoo's partial output, and SIGTERM would leave it asleep
- * in backoff — and exits 128 + the signal number.
+ * One `npm run eval:graded` child in its own process group, since `npm run`
+ * forwards no signals. At `killAfterMs` the group gets SIGTERM, then SIGKILL
+ * `sigkillAfterMs` later. While the child runs, a SIGINT, SIGTERM or SIGHUP
+ * makes the runner SIGKILL the group and exit with 128 plus the signal number.
  */
 export function spawnEval(
   command,
@@ -930,8 +725,7 @@ export function spawnEval(
     let pending = null;
     let escalation = null;
 
-    // Signal 0 asks whether the group still has members. ESRCH — an empty group,
-    // or a child that never started — is the answer, not an error.
+    // Signal 0 asks whether the group has members left; ESRCH means none.
     const signalGroup = (signal) => {
       if (child.pid === undefined) return false;
       try {
@@ -949,8 +743,7 @@ export function spawnEval(
       unlisten();
       process.exit(128 + (osConstants.signals[signal] ?? 0));
     }
-    // No listener outlives its child: finish() takes these off again, so a
-    // runner aborted between configs dies of the signal as it always did.
+    // finish() removes these, so a signal between configs ends the runner.
     ABORT_SIGNALS.forEach((signal) => process.on(signal, abort));
 
     const finish = () => {
@@ -974,9 +767,8 @@ export function spawnEval(
 
     const settle = (result) => {
       pending = result;
-      // The wrapper exits on SIGTERM long before promptfoo does. Hold the result
-      // until the escalation has emptied the group rather than letting the run
-      // move on while the old config still spends the run's quota.
+      // After a kill the wrapper exits long before promptfoo does, so while the
+      // group still has members the result waits for the SIGKILL.
       if (killed && !escalated && signalGroup(0)) return;
       finish();
     };
@@ -1047,8 +839,7 @@ export async function runEvals({
   now = () => Date.now(),
   log = console.log
 }) {
-  // The children size every request's answer cap by these, so they get the
-  // limits this run measured rather than whatever their own defaults say.
+  // The children size every answer cap by these, so they get the run's limits.
   if (limits !== null) {
     env = {
       ...env,
@@ -1066,8 +857,6 @@ export async function runEvals({
   const summary = {
     name,
     baseline,
-    // Which slice of the week this run is, so the artifact says so itself;
-    // `planned` below is already only this slice's skills.
     ...(shard === null ? {} : { shard }),
     bounds: { budgetMinutes },
     ...(limits === null ? {} : { limits }),
@@ -1078,8 +867,7 @@ export async function runEvals({
     configs: []
   };
   writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
-  // What each config the run graded was graded on, committed beside its CSVs,
-  // so a later run can tell whether any of it has changed since (`planRun`).
+  // The inputs each graded config was graded on, for a later run's `planRun`.
   const gradedOnPath = join(resultsDir, `${name}.json`);
   const gradedOn = { commit, configs: {} };
   writeFileSync(gradedOnPath, JSON.stringify(gradedOn, null, 2) + '\n');
@@ -1105,8 +893,7 @@ export async function runEvals({
   const started = now();
   for (const [index, config] of configs.entries()) {
     const skill = skillOf(config);
-    // The longest-waiting config whose worst case fits in what the day has
-    // left runs next; one that does not is first in line tomorrow.
+    // A config the day cannot hold waits, and is first in line tomorrow.
     const cost = costs?.get(config) ?? null;
     const need = cost ? dayCost(cost) : 0;
     if (summary.day.spentByGroq || summary.day.judgeSpent) {
@@ -1131,8 +918,7 @@ export async function runEvals({
             tokensPerMinute: limits.tokensPerMinute
           })
         : null;
-    // What the configs after this one need at the least, so a slow config
-    // cannot take the time they would need to run at all.
+    // Keeps a slow config from taking the time the configs after it need.
     const reserveMs = limits
       ? reserveAfter({
           rest: configs.slice(index + 1),
@@ -1277,9 +1063,7 @@ export async function runEvals({
           `Groq refused a request for the key's daily limit (${refused.used} of ${refused.tokensPerDay} tokens used); the rest wait for another day.`
         );
       }
-      // A config the day cut off has no verdict: some of its tests were never
-      // graded or never re-run. It is an `error` that does not fail the run,
-      // and it goes first the next day.
+      // A config the day cut off is an `error` that does not fail the run.
       const dayCut =
         verdict.verdict === 'pass'
           ? null
@@ -1333,9 +1117,8 @@ export async function runEvals({
     }
   }
 
-  // A day a provider ended early is not a failure; a day that graded nothing
-  // is, whatever ended it, since a quota spent before the run began or a
-  // config bigger than the judge's day would otherwise pass in silence.
+  // A day a provider ended early is not a failure, but a day that graded
+  // nothing is, whatever ended it, so a spent quota cannot pass in silence.
   const graded = summary.configs.some(
     (c) => c.verdict === 'pass' || c.verdict === 'fail'
   );
@@ -1353,11 +1136,9 @@ export async function runEvals({
 }
 
 /**
- * Takes a config the day cut off out of the results the publish job commits,
- * into the verdict artifact. The rotation reads the committed CSVs and counts
- * a test with any graded row (`lastGraded`), so a first attempt's graded
- * failure would otherwise pass for a verdict whose re-runs never happened, and
- * the config would lose its place at the front of the line.
+ * Moves the CSVs of a config the day cut off from the results the publish job
+ * commits to `<work>/day-spent`, so their graded rows do not count as a
+ * verdict and the config keeps its place at the front of the line.
  */
 export function setAside({ resultsDir, workDir, name, skill }) {
   const aside = join(workDir, 'day-spent');
@@ -1398,9 +1179,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         ? fromInput
         : null;
 
-  // The shard shapes only the discovered list. Shaping an explicit list too
-  // would mean a dispatch that names configs runs some unstated subset of
-  // them, so the combination is refused instead of guessed at.
+  // A shard slices only the discovered list, never an explicit one.
   const shardSpec = args.shard ?? process.env.EVAL_SHARD ?? '';
   let shard = null;
   if (shardSpec !== '') {
@@ -1498,9 +1277,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
   }
 
-  // A discovered list runs what is due: the configs whose inputs changed since
-  // their last graded run, then those graded EVAL_REGRADE_DAYS or more ago.
-  // Configs named by hand run as named; a shard runs longest-waiting first.
+  // A discovered list runs what `planRun` finds due. Named configs run as
+  // named, and a shard runs its whole slice, longest-waiting first.
   const regradeDays = Number(process.env.EVAL_REGRADE_DAYS || 0);
   const plan =
     explicit === null && shard === null
@@ -1547,8 +1325,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       : `Generator limits not measured; using ${limits.tokensPerMinute} tokens a minute and a ${limits.templateTokens}-token template.`
   );
 
-  // runEvals runs, in this order, each config whose worst case fits in what the
-  // day has left.
+  // runEvals runs, in this order, each config whose worst case the day holds.
   const tokensPerDay = Number(
     process.env.EVAL_TOKENS_PER_DAY || TOKENS_PER_DAY_DEFAULT
   );
@@ -1611,7 +1388,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     inputs,
     commit: headCommit()
   });
-  // A day that graded nothing has nothing for the publish job.
+  // A run that planned no config has nothing for the publish job.
   setOutputs({ ran: String(summary.planned.length > 0) });
   // Unreachable while `npm run lint:prompt-budget` passes, which checks that
   // every config fits in a day on its own.
