@@ -1,0 +1,401 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — dataset outgrew GeoJSON without the user naming tiles,skills/maplibre-tile-sources/SKILL.md,false,"My parcel layer is a 180 MB GeoJSON file with around 400,000 polygons. The browser hangs for ages on load and sometimes the tab just dies. I've already tried minifying the JSON. What now?
+","### TL;DR  
+A 180 MB GeoJSON with 400 k polygons is far beyond what a browser can chew in one go. The only realistic way to make it usable is **to stop sending the whole file to the client** and instead deliver **small, pre-processed chunks** (tiles) that are already simplified and optionally encoded in a more compact binary format.  
+
+Below is a practical, step-by-step roadmap you can follow right now, plus a few “quick-win” tricks you can try while you’re working on the longer-term tiling pipeline.
+
+---
+
+## 1. Why the browser chokes
+
+| Factor | What it means for your file | Typical impact in the browser |
+|--------|----------------------------|------------------------------|
+| **Size** | 180 MB JSON → ~300 MB+ in memory after parsing (objects, strings, arrays) | > 1 GB RAM, GC thrashing, UI freeze |
+| **Feature count** | 400 k polygons → millions of vertices | Geometry-heavy rendering (Canvas/SVG) is O(N) |
+| **Parsing** | `JSON.parse()` must allocate a huge object graph | Single-threaded, blocks UI for seconds |
+| **Rendering** | Each vertex becomes a DOM/GL vertex | Frame-rate drops to 0 fps, tab may be killed |
+
+Even if you minify the file, you haven’t changed any of the above. You need to **reduce the amount of data the browser ever sees**.
+
+---
+
+## 2. Quick-win “client-side” tricks (useful while you build a proper tiling solution)
+
+| Trick | How to do it | When it helps |
+|-------|--------------|---------------|
+| **GZIP / Brotli compression** | Serve the file with `Content-Encoding: gzip` (or `br`). Most browsers will automatically decompress. | Reduces network transfer (180 MB → ~30-50 MB). Still too big for parsing, but at least the download is faster. |
+| **Web-Worker parsing** | Off-load `JSON.parse` to a Worker, then post the parsed object back (or stream chunks). | Prevents UI freeze while parsing, but memory usage stays huge. |
+| **Chunked streaming parser** | Use a streaming JSON parser (e.g., `jsonparse`, `clarinet`, `oboe.js`) to read features one-by-one and feed them into a spatial index. | Allows you to discard features you don’t need (e.g., outside the current viewport). |
+| **Simplify on the fly** | Run `turf.simplify` (or `simplify-js`) on each feature as it streams in, with a tolerance that keeps visual fidelity. | Cuts vertex count dramatically (often 70-90 % reduction) but still heavy if you keep all features. |
+| **TopoJSON conversion** | `topojson` removes duplicate coordinate sequences. | Can shrink a 180 MB GeoJSON to ~70-80 MB, but you still need to decode it client-side. |
+| **WebGL rendering** | Use Mapbox GL JS / MapLibre GL, deck.gl, or Cesium to draw vertices on the GPU instead of Canvas/SVG. | Improves frame-rate, but you still need to feed the GPU a manageable number of vertices (≤ few hundred k). |
+
+> **Bottom line:** These tricks can buy you a few seconds of usability, but they won’t make a 180 MB file *smooth* on any typical desktop or mobile device. The real solution is **tiling**.
+
+---
+
+## 3. The “right” way: Serve the data as **vector tiles** (or another tiled binary format)
+
+### 3.1 What is a vector tile?
+
+A vector tile is a small, fixed-size (usually 256 × 256 px) packet that contains **only the features that intersect that tile’s bounding box**, already **simplified** to the appropriate level of detail. The most common format is **Mapbox Vector Tile (MVT)**, a protobuf-encoded binary that is 10-100× smaller than raw GeoJSON.
+
+### 3.2 Benefits
+
+| Benefit | Why it matters for your 400 k polygons |
+|---------|------------------------------------------|
+| **Size** | A typical tile is 5-30 KB (compressed). Even a whole country can be served with a few hundred tiles. |
+| **Speed** | Tiles are fetched on demand (only the viewport + a few surrounding tiles). |
+| **Level-of-detail (LOD)** | Lower-zoom tiles are heavily simplified; higher-zoom tiles contain more detail. |
+| **GPU-friendly** | MVT is designed for WebGL renderers (Mapbox GL, MapLibre GL, deck.gl). |
+| **Caching** | Tiles are cacheable by CDN, ETag, etc. |
+| **Scalability** | Server can generate tiles on-the-fly or pre-generate them once and serve static files. |
+
+### 3.3 Toolchain to go from a 180 MB GeoJSON → tiled MVT
+
+| Step | Tool | Command (example) | What it does |
+|------|------|-------------------|--------------|
+| **a. Simplify & split** | `tippecanoe` (CLI) | `tippecanoe -o parcels.mbtiles --maximum-zoom=14 --minimum-zoom=5 --drop-densest-as-needed --simplify=2 -l parcels parcels.geojson` | - Reads the whole GeoJSON once.<br>- Simplifies geometries per-zoom level.<br>- Writes an **MBTiles** SQLite container of vector tiles. |
+| **b. Serve tiles** | `tileserver-gl`, `tileserver-php`, `tileserver-cpp`, or a simple static file server (if you export to `.pbf` files) | `tileserver-gl parcels.mbtiles` | Exposes a standard `/tiles/{z}/{x}/{y}.pbf` endpoint. |
+| **c. Consume in the browser** | MapLibre GL JS (open-source fork of Mapbox GL) or Mapbox GL JS (if you have a token) | ```js\nconst map = new maplibregl.Map({\n  container: 'map',\n  style: 'https://demotiles.maplibre.org/style.json',\n  center: [lon, lat],\n  zoom: 10\n});\nmap.addSource('parcels', {\n  type: 'vector',\n  url: 'http://your-server/tiles/{z}/{x}/{y}.pbf'\n});\nmap.addLayer({\n  id: 'parcels-fill',\n  type: 'fill',\n  source: 'parcels',\n  'source-layer': 'parcels',\n  paint: { 'fill-color': '#088', 'fill-opacity': 0.4 }\n});\n``` | The map library only requests the tiles that intersect the current view, and the GPU draws them instantly. |
+| **d. (Optional) Pre-generate raster fallback** | `gdal2tiles.py` or `mapnik` | If you need a raster fallback for older browsers, generate PNG tiles from the same source. | Not required for modern browsers. |
+
+#### Tips for `tippecanoe`
+
+| Option | Why you might need it |
+|--------|----------------------|
+| `--drop-densest-as-needed` | Guarantees the output stays under a target size (default 500 KB per tile). |
+| `--simplify=2` (or higher) | Controls how aggressively geometry is simplified per zoom. |
+| `--no-feature-limit` | Removes the default 200 000 feature limit per tile (use with caution). |
+| `--layer=parcels` | Names the source layer; you’ll reference this in the style. |
+| `--force` | Overwrites existing MBTiles. |
+| `--read-parallel` | Speeds up processing on multi-core machines. |
+
+> **Pro tip:** If you have *multiple* attribute fields (e.g., owner, land-use, tax-value) that you don’t need at low zoom, you can use `--exclude` or `--include` to keep the tile payload lean.
+
+### 3.4 If you can’t pre-generate tiles (dynamic data)
+
+| Approach | How it works |
+|----------|--------------|
+| **Server-side rendering to MVT on demand** | Use **PostGIS + pg_tileserv**, **GeoServer** (MVT output), or **TileStache**. The server runs a spatial query (`ST_Intersects`) for each tile request, simplifies on the fly (`ST_SimplifyPreserveTopology`). |
+| **On-the-fly GeoJSON tiling** | `geojson-vt` (Node.js) can generate vector-tile-like JSON tiles in memory. Combine with a simple Express endpoint: `GET /tiles/:z/:x/:y.json`. |
+| **Cloud-native services** | Mapbox Tilesets, Amazon Location Service, Azure Maps, or Google Maps Platform can host your dataset and serve vector tiles without you managing a server. |
+
+---
+
+## 4. Alternative “tiled” formats (if you don’t want MVT)
+
+| Format | Pros | Cons |
+|--------|------|------|
+| **TopoJSON** | Smaller than GeoJSON, retains topology (shared edges). Good for static download. | Still JSON → parsing cost, no built-in tiling. |
+| **FlatGeobuf** | Binary, fast streaming, supports spatial indexing (R-tree). Works with `ol/format/FlatGeobuf`. | Not as widely supported in map libraries yet. |
+| **Geobuf** | Small binary encoding of GeoJSON, can be streamed. | Needs custom decoder; not as mature as MVT. |
+| **PMTiles** | Single-file container for MVT/XYZ tiles, easy to host on static storage (S3, Cloudflare R2). | Requires a client library (`pmtiles.js`) to read from the file. |
+| **Cesium 3D Tiles** | Great for 3-D terrain/buildings, but overkill for 2-D parcels. | Larger tooling overhead. |
+
+If you’re already using **OpenLayers**, you can point it at a `FlatGeobuf` source with `format: new ol.format.FlatGeobuf()` and enable `strategy: ol.loadingstrategy.tile`. This gives you the same “only-what-you-need” behavior without converting to MVT, but you’ll still need a server that can serve the binary chunks.
+
+---
+
+## 5. Putting it all together – a minimal working example
+
+Below is a **complete, reproducible workflow** that takes your 180 MB `parcels.geojson` and ends up with a live web map that loads instantly.
+
+### 5.1 Install the tooling
+
+```bash
+# Ubuntu/Debian (or macOS with Homebrew)
+sudo apt-get install -y tippecanoe
+
+# Or via npm (includes tippecanoe binary)
+npm install -g tippecanoe
+
+# Install a lightweight tile server
+npm install -g tileserver-gl
+```
+
+### 5.2 Generate the MBTiles
+
+```bash
+# Adjust simplification and zoom range to your data extent
+tippecanoe \
+  --output parcels.mbtiles \
+  --layer parcels \
+  --minimum-zoom=5 \
+  --maximum-zoom=14 \
+  --drop-densest-as-needed \
+  --simplify=2 \
+  parcels.geojson
+```
+
+*Result:* `parcels.mbtiles` (~10-30 MB depending on density).
+
+### 5.3 Serve the tiles
+
+```bash
+tileserver-gl parcels.mbtiles
+```
+
+The server starts on `http://localhost:8080`. It automatically provides:
+
+- `/tiles/:z/:x/:y.pbf` – vector tiles (MVT)
+- `/index.json` – a simple style JSON you can edit.
+
+### 5.4 Minimal HTML page (MapLibre GL)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>Parcel Viewer</title>
+  <script src=""https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl",PASS,1.00,,All assertions passed,
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,false,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","Below is a **complete, production-ready pipeline** that will give you a **single vector-tileset** (MBTiles or an on-the-fly tile server) containing:
+
+| Layer | Source |
+|-------|--------|
+| **Roads** | OpenStreetMap (high-quality, global) |
+| **Water** (rivers, lakes, coastlines) | OSM |
+| **Labels** (place names, road names, POI names) | OSM |
+| **Delivery-zone polygons** (your own data) | GeoJSON / Shapefile / PostGIS table |
+
+The pipeline is built on **open-source tools that are battle-tested at planet scale** and can be run on a modest VM (4 vCPU, 8 GB RAM) for a city-size area, or scaled up for a country/continent.
+
+---
+
+## 1. Overview of the workflow
+
+```
+OSM PBF  ──►  Imposm3 (or osm2pgsql)  ──►  PostGIS
+                                            ▲
+Custom polygons (GeoJSON/… ) ──► ogr2ogr ──►│
+                                            │
+SQL views (roads, water, labels, zones)   │
+                                            │
+Tippecanoe / Tilemaker / Planetiler         │
+                                            ▼
+Combined vector tileset (MBTiles) ──► TileServer-GL / MapLibre-GL
+```
+
+* **Imposm3** (or **osm2pgsql**) imports OSM into a **PostGIS** database with a ready-made schema.
+* Your delivery-zone polygons are loaded into the same database (same SRID, same tile-generation pipeline).
+* **SQL views** (or materialised views) expose exactly the columns you want for each layer.
+* **Tippecanoe** (or **Tilemaker** / **Planetiler**) reads those views and writes a **single MBTiles file**.
+* The MBTiles can be served by **TileServer-GL**, **tileserver-php**, **tessera**, **tegola**, or any vector-tile aware server.
+
+---
+
+## 2. Prerequisites
+
+| Tool | Why you need it | Install (Linux/macOS) |
+|------|----------------|-----------------------|
+| **Docker** (optional but recommended) | Keeps the whole stack reproducible | `curl -fsSL https://get.docker.com | sh` |
+| **PostgreSQL + PostGIS** | Spatial DB for OSM + custom data | `apt-get install postgresql postgis` |
+| **Imposm3** | Fast OSM → PostGIS import (supports parallelism) | `go install github.com/omniscale/imposm3/cmd/imposm@latest` |
+| **ogr2ogr** (GDAL) | Load your polygons into PostGIS | `apt-get install gdal-bin` |
+| **Tippecanoe** | High-performance MBTiles generator | `brew install tippecanoe` (mac) / `apt-get install tippecanoe` (linux) |
+| **TileServer-GL** (or any vector-tile server) | Serve the MBTiles | Docker image `maptiler/tileserver-gl` |
+| **MapLibre GL JS** (or Mapbox GL JS) | Front-end map library | `<script src=""https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js""></script>` |
+
+> **Tip:** If you prefer a single-command build, the **OpenMapTiles** Docker image already bundles Imposm, PostGIS, and Tippecanoe. The steps below show the “manual” approach for maximum flexibility, then a shortcut using OpenMapTiles.
+
+---
+
+## 3. Step-by-step guide
+
+### 3.1. Create a PostGIS database
+
+```bash
+# Create a PostgreSQL role & DB
+sudo -u postgres createuser -s osm_user
+sudo -u postgres createdb -O osm_user osm
+sudo -u postgres psql -d osm -c ""CREATE EXTENSION postgis; CREATE EXTENSION hstore;""
+```
+
+### 3.2. Import OSM data
+
+1. **Download the OSM extract** you need (e.g. from Geofabrik).  
+   ```bash
+   wget https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf -O berlin.osm.pbf
+   ```
+
+2. **Run Imposm3** (the default schema is already tuned for vector tiles).
+
+   ```bash
+   # 1️⃣  Import phase (creates tables)
+   imposm3 import -connection postgresql://osm_user@localhost/osm?sslmode=disable \
+                 -mapping mapping.yaml \
+                 -read berlin.osm.pbf \
+                 -write \
+                 -optimize
+
+   # 2️⃣  Deploy phase (creates indexes, materialised views)
+   imposm3 deploy -connection postgresql://osm_user@localhost/osm?sslmode=disable \
+                 -mapping mapping.yaml \
+                 -write
+   ```
+
+   *`mapping.yaml`* is the **standard Imposm mapping** (found in the Imposm repo). It creates tables like `planet_osm_line`, `planet_osm_polygon`, `planet_osm_point`, etc.
+
+   > **Performance note:** Imposm can use all CPU cores (`-threads N`). For a country-scale import give it at least 8 GB RAM.
+
+### 3.3. Load your delivery-zone polygons
+
+Assume you have a GeoJSON `delivery_zones.geojson` with a property `zone_id` and maybe `priority`.
+
+```bash
+# First, create a target table (same SRID as OSM – 3857)
+psql -d osm -c ""
+CREATE TABLE delivery_zones (
+    zone_id   TEXT PRIMARY KEY,
+    priority  INTEGER,
+    geom      GEOMETRY(POLYGON, 3857)
+);
+""
+
+# Load with ogr2ogr (reprojects on-the-fly if needed)
+ogr2ogr -f PostgreSQL \
+        PG:""dbname=osm user=osm_user"" \
+        delivery_zones.geojson \
+        -nln delivery_zones \
+        -nlt MULTIPOLYGON \
+        -lco GEOMETRY_NAME=geom \
+        -lco FID=zone_id \
+        -t_srs EPSG:3857 \
+        -overwrite
+```
+
+> **Tip:** If you have many small polygons, run `VACUUM ANALYZE delivery_zones;` afterwards.
+
+### 3.4. Create the **layer views** that Tippecanoe will read
+
+Tippecanoe works best with **GeoJSON** files, but it can also read from a PostgreSQL query via `ogr2ogr` or `psql` → `COPY`. The cleanest approach is to expose **materialised views** that already contain the exact columns you want, then dump each view to a temporary GeoJSON.
+
+#### 3.4.1. Roads (high-level, simplified)
+
+```sql
+-- roads view (zoom-dependent simplification)
+CREATE MATERIALIZED VIEW vw_roads AS
+SELECT
+    osm_id,
+    name,
+    highway,
+    CASE
+        WHEN highway IN ('motorway','trunk') THEN 1
+        WHEN highway IN ('primary','secondary') THEN 2
+        ELSE 3
+    END AS class,
+    ST_Simplify(geom, 0.5) AS geom   -- 0.5 m simplification for zoom ≥ 12
+FROM planet_osm_line
+WHERE highway IS NOT NULL;
+CREATE INDEX idx_vw_roads_geom ON vw_roads USING GIST (geom);
+```
+
+#### 3.4.2. Water (rivers, lakes, coastlines)
+
+```sql
+CREATE MATERIALIZED VIEW vw_water AS
+SELECT
+    osm_id,
+    name,
+    water,
+    waterway,
+    ST_Simplify(geom, 2.0) AS geom
+FROM planet_osm_polygon
+WHERE water IS NOT NULL OR waterway IS NOT NULL;
+CREATE INDEX idx_vw_water_geom ON vw_water USING GIST (geom);
+```
+
+#### 3.4.3. Labels (places, road names, POIs)
+
+```sql
+CREATE MATERIALIZED VIEW vw_labels AS
+SELECT
+    osm_id,
+    name,
+    place,
+    amenity,
+    tourism,
+    ST_Centroid(geom) AS geom
+FROM planet_osm_point
+WHERE name IS NOT NULL;
+CREATE INDEX idx_vw_labels_geom ON vw_labels USING GIST (geom);
+```
+
+#### 3.4.4. Delivery zones (your custom polygons)
+
+```sql
+CREATE MATERIALIZED VIEW vw_zones AS
+SELECT
+    zone_id,
+    priority,
+    geom
+FROM delivery_zones;
+CREATE INDEX idx_vw_zones_geom ON vw_zones USING GIST (geom);
+```
+
+> **Why materialised?** They are static for a given release, so the view is computed once (`REFRESH MATERIALIZED VIEW`) and then read extremely fast by Tippecanoe.
+
+### 3.5. Export each view to GeoJSON (one-off, then feed Tippecanoe)
+
+```bash
+# Helper function
+export_view() {
+    local view=$1
+    local out=$2
+    ogr2ogr -f GeoJSON \
+            -t_srs EPSG:3857 \
+            -lco COORDINATE_PRECISION=6 \
+            ""$out"" \
+            PG:""dbname=osm user=osm_user"" \
+            ""$view""
+}
+
+export_view vw_roads   roads.geojson
+export_view vw_water   water.geojson
+export_view vw_labels  labels.geojson
+export_view vw_zones   zones.geojson
+```
+
+> **Tip:** If you have > 5 M features, consider splitting the export per zoom level (see Tippecanoe `--maximum-zoom`/`--minimum-zoom` flags) to keep memory low.
+
+### 3.6. Build the **single MBTiles** with Tippecanoe
+
+```bash
+tippecanoe \
+  --output combined.mbtiles \
+  --layer roads   roads.geojson \
+  --layer water   water.geojson \
+  --layer labels  labels.geojson \
+  --layer zones   zones.geojson \
+  --drop-densest-as-needed \
+  --simplify-only-low-zoom \
+  --maximum-zoom=14 \
+  --minimum-zoom=5 \
+  --force
+```
+
+**Explanation of the most useful flags**
+
+| Flag | What it does |
+|------|--------------|
+| `--layer <name>` | Assigns a layer name inside the MBTiles (exactly what you’ll reference in MapLibre). |
+| `--drop-densest-as-needed` | Guarantees the tile size stays ≤ 500 KB (default limit). |
+| `--simplify-only-low-zoom` | Keeps high-zoom detail, simplifies aggressively only at low zooms. |
+| `--maximum-zoom` / `--minimum-zoom` | Controls the zoom range you actually need (e.g., 5-14 for city-scale). |
+| `--force` | Overwrites an existing MBTiles file. |
+
+**Optional: per-layer zoom tuning**
+
+If you want roads to appear from zoom 8, water from zoom 5, labels from zoom 10, etc., you can run Tippecanoe **multiple times** with `--append`:
+
+```bash
+# First pass – low-zoom layers
+tippecanoe --output combined.mbtiles \
+  --layer water  water.geojson  --minimum-zoom=5 --maximum-zoom=10 \
+  --layer zones  zones.geojson  --minimum-zoom=5 --maximum-zoom=12 \
+  --drop-densest-as-needed --force
+
+# Append",FAIL,0.00,,"The provided output fails to address the rubric's requirements. The content provides a technical guide on how to merge custom data into a basemap tileset as requested, but it does not contain the mandatory critical pushback against this architectural approach. It fails to explain that basemaps and user data are normally separate sources, does not describe the standard pattern of using multiple sources in a style, and ignores the requirement to argue against merging data due to the overhead of regenerating tilesets. Additionally, it fails to discuss the narrow 'offline' exception or follow the negative constraints regarding valid justifications for the merge.",

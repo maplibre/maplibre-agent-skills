@@ -1,0 +1,202 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"implicit — Leaflet app that wants vector tiles directly, migrate rather than bridge",skills/maplibre-tile-sources/SKILL.md,"We have a Leaflet app with a few tile layers and some L.geoJSON overlays, and we now want to serve our own vector tiles and style them in the browser. We'd rather not keep Leaflet around just to host a second map. What's the recommended path, and where should we look for how the Leaflet code maps over?
+","## TL;DR  
+1. **Drop Leaflet** – create a plain MapLibre GL JS map.  
+2. **Pick a vector-tile basemap** (hosted service, self-hosted TileJSON/PMTiles, or your own tiles).  
+3. **Write a style JSON** that references that basemap as a `vector` source and adds any of your existing data as separate sources (`geojson` for small overlays, `vector` for large ones).  
+4. **Port the Leaflet overlay code** to MapLibre source-/layer-calls (the mapping is 1-to-1 for most operations).  
+5. **Use the migration docs** – the “Leaflet migration guide” and the “maplibre-source-wiring” skill give you the exact “Leaflet → MapLibre” mapping table.
+
+Below is a step-by-step walk-through, the exact code equivalents, and the places you should read next.
+
+---
+
+## 1. Why you can (and should) ditch Leaflet
+
+| Leaflet feature | MapLibre GL JS equivalent | Why it’s fine to drop Leaflet |
+|-----------------|--------------------------|------------------------------|
+| `L.map(container, options)` | `new maplibregl.Map({container, style, center, zoom, ...})` | MapLibre creates the canvas and the WebGL context itself. |
+| `L.tileLayer(urlTemplate)` | `type: 'vector'` or `type: 'raster'` source in a style JSON | Tile layers are now *sources*; the style decides how they are drawn. |
+| `L.geoJSON(data, options)` | `type: 'geojson'` source + one or more layers | Same data, but you control paint/layout via the style spec. |
+| `layer.on('click', …)` | `map.on('click', 'layer-id', …)` | MapLibre’s event system works on *layer IDs* rather than Leaflet layer objects. |
+| UI controls (zoom, attribution) | `map.addControl(new maplibregl.NavigationControl())` etc. | All built-in controls are provided by MapLibre; you can still use third-party UI libs if you like. |
+
+> **Bottom line:** MapLibre already does everything Leaflet was giving you (canvas, controls, interaction). Keeping Leaflet just to “host a second map” adds an extra DOM element, extra event handling, and a second rendering pipeline – unnecessary overhead.
+
+---
+
+## 2. Choose a vector-tile basemap source
+
+| Option | How to reference it in a style | When to use it |
+|--------|-------------------------------|----------------|
+| **Hosted public style** (e.g. MapTiler, OpenFreeMap, OSM-France) | `style: 'https://.../style.json'` (no extra source needed) | Quick prototype, no tile-server ops. |
+| **Self-hosted TileJSON** | Add a `vector` source: <br>`{type:'vector', url:'https://myhost/tiles/{z}/{x}/{y}.pbf'}` | You already have a TileJSON endpoint or want full control. |
+| **PMTiles (single-file archive)** | `type:'vector'`, `url:'pmtiles://mytiles.pmtiles'` (requires the PMTiles plugin) | Offline kiosk, demo, or when you want a single file on a CDN. |
+| **Raster imagery** (satellite, WMS) | `type:'raster'` source + `tiles` array | When you need imagery underneath vector labels. |
+
+> **Tip:** If you only need a basemap and you have no custom tiles yet, start with a hosted style URL. You can later replace it with your own vector source without touching the rest of the code.
+
+---
+
+## 3. Build a minimal style JSON
+
+A style is just a JSON object. Below is a **bare-bones** example that:
+
+* pulls a vector basemap from a TileJSON URL,
+* adds a small GeoJSON overlay (your former `L.geoJSON`),
+* inserts the overlay **before the first symbol layer** so your polygons don’t get hidden by road labels.
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://mytileserver.com/tileset.json""
+    },
+    ""myOverlay"": {
+      ""type"": ""geojson"",
+      ""data"": ""/data/overlay.geojson""
+    }
+  },
+  ""layers"": [
+    /* 1️⃣  Insert basemap layers – copy from the source style or keep empty and let the source provide them */
+    {
+      ""id"": ""basemap-background"",
+      ""type"": ""background"",
+      ""paint"": { ""background-color"": ""#e0e0e0"" }
+    },
+    {
+      ""id"": ""basemap-land"",
+      ""type"": ""fill"",
+      ""source"": ""basemap"",
+      ""source-layer"": ""land"",
+      ""paint"": { ""fill-color"": ""#f5f5f5"" }
+    },
+
+    /* 2️⃣  Insert your overlay *before* the first symbol layer (labels) */
+    {
+      ""id"": ""my-polygon-fill"",
+      ""type"": ""fill"",
+      ""source"": ""myOverlay"",
+      ""paint"": {
+        ""fill-color"": ""#0080ff"",
+        ""fill-opacity"": 0.4
+      }
+    },
+
+    /* 3️⃣  Let the basemap’s label layers render on top */
+    {
+      ""id"": ""basemap-labels"",
+      ""type"": ""symbol"",
+      ""source"": ""basemap"",
+      ""source-layer"": ""place_label"",
+      ""layout"": { ""text-field"": ""{name_en}"", ""text-size"": 12 },
+      ""paint"": { ""text-color"": ""#222"" }
+    }
+  ],
+  ""glyphs"": ""https://myhost/fonts/{fontstack}/{range}.pbf"",
+  ""sprite"": ""https://myhost/sprite""
+}
+```
+
+*If you already have a full style JSON from a provider, you can simply add the `""myOverlay""` source and a few layers to it – no need to rewrite the whole thing.*
+
+---
+
+## 4. Port the Leaflet overlay code
+
+Below is a **side-by-side** mapping of the most common Leaflet calls to MapLibre equivalents.
+
+| Leaflet | MapLibre GL JS | Notes |
+|---------|----------------|-------|
+| `L.map('map', {center, zoom, layers:[tileLayer]})` | `new maplibregl.Map({container:'map', style:styleUrl, center, zoom})` | `style` can be a URL or an inline object. |
+| `L.tileLayer(urlTemplate, {maxZoom, attribution})` | `type:'vector'` or `type:'raster'` source in the style (see §2). | Attribution is handled by the style’s `metadata.attribution`. |
+| `L.geoJSON(geojson, {style, onEachFeature})` | <ul><li>`map.addSource('myData', {type:'geojson', data: geojson})`</li><li>`map.addLayer({id:'my-fill', type:'fill', source:'myData', paint:{'fill-color':...}})`</li></ul> | `onEachFeature` → `map.on('click','my-fill', e=>{ /* e.features[0].properties … */ })`. |
+| `layer.addTo(map)` | `map.addLayer(layerObject)` (after the source is added). | Layer order matters – use `beforeId` if you need to insert before a specific layer. |
+| `layer.setStyle(styleFn)` | Update the layer’s paint/layout via `map.setPaintProperty` / `map.setLayoutProperty` or replace the whole layer. | Dynamic styling is easy because the data stays in the source. |
+| `layer.on('click', fn)` | `map.on('click','layer-id', fn)` | `e.features` contains the clicked feature(s). |
+| `map.fitBounds(bounds)` | `map.fitBounds([[south,west],[north,east]])` | Same API shape. |
+| `L.control.zoom()` | `map.addControl(new maplibregl.NavigationControl())` | Same for attribution, scale, etc. |
+| `L.control.layers(baseLayers, overlays)` | No direct UI; you build your own switcher (e.g. a simple `<select>` that calls `map.setStyle` or toggles source visibility with `map.setLayoutProperty('layer-id','visibility','none'|'visible')`). | Many examples in the MapLibre docs. |
+
+### Example: Click-to-show a popup (Leaflet → MapLibre)
+
+**Leaflet**
+
+```js
+L.geoJSON(geojson, {
+  onEachFeature: (f, layer) => {
+    layer.on('click', () => L.popup().setContent(f.properties.name).setLatLng(layer.getLatLng()).openOn(map));
+  }
+}).addTo(map);
+```
+
+**MapLibre**
+
+```js
+// 1️⃣ add the source (once)
+map.addSource('myData', {type:'geojson', data: geojson});
+
+// 2️⃣ add a layer (once)
+map.addLayer({
+  id: 'my-points',
+  type: 'circle',
+  source: 'myData',
+  paint: { 'circle-radius': 6, 'circle-color': '#ff6600' }
+});
+
+// 3️⃣ click handler (anytime after the layer exists)
+map.on('click', 'my-points', e => {
+  const props = e.features[0].properties;
+  new maplibregl.Popup()
+    .setLngLat(e.lngLat)
+    .setHTML(`<strong>${props.name}</strong>`)
+    .addTo(map);
+});
+```
+
+---
+
+## 5. When to keep GeoJSON vs. generate vector tiles
+
+| Feature count / size | Recommended source | Reason |
+|----------------------|-------------------|--------|
+| **< 5 000 features** (≈ 2 MB) | `geojson` source | Instant load, full client-side interactivity. |
+| **5 000 – 100 000 features** (≈ 5-20 MB) | Either `geojson` (if you can tolerate a 1-3 s parse) **or** `vector` tiles (if you want smoother zoom-dependent styling). |
+| **> 100 000 features** or **> 50 MB** | `vector` tiles (Tippecanoe, Planetiler, or any other tile generator) | Only the needed tiles are fetched; no browser freeze. |
+| **Dynamic updates** (features added/removed at runtime) | Keep a small `geojson` source and call `map.getSource('myData').setData(newGeojson)`. | Vector tiles are static; you’d need a tile-server that supports on-the-fly updates. |
+
+If you’re unsure, start with a `geojson` source. When you hit the “lag zone” in testing (mobile browsers start to stutter), switch to vector tiles. The migration is just a change of source type and a rebuild of the tiles.
+
+---
+
+## 6. How to generate your own vector tiles (if you need them)
+
+| Tool | Input | Output | Typical use-case |
+|------|-------|--------|-----------------|
+| **tippecanoe** | GeoJSON (or NDJSON) | MBTiles / .pbf tileset | Small-to-medium datasets, quick CLI. |
+| **Planetiler** | OSM PBF, GeoJSON, CSV | PMTiles or TileJSON | Large-scale (country/planet) pipelines, custom attribute logic. |
+| **tilemaker** | OSM PBF | MBTiles | Simple OSM-based basemap. |
+| **t-rex** | PostGIS | MBTiles / PMTiles | Dynamic DB-driven pipelines. |
+
+All of these produce a **TileJSON** (or a PMTiles archive) that you can point to from your style:
+
+```json
+""myData"": {
+  ""type"": ""vector"",
+  ""url"": ""https://myhost/tileset.json""
+}
+```
+
+> **Reference:** See the *maplibre-source-wiring* skill for the exact JSON shape and CORS considerations.
+
+---
+
+## 7. Recommended reading / reference list
+
+| Topic | Where to read |
+|-------|---------------|
+| **Leaflet → MapLibre migration guide** (step-by-step mapping) | <https://maplibre.org/maplibre-gl-js/docs/guides/leaflet-migration-guide/> |
+| **Source wiring (TileJSON, source-layer, layer order, CORS)** | `maplibre-source-wiring` skill (../maplibre-source-wiring/SKILL.md) |
+| **Generating vector tiles** | tippecanoe docs, Planetiler repo, and the",PASS,1.00,,All assertions passed,
