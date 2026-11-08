@@ -117,7 +117,7 @@ For the fallback's mechanism and its limits (it is GL JS only; Native still need
 
 Two raster-specific pitfalls that wire without error but render wrong or against the wrong assumption:
 
-**`tileSize` defaults to 512; classic OSM tiles are 256.** `tile.openstreetmap.org` and other classic slippy-map tile servers serve 256px tiles, but MapLibre's raster `tileSize` defaults to 512px. Omitting `tileSize: 256` for a 256px source doesn't error — it renders at the wrong effective zoom level, with imagery and labels appearing a zoom level off, with no error or warning:
+**`tileSize` defaults to 512; classic OSM tiles are 256, and a 256px source left at the default renders a zoom level off with no error or warning.** `tile.openstreetmap.org` and other classic slippy-map tile servers serve 256px tiles, but MapLibre's raster `tileSize` defaults to 512px. When recommending `tileSize: 256`, state what omitting it does before or with the fix — the map renders at the wrong effective zoom level, imagery and labels appear a zoom level off, and nothing warns:
 
 ```json
 {
