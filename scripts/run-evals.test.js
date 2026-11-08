@@ -34,6 +34,7 @@ import {
   SIGKILL_AFTER_MS,
   withoutUnwrittenSkills
 } from './run-evals.js';
+import { recordedInputs } from './lib/eval-inputs.js';
 import { listEvalConfigs } from './lib/eval-verdicts.js';
 
 function workspace() {
@@ -1037,6 +1038,7 @@ describe('runEvals', () => {
       resultsDir,
       workDir,
       budgetMinutes: 240,
+      generator: 'the-generator',
       judge: 'the-judge',
       inputs,
       commit: 'abc123',
@@ -1048,14 +1050,75 @@ describe('runEvals', () => {
       JSON.parse(readFileSync(join(resultsDir, '2026-10-27.json'), 'utf8')),
       {
         commit: 'abc123',
+        generator: 'the-generator',
+        judge: 'the-judge',
         configs: {
           'maplibre-cartography': {
-            inputs: { skill: 's1', config: 'c1', harness: 'h' },
-            judge: 'the-judge'
+            inputs: { skill: 's1', config: 'c1', harness: 'h' }
           }
         }
       }
     );
+  });
+
+  it('names the generator and the judge in the summary and the run log, and plans the same from records with or without them', async () => {
+    const { resultsDir, workDir } = workspace();
+    const cartography = 'evals/prompts/maplibre-cartography.yaml';
+    const fonts = 'evals/prompts/maplibre-fonts-glyphs.yaml';
+    const same = { skill: 's', config: 'c', harness: 'h' };
+    const spawn = async (command, args) => {
+      writeFileSync(
+        args[args.indexOf('--output') + 2],
+        sidecar([graded('a', 0)])
+      );
+      return { exitCode: 0, durationMs: 1000 };
+    };
+    const lines = [];
+
+    await runEvals({
+      configs: [cartography],
+      name: '2026-11-08',
+      resultsDir,
+      workDir,
+      budgetMinutes: 240,
+      generator: 'the-generator',
+      judge: 'the-judge',
+      inputs: new Map([[cartography, same]]),
+      spawn,
+      log: (line) => lines.push(line)
+    });
+
+    assert.equal(lines[0], 'Generator the-generator, judge the-judge.');
+    const summary = JSON.parse(
+      readFileSync(join(workDir, 'summary.json'), 'utf8')
+    );
+    assert.equal(summary.generator, 'the-generator');
+    assert.equal(summary.judge, 'the-judge');
+    // This run's record beside one from before records named their models.
+    const records = {
+      '2026-11-08': JSON.parse(
+        readFileSync(join(resultsDir, '2026-11-08.json'), 'utf8')
+      ),
+      '2026-10-27': {
+        commit: 'abc123',
+        configs: { 'maplibre-fonts-glyphs': { inputs: same, judge: 'j' } }
+      }
+    };
+    const days = new Map([
+      ['maplibre-cartography', '2026-11-08'],
+      ['maplibre-fonts-glyphs', '2026-10-27']
+    ]);
+    const { due } = planRun({
+      configs: [cartography, fonts],
+      graded: days,
+      recorded: recordedInputs(days, (date) => records[date]),
+      inputs: new Map([
+        [cartography, same],
+        [fonts, same]
+      ]),
+      today: '2026-11-08'
+    });
+    assert.deepEqual(due, []);
   });
 
   it('hands every child the limits the run measured, and records them', async () => {

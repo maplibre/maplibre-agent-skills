@@ -1038,6 +1038,7 @@ export async function runEvals({
   costs = null,
   tokensPerDay = TOKENS_PER_DAY_DEFAULT,
   logsDir = null,
+  generator = null,
   judge = null,
   inputs = null,
   commit = null,
@@ -1071,6 +1072,8 @@ export async function runEvals({
     ...(shard === null ? {} : { shard }),
     bounds: { budgetMinutes },
     ...(limits === null ? {} : { limits }),
+    generator,
+    judge,
     // Filled in as the run goes: a config joins `planned` when it starts, and
     // one the day could not hold is `waiting`, so it is never reported missing.
     day: { tokensPerDay, spent: 0, waiting: [] },
@@ -1081,8 +1084,9 @@ export async function runEvals({
   // What each config the run graded was graded on, committed beside its CSVs,
   // so a later run can tell whether any of it has changed since (`planRun`).
   const gradedOnPath = join(resultsDir, `${name}.json`);
-  const gradedOn = { commit, configs: {} };
+  const gradedOn = { commit, generator, judge, configs: {} };
   writeFileSync(gradedOnPath, JSON.stringify(gradedOn, null, 2) + '\n');
+  log(`Generator ${generator}, judge ${judge}.`);
 
   // Asks the judge itself after a child whose grading met rate limits and left
   // its config short of a pass.
@@ -1328,7 +1332,7 @@ export async function runEvals({
     summary.configs.push(record);
     writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
     if (record.verdict === 'pass' || record.verdict === 'fail') {
-      gradedOn.configs[skill] = { inputs: inputs?.get(config) ?? null, judge };
+      gradedOn.configs[skill] = { inputs: inputs?.get(config) ?? null };
       writeFileSync(gradedOnPath, JSON.stringify(gradedOn, null, 2) + '\n');
     }
   }
@@ -1607,6 +1611,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // Beside the work dir, not in it: the work dir is uploaded as an artifact,
     // and these logs hold every request and response in full.
     logsDir: `${workDir}-logs`,
+    generator: pin ?? null,
     judge: judgePin(JSON.parse(readFileSync('package.json', 'utf8'))),
     inputs,
     commit: headCommit()
