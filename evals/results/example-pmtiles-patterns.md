@@ -311,7 +311,7 @@ callback to a Promise-based API. The wrong answer is to replace it with
 **Judge leniency note:** Cerebras scored the baseline response 1.00 despite the answer
 being incorrect — it recommended `transformRequest` instead of the updated `addProtocol`
 signature. Gemini correctly scores it 0.75 FAIL. This test illustrates why
-`--grader google:gemini-2.5-flash-lite` is recommended for local runs.
+the judge pinned in `eval:graded` is recommended for local runs.
 
 <details>
 <summary>Baseline response (score: 0.75* — FAIL with Gemini; 1.00 with Cerebras)</summary>

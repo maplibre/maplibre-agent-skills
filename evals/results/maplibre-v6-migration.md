@@ -4,15 +4,7 @@ Canonical results table for this skill. One row per eval test: baseline is the m
 answer with the skill omitted (`--var injectSkill=false`), with-skill is the same
 prompt with it injected. See `evals/prompts/maplibre-v6-migration.yaml`.
 
-Run: 2026-08-21 (tests 1-5, 7), 2026-08-24 (test 6), 2026-08-25 (test 8) · model
-`groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `--delay 20000`
-(vs. `eval:graded`'s pinned `8000` — the full `SKILL.md` triples per-call tokens,
-pushing Groq's TPM cap into timeouts at the pinned delay). Test 7's with-skill
-grading hit a Gemini rate limit instead of a verdict; hand-confirmed PASS from the
-raw completion. Test 8 ran filtered (`--filter-pattern`), not full-suite — one new
-test doesn't need the other seven re-run. Test 8's raw CSVs:
-[with-skill](latest/maplibre-v6-migration-setworkerurl-with-skill_2026-08-25.csv),
-[baseline](latest/maplibre-v6-migration-setworkerurl-baseline_2026-08-25.csv).
+Run: 2026-08-21 (tests 1-5, 7), 2026-08-24 (test 6), 2026-08-25 (test 8) · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `--delay 20000` (vs. `eval:graded`'s pinned `8000` — the full `SKILL.md` triples per-call tokens, pushing Groq's TPM cap into timeouts at the pinned delay). Test 7's with-skill grading hit a Gemini rate limit instead of a verdict; hand-confirmed PASS from the raw completion. Test 8 ran filtered (`--filter-pattern`), not full-suite — one new test doesn't need the other seven re-run. Test 8's raw CSVs: [with-skill](latest/maplibre-v6-migration-setworkerurl-with-skill_2026-08-25.csv), [baseline](latest/maplibre-v6-migration-setworkerurl-baseline_2026-08-25.csv).
 
 Test 1 re-run 2026-10-22, three runs each way, after its rubric took over the `/dist/maplibre-gl.js` check from a tripwire the skill's own v5 example matched: with skill 3/3 PASS, baseline 3/3 FAIL. Raw CSVs: [with-skill](latest/maplibre-v6-migration-with-skill-test1_2026-10-22.csv), [baseline](latest/maplibre-v6-migration-baseline-test1_2026-10-22.csv).
 
