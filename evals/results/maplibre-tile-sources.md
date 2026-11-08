@@ -4,7 +4,7 @@ Canonical results table for this skill. Baseline is the same prompt with the ski
 (`--var injectSkill=false`). Tests that pass at baseline are summarized below the table rather
 than listed: they are not evidence of a gap. See `evals/prompts/maplibre-tile-sources.yaml`.
 
-Model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`.
+Model `groq:openai/gpt-oss-120b` · judge `google:gemini-3.1-flash-lite` · `npm run eval:graded`.
 Raw CSVs under [`latest/`](latest/), matching `maplibre-tile-sources-*`.
 
 | #   | Test                                                  | Type         | Baseline (no skill)                                                        | With skill                                                       |

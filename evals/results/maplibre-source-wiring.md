@@ -4,7 +4,7 @@ Canonical results table for this skill. Baseline is the same prompt with the ski
 (`--var injectSkill=false`). Tests that pass at baseline are summarized below the table rather
 than listed: they are not evidence of a gap. See `evals/prompts/maplibre-source-wiring.yaml`.
 
-Model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`.
+Model `groq:openai/gpt-oss-120b` · judge `google:gemini-3.1-flash-lite` · `npm run eval:graded`. Tests 1, 5, 7 and 12 were graded 2026-08-27 and 2026-08-28 with the judge `google:gemini-2.5-flash-lite`.
 Raw CSVs under [`latest/`](latest/), matching `maplibre-source-wiring-*`. Numbering follows the
 current config; earlier CSVs use the numbering in force when they were written and are in run
 order, so match rows by description, never by position.

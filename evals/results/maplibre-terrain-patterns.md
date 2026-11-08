@@ -4,7 +4,7 @@
 
 Canonical results table for this skill. Baseline is the same prompt with the skill omitted (`--var injectSkill=false`). See `evals/prompts/maplibre-terrain-patterns.yaml`.
 
-Model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-flash-lite` · `npm run eval:graded`. Raw CSVs under [`latest/`](latest/), matching `maplibre-terrain-patterns-*`. Re-run 2026-08-28 on the Groq pin, replacing the 2026-07-03 Cerebras run (#64).
+Model `groq:openai/gpt-oss-120b` · judge `google:gemini-3.1-flash-lite` · `npm run eval:graded`. Raw CSVs under [`latest/`](latest/), matching `maplibre-terrain-patterns-*`. Re-run 2026-08-28 on the Groq pin with the judge `google:gemini-2.5-flash-lite`, replacing the 2026-07-03 Cerebras run (#64).
 
 | #   | Test                                             | Type         | Baseline (no skill)                                                                         | With skill                                                                                                       |
 | --- | ------------------------------------------------ | ------------ | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
