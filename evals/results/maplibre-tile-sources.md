@@ -7,11 +7,12 @@ than listed: they are not evidence of a gap. See `evals/prompts/maplibre-tile-so
 Model `groq:openai/gpt-oss-120b` · judge `google:gemini-3.1-flash-lite` · `npm run eval:graded`.
 Raw CSVs under [`latest/`](latest/), matching `maplibre-tile-sources-*`.
 
-| #   | Test                                                  | Type         | Baseline (no skill)                                                        | With skill                                                       |
-| --- | ----------------------------------------------------- | ------------ | -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| 3   | Merging basemap and application data into one tileset | Anti-pattern | **FAIL** — supplies the merge pipeline without pushing back on the premise | **PASS** — corrects the premise and gives the two-source pattern |
-| 4   | Small dataset, no tile server needed                  | Negative     | PASS                                                                       | PASS                                                             |
-| 7   | Leaflet cannot render vector tiles natively           | Implicit     | PASS 2/3 (2026-10-26)                                                      | PASS 3/3 (2026-10-26)                                            |
+| #   | Test                                                    | Type         | Baseline (no skill)                                                                                                                                | With skill                                                       |
+| --- | ------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| 3   | Merging basemap and application data into one tileset   | Anti-pattern | **FAIL** — supplies the merge pipeline without pushing back on the premise                                                                         | **PASS** — corrects the premise and gives the two-source pattern |
+| 4   | Small dataset, no tile server needed                    | Negative     | PASS                                                                                                                                               | PASS                                                             |
+| 7   | Leaflet cannot render vector tiles natively             | Implicit     | PASS 2/3 (2026-10-26)                                                                                                                              | PASS 3/3 (2026-10-26)                                            |
+| 8   | Leaflet app moving to vector tiles: migrate, not bridge | Implicit     | **FAIL** — never points to the Leaflet guide; `llm-rubric` alone passed in 1 of 2 runs, so the guide-name `icontains-any` is the gate (2026-11-04) | **PASS** — links the Leaflet migration guide (2026-11-04)        |
 
 **Result: the launch bar is cleared. `status: verified`.** One gap demonstrated closed (test 3),
 none open. Four further tests (1, 2, 5, 6) pass in both directions: they confirm the skill does not

@@ -1,0 +1,188 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"implicit — Leaflet app that wants vector tiles directly, migrate rather than bridge",skills/maplibre-tile-sources/SKILL.md,false,"We have a Leaflet app with a few tile layers and some L.geoJSON overlays, and we now want to serve our own vector tiles and style them in the browser. We'd rather not keep Leaflet around just to host a second map. What's the recommended path, and where should we look for how the Leaflet code maps over?
+","Below is a “quick-start” roadmap for moving from a Leaflet-centric app to a pure-Web-GL vector-tile map, plus a cheat-sheet that shows how the most common Leaflet constructs translate to the MapLibre GL (or Mapbox GL) API.
+
+---
+
+## 1. Pick a Web-GL vector-tile engine
+
+| Option | Why it fits the “no-Leaflet” requirement | How mature / community |
+|--------|------------------------------------------|------------------------|
+| **MapLibre GL JS** (the open-source fork of Mapbox GL JS v1) | • Actively maintained, LGPL-3.0 <br>• Same style spec as Mapbox, so you can reuse any Mapbox-style JSON <br>• Small bundle (~150 KB gz) <br>• Works in any plain-JS or framework project | Very active (GitHub ⭐ 13 k) |
+| **OpenLayers 8+** | • Full GIS feature set, raster + vector <br>• No Mapbox-style JSON – you write style objects yourself <br>• Good for heavy projection work | Mature, but larger API surface |
+| **deck.gl + @deck.gl/mapbox** (or react-map-gl) | • Great for data-driven visualisations, heat-maps, 3-D <br>• Still needs a GL map underneath (MapLibre or Mapbox) | Good if you already use React/Deck |
+
+**Recommendation:** For a drop-in replacement that feels like “Leaflet → vector tiles”, start with **MapLibre GL JS**. It gives you the same style-JSON workflow that Leaflet developers often emulate with `L.geoJSON` + CSS, and the code conversion is straightforward.
+
+---
+
+## 2. Serve the vector tiles
+
+| Tool | What it does | Typical deployment |
+|------|--------------|--------------------|
+| **tippecanoe** (CLI) | Convert large GeoJSON/OGR sources into Mapbox Vector Tiles (MVT) with zoom-level control, attribute filtering, simplification | Run locally, push the `.mbtiles` to a tile server |
+| **tileserver-gl** (Node) | Reads an `.mbtiles` file and serves both raster and vector tiles + a basic style editor | Small Docker container or a VPS |
+| **tileserver-php** / **t_rex** / **tegola** | Alternative back-ends (PHP, Go, Rust) if you need custom auth, DB-backed tiles, or higher performance | Choose based on your stack |
+| **Static CDN** (e.g. Cloudflare Workers, S3 + CloudFront) | If you pre-generate tiles for a fixed area, you can just host the `/{z}/{x}/{y}.pbf` files as static assets | Cheapest for low-update data |
+
+> **Tip:** Keep the same URL pattern you used for raster tiles (`/tiles/{z}/{x}/{y}.pbf`). That makes the migration of the “base map” layer a one-liner.
+
+---
+
+## 3. Create a style JSON
+
+*If you already have a Mapbox-style JSON (or a Mapbox Studio style) you can reuse it verbatim.*  
+Otherwise, start with the minimal skeleton:
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""my-vector-tiles"": {
+      ""type"": ""vector"",
+      ""tiles"": [""https://example.com/tiles/{z}/{x}/{y}.pbf""],
+      ""minzoom"": 0,
+      ""maxzoom"": 14
+    },
+    ""my-geojson"": {
+      ""type"": ""geojson"",
+      ""data"": ""data/overlays.geojson""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""background"",
+      ""type"": ""background"",
+      ""paint"": { ""background-color"": ""#f8f4f0"" }
+    },
+    {
+      ""id"": ""roads"",
+      ""type"": ""line"",
+      ""source"": ""my-vector-tiles"",
+      ""source-layer"": ""roads"",          // name of the layer inside the MVT
+      ""paint"": {
+        ""line-color"": ""#777"",
+        ""line-width"": 1.5
+      }
+    },
+    {
+      ""id"": ""points"",
+      ""type"": ""circle"",
+      ""source"": ""my-geojson"",
+      ""paint"": {
+        ""circle-radius"": 6,
+        ""circle-color"": ""#e00""
+      }
+    }
+  ]
+}
+```
+
+*Save this as `style.json` and point MapLibre at it:*
+
+```html
+<script src=""https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.js""></script>
+<link href=""https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+
+<div id=""map"" style=""width:100%;height:100vh;""></div>
+
+<script>
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: '/style.json',          // <-- your style file
+    center: [ -122.44, 37.76 ],
+    zoom: 12
+  });
+</script>
+```
+
+---
+
+## 4. Mapping the most common Leaflet APIs to MapLibre
+
+| Leaflet construct | MapLibre equivalent | Typical one-line translation |
+|-------------------|---------------------|------------------------------|
+| `L.tileLayer(urlTemplate)` | `map.addSource('raster', {type:'raster', tiles:[urlTemplate]});` + a raster layer | ```js map.addLayer({id:'base',type:'raster',source:'raster'}); ``` |
+| `L.geoJSON(geojson, options)` | `map.addSource('geojson', {type:'geojson', data: geojson});` + one or more layers (fill/line/circle) | ```js map.addLayer({id:'polys',type:'fill',source:'geojson',paint:{'fill-color':'#88f'}});``` |
+| `L.marker([lat,lng], {icon})` | `circle` or `symbol` layer using a point source | ```js map.addLayer({id:'pts',type:'circle',source:'geojson',paint:{'circle-color':'#f00'}});``` |
+| `L.polyline(latlngs)` | `line` layer on a GeoJSON source | Same as above, just `type:'line'` |
+| `L.polygon(latlngs)` | `fill` layer on a GeoJSON source | Same as above, `type:'fill'` |
+| `L.control.layers(baseLayers, overlays)` | No built-in UI – you build a simple HTML `<select>` that calls `map.setStyle()` or toggles `visibility` of layers | ```js map.setLayoutProperty('roads','visibility','none');``` |
+| `L.popup().setLatLng(...).setContent(html)` | `new maplibregl.Popup().setLngLat(...).setHTML(html).addTo(map);` | Direct one-to-one API |
+| `L.event` (`click`, `mouseover`, …) | `map.on('click', 'layer-id', e => …)` | Same event model, but you bind to a *layer* rather than the whole map (more efficient) |
+| `L.fitBounds(bounds)` | `map.fitBounds([[south,west],[north,east]])` | Identical signature |
+
+### Quick cheat-sheet (code)
+
+```js
+// 1️⃣ Raster base layer (Leaflet → MapLibre)
+map.addSource('base-raster', {
+  type: 'raster',
+  tiles: ['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+  tileSize: 256,
+  attribution: '&copy; OSM contributors'
+});
+map.addLayer({ id: 'base', type: 'raster', source: 'base-raster' });
+
+// 2️⃣ Vector-tile source (your own MVT)
+map.addSource('my-tiles', {
+  type: 'vector',
+  tiles: ['https://example.com/tiles/{z}/{x}/{y}.pbf']
+});
+
+// 3️⃣ Style a line layer from the MVT
+map.addLayer({
+  id: 'roads',
+  type: 'line',
+  source: 'my-tiles',
+  'source-layer': 'roads',          // <-- name inside the .mbtiles
+  paint: {
+    'line-color': '#555',
+    'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 18, 4]
+  }
+});
+
+// 4️⃣ GeoJSON overlay (Leaflet L.geoJSON → MapLibre)
+fetch('data/overlays.geojson')
+  .then(r => r.json())
+  .then(data => {
+    map.addSource('overlays', { type: 'geojson', data });
+    map.addLayer({
+      id: 'overlay-points',
+      type: 'circle',
+      source: 'overlays',
+      filter: ['==', '$type', 'Point'],
+      paint: { 'circle-radius': 6, 'circle-color': '#e00' }
+    });
+    map.addLayer({
+      id: 'overlay-lines',
+      type: 'line',
+      source: 'overlays',
+      filter: ['==', '$type', 'LineString'],
+      paint: { 'line-color': '#0a0', 'line-width': 2 }
+    });
+  });
+```
+
+---
+
+## 5. Where to read the “Leaflet → MapLibre” mapping
+
+| Resource | What you’ll find |
+|----------|------------------|
+| **MapLibre GL JS docs** – *Sources & Layers* | Full reference for raster, vector, and geojson sources, plus the style spec that replaces Leaflet’s options objects. <br>https://maplibre.org/maplibre-gl-js-docs/api/ |
+| **Mapbox GL JS v1 docs** (still valid for MapLibre) | Same API, many tutorials that use Leaflet-style examples. <br>https://docs.mapbox.com/mapbox-gl-js/api/ |
+| **Leaflet → MapLibre cheat-sheet** (GitHub gist) | Community-maintained table of 1-to-1 conversions. <br>https://gist.github.com/paulrouget/5c5c2e5c9c9c9c9c9c9c |
+| **Tippecanoe → MapLibre workflow** | Official tippecanoe README + MapLibre style examples. <br>https://github.com/mapbox/tippecanoe |
+| **tileserver-gl → MapLibre** | How to expose the same `/style.json` that MapLibre expects. <br>https://github.com/klokantech/tileserver-gl |
+| **OpenLayers → MapLibre comparison** | If you ever need to switch again, this matrix shows feature parity. <br>https://openlayers.org/en/latest/doc/faq.html#leaflet-comparison |
+
+---
+
+## 6. Minimal “drop-in” migration checklist
+
+| Step | Action |
+|------|--------|
+| **1. Generate MVT** | `tippecanoe -o data.mbtiles -zg --drop-densest-as-needed source.geojson` |
+| **2. Spin a tile server** | `docker run -p 8080:80 -v $(pwd)/data.mbtiles:/data/data.mbtiles klokantech/tileserver-gl` |
+| **3. Write a style.json** | Point the `tiles` array at `http://localhost:8080/data/{z}/{x}/{y}.",FAIL,0.50,,"Expected output to contain ""leaflet migration guide""",
