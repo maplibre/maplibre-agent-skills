@@ -10,6 +10,10 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 - `maplibre-native-gl-js-parity`: six places where MapLibre Native and GL JS differ, release by release, with the Native release that closed each gap, the tracking issue for each still open, and what to do on Native instead ([#165](https://github.com/maplibre/maplibre-agent-skills/pull/165))
 
+### Changed
+
+- `maplibre-tile-sources`: point Leaflet migrations at the GL JS Leaflet migration guide ([#177](https://github.com/maplibre/maplibre-agent-skills/pull/177))
+
 ### Fixed
 
 - `maplibre-mapbox-migration`: recommends OpenFreeMap by URL in the tile-source step and gives the v1.13 fork as the reason a Mapbox v2 call fails, in the paragraphs a short answer is drawn from ([#178](https://github.com/maplibre/maplibre-agent-skills/pull/178))
