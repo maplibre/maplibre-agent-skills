@@ -152,6 +152,8 @@ map.setSky({
 });
 ```
 
+MapLibre has no `sky` layer type: `sky` is a root style property, and it takes only the seven properties in the example above.
+
 Verify any other v2 method against the [Map API reference](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/) before assuming an upgrade will restore it.
 
 #### Behavior that changed in later MapLibre versions
