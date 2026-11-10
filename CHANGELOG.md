@@ -16,6 +16,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Fixed
 
+- `maplibre-mapbox-migration`: rewrites and streamlines instructions, gives a verdict for each plugin the user names instead of sending them to awesome-maplibre, reorders the steps (token and style before API changes), and covers callbacks that became promises in v4 and behavior that changed in later MapLibre versions ([#186](https://github.com/maplibre/maplibre-agent-skills/pull/186))
 - `maplibre-source-wiring`: states in the `tileSize` lead sentence that a 256px source left at the 512 default renders a zoom level off, so a short answer still says it; test 10's rubric drops its "should" clause. ([#192](https://github.com/maplibre/maplibre-agent-skills/pull/192))
 - `maplibre-mapbox-migration`: recommends OpenFreeMap by URL in the tile-source step and gives the v1.13 fork as the reason a Mapbox v2 call fails, in the paragraphs a short answer is drawn from ([#178](https://github.com/maplibre/maplibre-agent-skills/pull/178))
 - `maplibre-tile-sources`: states that Leaflet's core draws only raster tiles before recommending MapLibre GL Leaflet, in the paragraph a short answer is drawn from ([#181](https://github.com/maplibre/maplibre-agent-skills/pull/181))
