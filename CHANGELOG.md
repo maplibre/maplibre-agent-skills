@@ -28,6 +28,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- `scripts/run-evals.js`: call-site comments shrink to what each function does and any non-obvious invariant, and `evals/README.md` explains how the runner bounds each child and kills its process group. ([#189](https://github.com/maplibre/maplibre-agent-skills/pull/189))
 - The results docs name their judge, `lint:model-pins` checks them against the pins, and each run's records now include the generator and judge ids. ([#191](https://github.com/maplibre/maplibre-agent-skills/pull/191))
 - Release watch: also flags a release note that mentions a row of the `maplibre-native-gl-js-parity` table, such as the first Native release to draw a globe ([#184](https://github.com/maplibre/maplibre-agent-skills/pull/184))
 - Escape backslashes before pipes in the eval issue's re-run signal (code scanning alert 4) ([#172](https://github.com/maplibre/maplibre-agent-skills/pull/172))
