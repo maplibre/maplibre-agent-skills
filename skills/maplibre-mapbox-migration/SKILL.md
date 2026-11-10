@@ -96,9 +96,10 @@ const map = new maplibregl.Map({
 
 **Custom Mapbox styles:** If you designed a style in Mapbox Studio, you cannot load it directly in MapLibre. [Export the style JSON](https://docs.mapbox.com/help/dive-deeper/transfer-styles-between-accounts/) and replace Mapbox source URLs with URLs for your chosen tile source. **Your styles will not render unless and until you adjust all references to the Mapbox tile schema to match the tile schema of your new tile source.** In addition to updating source URLs, this means adapting the `id`, `source`, and `source-layer` properties in your style JSON to match the new source and layer names.
 
-Most properties in Mapbox styles are compatible with MapLibre. See the [Style Specification](https://maplibre.org/maplibre-style-spec/) for supported properties. Use [Maputnik](https://maputnik.github.io/) to debug a style visually, and validate it with the [style spec CLI tools](https://github.com/maplibre/maplibre-style-spec?tab=readme-ov-file#cli-tools):
+Most properties in Mapbox styles are compatible with MapLibre. See the [Style Specification](https://maplibre.org/maplibre-style-spec/) for supported properties. Use [Maputnik](https://maputnik.github.io/) to debug a style visually, and validate it with the [style spec CLI tools](https://github.com/maplibre/maplibre-style-spec?tab=readme-ov-file#cli-tools), which `@maplibre/maplibre-gl-style-spec` provides:
 
 ```bash
+npm install --save-dev @maplibre/maplibre-gl-style-spec
 npx gl-style-validate style.json
 ```
 
@@ -118,17 +119,17 @@ Mapbox code can break on MapLibre in three ways: a callback where MapLibre retur
 
 #### Callbacks became promises (GL JS v4.0.0)
 
-Mapbox GL JS still takes callbacks for these methods in every version, v1 through the current v3, so any Mapbox code that passes a callback to them needs converting. MapLibre v4.0.0 and later return a promise instead and do not accept the callback; use the returned promise ([v4.0.0 CHANGELOG](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md)).
+Mapbox GL JS takes callbacks for these methods in every version (v1 to v3). MapLibre v4.0.0 and later return a promise and do not accept the callback, so convert any Mapbox code that passes one ([v4.0.0 CHANGELOG](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md)).
 
 - `map.loadImage(url, callback)` → `const { data } = await map.loadImage(url)`
 - `GeoJSONSource` `getClusterExpansionZoom`, `getClusterChildren` and `getClusterLeaves` → return a `Promise`
-- `setRTLTextPlugin(url, callback)` → returns a `Promise` (Mapbox GL JS v3.33.0 removed this method, so code written for v3.33 or later does not call it)
+- `setRTLTextPlugin(url, callback)` → returns a `Promise` from v4.0.0. From v6.9.0 MapLibre draws Arabic and Hebrew without the plugin and deprecates the call, so on a current version delete it. Mapbox GL JS v3.33.0 removed this method, so code written for v3.33 or later does not call it
 
 The same release removed the global getters and setters: `maplibregl.workerCount`, `maxParallelImageRequests` and `workerUrl` became `getWorkerCount()`/`setWorkerCount()`, `getMaxParallelImageRequests()`/`setMaxParallelImageRequests()` and `getWorkerUrl()`/`setWorkerUrl()`.
 
 #### Translate Mapbox v2-only APIs, Do Not Look for Them
 
-MapLibre forked from Mapbox GL JS v1.13 in December 2020, so a Mapbox GL JS v2 method exists in MapLibre only where MapLibre reimplemented it under its own name, and no MapLibre release adds the Mapbox names. When a v2 call fails after migrating, say why: the fork, not a missed migration step. Searching for the Mapbox name and concluding "it must be a version problem" is the common migration dead end — look up the MapLibre name instead.
+MapLibre forked from Mapbox GL JS v1.13 in December 2020, so a Mapbox GL JS v2 method exists in MapLibre only where MapLibre reimplemented it. Terrain and projection kept the Mapbox names: `setTerrain` (v2.2.0), `queryTerrainElevation` (v3.0.0) and `setProjection` (v5.0.0; pass `{type: 'globe'}`, not Mapbox's string or `{name: ...}`). Fog and the free camera did not; the table below gives their MapLibre names. When one of those calls fails after migrating, say why: the fork, not a missed migration step. Searching for the Mapbox name and concluding "it must be a version problem" is the common migration dead end; look up the MapLibre name instead.
 
 | Mapbox GL JS v2                                                                  | MapLibre GL JS                                                                                                       | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -157,14 +158,13 @@ Verify any other v2 method against the [Map API reference](https://maplibre.org/
 
 Mapbox code that worked on MapLibre v1 to v3 can still break on the latest version. Check the app for these. For the v6 changes to `styleimagemissing`, `map.transform`, the ESM-only build and the worker URL, follow [maplibre-v6-migration](../maplibre-v6-migration/SKILL.md).
 
-| Mapbox code                                                                                              | On MapLibre                                                                                                                                |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Chained listeners, `map.on('a', f).on('b', g)` (Mapbox `on` returns the map)                             | v5.0.0: `on` returns a subscription, so the chain breaks; call `map.on` once per event                                                     |
-| `antialias`, `preserveDrawingBuffer` or `failIfMajorPerformanceCaveat` as top-level `Map` options        | v5.0.0: set them inside the `canvasContextAttributes` object                                                                               |
-| `JSON.parse(feature.properties.x)` on a nested object or array property                                  | v6: nested properties are real objects, so `JSON.parse` throws; remove it                                                                  |
-| `#pragma mapbox` in custom layer shaders                                                                 | v6: use `#pragma maplibre`                                                                                                                 |
-| An app that supports browsers without WebGL2 (Mapbox GL JS v1 works without it)                          | v3 and later require WebGL2; the `Map` constructor throws when it is unavailable                                                           |
-| Rendering and `queryRenderedFeatures` results that differ from Mapbox (vector tile slicing, label fixes) | v6: vector tiles are sliced instead of overscaled; set `zoomLevelsToOverscale: undefined` in `MapOptions` to restore the previous behavior |
+| Mapbox code                                                                                              | On MapLibre                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chained listeners, `map.on('a', f).on('b', g)` (Mapbox `on` returns the map)                             | v5.0.0: `on` returns a subscription, so the chain breaks; call `map.on` once per event                                                                                |
+| `antialias`, `preserveDrawingBuffer` or `failIfMajorPerformanceCaveat` as top-level `Map` options        | v5.0.0: set them inside the `canvasContextAttributes` object                                                                                                          |
+| `JSON.parse(feature.properties.x)` on a nested object or array property                                  | v6: nested properties are real objects, so `JSON.parse` throws; remove it                                                                                             |
+| An app that supports browsers without WebGL2 (Mapbox GL JS v1 works without it)                          | v6.0.0: WebGL2 is required (v3.1.0 to v5.x fall back to WebGL1). From v6.7.0 the `Map` constructor throws `GPUInitializationError`; earlier v6 fires an `error` event |
+| Rendering and `queryRenderedFeatures` results that differ from Mapbox (vector tile slicing, label fixes) | v6: vector tiles are sliced instead of overscaled; set `zoomLevelsToOverscale: undefined` in `MapOptions` to restore the previous behavior                            |
 
 ### 5. Replace Mapbox Services and Plugins
 
@@ -189,10 +189,10 @@ Update your code to use the new endpoints and response formats; the map layer an
 
 Common cases:
 
-| Mapbox plugin               | On MapLibre                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@mapbox/mapbox-gl-draw`    | Works after overriding its CSS class constants, as in the MapLibre example [Draw a polygon with mapbox-gl-draw](https://maplibre.org/maplibre-gl-js/docs/examples/draw-polygon-with-mapbox-gl-draw/). [Terra Draw](https://maplibre.org/maplibre-gl-js/docs/examples/draw-geometries-with-terra-draw/) is an actively maintained alternative. |
-| `@mapbox/mapbox-gl-compare` | Replace with [`@maplibre/maplibre-gl-compare`](https://github.com/maplibre/maplibre-gl-compare).                                                                                                                                                                                                                                              |
+| Mapbox plugin            | On MapLibre                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@mapbox/mapbox-gl-draw` | Works after overriding its CSS class constants, as in the MapLibre example [Draw a polygon with mapbox-gl-draw](https://maplibre.org/maplibre-gl-js/docs/examples/draw-polygon-with-mapbox-gl-draw/). [Terra Draw](https://maplibre.org/maplibre-gl-js/docs/examples/draw-geometries-with-terra-draw/) is an actively maintained alternative. |
+| `mapbox-gl-compare`      | Replace with [`@maplibre/maplibre-gl-compare`](https://github.com/maplibre/maplibre-gl-compare).                                                                                                                                                                                                                                              |
 
 For any other plugin, say plainly if you do not know its status, and point the user to its README and issue tracker for MapLibre support, and to the plugin sections of [awesome-maplibre](https://github.com/maplibre/awesome-maplibre) (User Interface, Geocoding & Search, Map Rendering), a community-contributed list where MapLibre-specific alternatives are often listed. Do not claim a plugin works without a source or a test; prefer a MapLibre-native alternative where one exists. If the user has not named their plugins, ask which ones they use.
 
@@ -222,6 +222,7 @@ Most of your map code does not change:
 - [MapLibre Style Specification](https://maplibre.org/maplibre-style-spec/) and [GL JS API reference](https://maplibre.org/maplibre-gl-js/docs/API/): everything the guide does not cover
 - [MapLibre Style Specification, `sky`](https://maplibre.org/maplibre-style-spec/sky/), [`Map.setSky`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#setsky), [`Map.calculateCameraOptionsFromCameraLngLatAltRotation`](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#calculatecameraoptionsfromcameralnglataltrotation) and [`CameraOptions`](https://maplibre.org/maplibre-gl-js/docs/API/type-aliases/CameraOptions/): the replacements for Mapbox's `fog` and free camera
 - [MapLibre GL JS CHANGELOG](https://github.com/maplibre/maplibre-gl-js/blob/main/CHANGELOG.md)
+- Topic structure and comparison elements adapted from the `mapbox-maplibre-migration` skill in [mapbox-agent-skills](https://github.com/mapbox/mapbox-agent-skills). Copyright (c) Mapbox, Inc. for adapted portions.
 
 ---
 
