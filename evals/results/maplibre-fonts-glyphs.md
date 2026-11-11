@@ -20,3 +20,5 @@ Run: 2026-10-26, on the final text with the judge `google:gemini-3.1-flash-lite`
 **Result: every targeting test fails at baseline and passes with the skill, and the negative holds. `status: verified`.**
 
 One test 6 answer carries a code comment saying a raster-dem source "can contain multiple font stacks"; no assertion catches it.
+
+The 2026-11-11 scheduled run failed test 1 once, on an answer that never named 5.11. Seven of the 25 answers on record named it past their 700th character or not at all, each opening with a paraphrase of the "`glyphs` omitted entirely" bullet, so that bullet now starts with the version. Test 1 then passed 12 of 12, each answer naming 5.11.0 in its first 115 characters ([CSV](latest/maplibre-fonts-glyphs-with-skill-test1-repeats_2026-11-11.csv)), and the full config passed 6 of 6 ([CSV](latest/maplibre-fonts-glyphs-with-skill_2026-11-11.csv)).
