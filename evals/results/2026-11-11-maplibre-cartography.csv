@@ -1,0 +1,690 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — point symbols camouflaged against aerial imagery,skills/maplibre-cartography/SKILL.md,I have custom point icons on a MapLibre GL JS map over satellite/aerial imagery. Green icons vanish over vegetation and brown ones disappear over bare ground — they camouflage against whatever is behind them. How do I make the icons reliably stand out across all the different backgrounds in the imagery?,"Below is a **step-by-step recipe** that turns “green-and-brown icons disappear in the weeds” into “bright, readable symbols that pop on any satellite or aerial image”.  
+All of the techniques come from the **MapLibre-Cartography** skill – they work with MapLibre GL JS v2+ and with any raster imagery source (NAIP, Sentinel-2, Mapbox-satellite, etc.).
+
+---
+
+## 1. The core idea – give every icon a **contrast halo** (or outline)
+
+A halo works exactly the same way a text halo does: it creates a thin band of a colour that is guaranteed to be different from *any* background pixel.  
+Because satellite imagery has no single “base colour”, the halo must be **dark and semi-transparent** (the same rule you use for labels on imagery).
+
+| What you need | Why it works |
+|---------------|--------------|
+| **`icon-halo-color: ""rgba(0,0,0,0.75)""`** | Dark enough to be seen on bright fields, roads, rooftops, snow, etc. |
+| **`icon-halo-width: 1.5–2.0`** (pixels) | Thick enough to separate the icon from the background, but thin enough to stay “icon-like”. |
+| **`icon-color`** (the fill of the icon) – keep it **saturated** (amber, terracotta, teal) rather than a muted earth tone. | Saturation is the visual channel that survives best against the low-saturation of most aerial photos. |
+
+> **Important:** The halo only works on **SDF (signed-distance-field) sprites**. If you are using a full-colour PNG, the halo property is ignored – you must bake the outline into the image itself (see “Option B” below).
+
+---
+
+## 2. Convert your SVG/PNG icons to **SDF sprites**
+
+### 2.1 Why SDF?
+* The same sprite can be recoloured (`icon-color`) and outlined (`icon-halo-*`) at render time, so you never need a separate “white-icon-with-black-stroke” file for each colour.
+* The halo is crisp at any scale because it is generated mathematically from the distance field.
+
+### 2.2 How to create an SDF sprite at runtime
+
+```js
+// 1️⃣ Load the SVG source (you can also fetch a pre-rasterised PNG)
+fetch('icons/park.svg')
+  .then(r => r.text())
+  .then(svgText => {
+    // 2️⃣ Turn the SVG into an ImageBitmap (the browser rasterises it)
+    const blob = new Blob([svgText], {type: 'image/svg+xml'});
+    return createImageBitmap(blob);
+  })
+  .then(bitmap => {
+    // 3️⃣ Add it to the map as an SDF sprite
+    map.addImage('park-sdf', bitmap, { sdf: true, pixelRatio: 2 });
+  })
+  .catch(err => console.error('Icon load error', err));
+```
+
+*Make sure the SVG has a **transparent background** and that the graphic itself is **black** (or any single colour).*  
+MapLibre will treat the black shape as the “filled area” and everything else as transparent, then it can colour it with `icon-color` and add a halo.
+
+### 2.3 Pre-built SDF sprite sheet (optional)
+
+If you have many icons, generate a sprite sheet with a tool like **`mapbox-gl-sprite`** or **`@mapbox/sprite-packer`** using the `--sdf` flag. Host the resulting `sprite.png` and `sprite.json` and reference them in the style:
+
+```json
+{
+  ""sprite"": ""https://my.cdn.com/sprites/sdf-sprite""
+}
+```
+
+---
+
+## 3. Style the icon layer
+
+Below is a **complete layer definition** that works on any imagery basemap.
+
+```json
+{
+  ""id"": ""custom-points"",
+  ""type"": ""symbol"",
+  ""source"": ""my-points"",               // a GeoJSON or vector source
+  ""source-layer"": ""points"",            // omit for GeoJSON
+  ""layout"": {
+    ""icon-image"": [""case"",
+      [""=="", [""get"", ""type""], ""park""],   ""park-sdf"",
+      [""=="", [""get"", ""type""], ""water""],  ""water-sdf"",
+      ""default-sdf""
+    ],
+    ""icon-size"": [""interpolate"", [""linear""], [""zoom""],
+      5, 0.6,
+      12, 1.2
+    ],
+    ""icon-allow-overlap"": true,
+    ""icon-ignore-placement"": false
+  },
+  ""paint"": {
+    // 1️⃣ Saturated fill colour – pick a hue that is *not* common in the imagery.
+    ""icon-color"": [
+      ""match"", [""get"", ""type""],
+      ""park"", ""#2ecc71"",      // bright teal
+      ""water"", ""#3498db"",     // vivid blue
+      ""default"", ""#e67e22""   // orange-terracotta (good contrast on most soils)
+    ],
+
+    // 2️⃣ Dark semi-transparent halo – the universal “imagery safe” halo.
+    ""icon-halo-color"": ""rgba(0,0,0,0.75)"",
+    ""icon-halo-width"": 1.8,
+
+    // 3️⃣ Optional extra contrast for very small icons
+    ""icon-halo-blur"": 0.5
+  }
+}
+```
+
+### What each part does
+
+| Property | Effect |
+|----------|--------|
+| `icon-color` | Gives you a **saturated, high-chroma** fill that stands out against the low-chroma background of most photos. |
+| `icon-halo-color` + `icon-halo-width` | Guarantees a **dark outline** that separates the icon from any bright or dark patch underneath. |
+| `icon-halo-blur` (optional) | Softens the edge a little, making the halo feel less “sticker-like”. |
+| `icon-allow-overlap: true` | Prevents the engine from hiding icons when they collide – useful for dense point clouds. |
+| `icon-size` interpolation | Scales the icon with zoom so it never becomes too tiny (where the halo would dominate) or too huge (where the halo looks heavy). |
+
+---
+
+## 4. If you **cannot use SDF** (e.g., you have a full-colour PNG)
+
+1. **Add a built-in outline** in the graphic editor (Photoshop, Illustrator, Inkscape).  
+   * Draw a 2-pixel stroke around the shape in **black** (or dark gray).  
+   * Keep the interior colour saturated.  
+   * Export with a transparent background.
+
+2. **Add a subtle drop-shadow** that mimics a **contact shadow** (a blurred ellipse under the icon).  
+   * This anchors the symbol to the ground and gives a sense of depth, which helps the eye separate it from the background.
+
+3. **Layer order** – make sure the icon layer sits **above the raster imagery** but **below any basemap label layers** (see Section 5).  
+
+```json
+{
+  ""id"": ""icon-layer-non-sdf"",
+  ""type"": ""symbol"",
+  ""source"": ""my-points"",
+  ""layout"": {
+    ""icon-image"": ""park-png"",   // name from the sprite sheet (non-SDF)
+    ""icon-size"": 1.0,
+    ""icon-allow-overlap"": true
+  },
+  ""paint"": {
+    // No halo support – rely on the baked outline.
+    ""icon-opacity"": 1
+  }
+}
+```
+
+---
+
+## 5. **Layer ordering** – keep icons under labels but over imagery
+
+```js
+// 1️⃣ Find the first symbol (label) layer in the base style
+const firstLabelId = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
+// 2️⃣ Insert your icon layer *before* that label layer
+map.addLayer(iconLayerObject, firstLabelId);
+```
+
+Result:  
+
+```
+background → raster imagery → hillshade (if any) → terrain fills → roads → your icons → basemap labels → your custom labels (if any)
+```
+
+If you accidentally add the icon layer **after** the label layer, the icons will cover the text, which is the most common source of “labels disappear”.
+
+---
+
+## 6. Extra visual tricks for *very* busy imagery
+
+| Technique | When to use | How to implement |
+|-----------|-------------|------------------|
+| **Gradient fill** (light-to-dark) | When the icon is a simple shape (e.g., a pin) and you want a 3-D cue. | In the SVG, add a linear gradient from `#e67e22` (top) to `#c0392b` (bottom). The gradient stays when the sprite is recoloured via `icon-color` if you keep the gradient stops as percentages of the shape. |
+| **Contact shadow** (ellipse under the base) | To anchor the symbol to the ground, especially for larger icons (e.g., a building silhouette). | Add a blurred ellipse (`<ellipse ... filter=""url(#shadow)"" />`) to the SVG, sized ~30 % of the icon height, with `fill=""rgba(0,0,0,0.3)""`. |
+| **Dual-tone icons** (stroke + fill) | When you need a *very* strong separation but still want a colourful interior. | Keep the interior black in the source SVG, then use `icon-color` for the fill and `icon-halo-color` for the stroke (set `icon-halo-width` to ~1). |
+| **Dynamic halo colour by zoom** | At very low zoom the halo can look too thick; you can fade it out. | `""icon-halo-color"": [""interpolate"", [""linear""], [""zoom""], 5, ""rgba(0,0,0,0.6)"", 12, ""rgba(0,0,0,0.85)""]` |
+
+---
+
+## 7. Accessibility checklist (WCAG 2.1 AA)
+
+1. **Contrast** – The combination *icon colour + halo* must meet 4.5:1 against the *average* background.  
+   *A dark halo with 0.75 opacity + a bright fill typically satisfies this.*  
+   Test with a tool that can sample a screenshot of the map (e.g., WebAIM’s Contrast Checker) and input the **effective colour** (the halo colour blended over the background).
+
+2. **Size** – Keep the **minimum visual size** of the icon at **≈10 px** (including halo) at the lowest zoom where it appears. Smaller icons become invisible on high-resolution imagery.
+
+3. **Shape-only cues** – Do not rely solely on colour to convey meaning. Add a **different silhouette** (e.g., a tree shape for parks, a wave for water) or a **different halo width** for the most important class.
+
+4. **Screen-reader fallback** – Provide a hidden `<table>` or ARIA-labelled list of the point features, or expose the underlying GeoJSON via a separate endpoint that a screen-reader can query.
+
+---
+
+## 8. Quick “copy-paste” starter
+
+```js
+// 1️⃣ Load SDF icons (run once after map is created)
+['park', 'water', 'default'].forEach(name => {
+  fetch(`icons/${name}.svg`)
+    .then(r => r.text())
+    .then(svg => {
+      const blob = new Blob([svg], {type: 'image/svg+xml'});
+      return createImageBitmap(blob);
+    })
+    .then(bmp => map.addImage(`${name}-sdf`, bmp, {sdf: true}))
+    .catch(console.error);
+});
+
+// 2️⃣ Add the icon layer under the first label layer
+const firstLabel = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
+map.addLayer({
+  id: 'my-points',
+  type: 'symbol',
+  source: 'my-points',
+  layout: {
+    'icon-image': ['match', ['get', 'type'],
+      'park', 'park-sdf',
+      'water', 'water-sdf',
+      'default-sdf'
+    ],
+    'icon-size': ['interpolate', ['linear'], ['zoom'], 5, 0.6, 12, 1.2],
+    'icon-allow-overlap': true
+  },
+  paint: {
+    'icon-color': [
+      'match', ['get', 'type'],
+      'park', '#2ecc71',
+      'water', '#3498db',
+      '#e67e22'   // default = orange-terracotta
+    ],
+    'icon-halo-color': 'rgba(0,0,0,0.75)',
+    'icon-halo-width': 1.8,
+    'icon-halo-blur': 0.5
+  }
+}, firstLabel);
+```
+
+That’s it – your icons will now **stand out on any satellite or aerial background**, regardless of whether the pixel underneath is bright corn, dark forest, or a concrete roof.
+
+---
+
+### TL;DR
+
+| Problem | Fix |
+|---------|-----|
+| Icons blend into vegetation/soil | Use **SDF sprites** + **dark semi-transparent halo** (`rgba(0,0,0,0.75)`, width ≈ 1.5-2 px). |
+| Need",PASS,1.00,,All assertions passed,
+anti-pattern — reducing road opacity to calm bright roads on imagery,skills/maplibre-cartography/SKILL.md,I dropped my OSM Bright vector road layers on top of satellite imagery and the bright orange/yellow roads look garish and dominate the map. My instinct is to lower their opacity so the imagery shows through. Is that the right fix?,"### Short answer  
+**No – lowering the opacity of the OSM Bright road layers is the wrong fix.**  
+A semi-transparent orange/yellow line lets the busy photographic background bleed through, which makes the roads look fuzzy, flat and still visually dominant. The cartographic-correct solution is to **re-palette the roads for an imagery basemap**:
+
+1. **Desaturate the colors** (move them toward neutral greys or muted earth tones).  
+2. **Keep the roads opaque** so they stay crisp and legible.  
+3. **Retain hierarchy with width and value, not hue** (wide motorways stay thick, residential streets stay thin).  
+4. **Use a darker casing that “contains” the fill** rather than a bright outline.  
+5. **Optionally interpolate the road colors by zoom** so low-zoom roads stay subtle and high-zoom roads become a bit brighter.
+
+Below is a step-by-step recipe, plus the supporting style snippets you can drop into your MapLibre style JSON.
+
+---
+
+## 1. Why opacity isn’t the answer
+
+| Problem | What happens when you lower opacity? |
+|---------|---------------------------------------|
+| **Loss of visual weight** | A 30 %-transparent orange line looks like a washed-out brushstroke; it no longer conveys the road hierarchy. |
+| **Background texture shows through** | Satellite imagery is full of texture (trees, roofs, fields). Transparency lets that texture compete with the road line, making the road harder to read. |
+| **Contrast & accessibility suffer** | WCAG contrast is calculated on the *combined* text/line + halo against the background. A semi-transparent line often falls below the 4.5:1 ratio for normal text/line sizes. |
+| **Inconsistent appearance across zoom** | At low zoom you only see a few major roads; a translucent orange line will look like a faint smear, while at high zoom the same opacity makes every minor street look equally “ghost-like”. |
+
+The cartographic principle is **“figure-ground separation”**: the road (figure) must be clearly distinguished from the photographic ground (background). The most reliable way to achieve that on imagery is **color + opacity = opaque, high-contrast, low-chroma**.
+
+---
+
+## 2. Re-palette the road network
+
+### 2.1 Choose a neutral palette
+
+| Road class | Suggested fill (road surface) | Suggested casing (edge) |
+|------------|------------------------------|--------------------------|
+| Motorway / freeway | `#c0c0c0` (light-mid grey) | `#5a5a5a` (dark grey) |
+| Primary / trunk | `#b8b8b8` | `#4a4a4a` |
+| Secondary | `#a8a8a8` | `#3a3a3a` |
+| Tertiary / residential | `#999999` | `#2a2a2a` |
+| Service / footway | `#888888` (thin) | `#1a1a1a` (optional) |
+
+*Why grey?*  
+- Grey is a **neutral value** that works on any background hue (green fields, blue water, red roofs).  
+- It preserves the **value hierarchy** (lighter fill, darker casing) without adding a competing hue.  
+- It meets WCAG contrast when paired with a dark halo or casing.
+
+If you need a semantic hue (e.g., a bike-lane in green), keep it **muted** (`#7fa68f`) and still use a dark halo/casing.
+
+### 2.2 Keep the roads **opaque**
+
+```json
+{
+  ""id"": ""road-motorway-fill"",
+  ""type"": ""line"",
+  ""source"": ""osm"",
+  ""source-layer"": ""transportation"",
+  ""filter"": [""=="", ""class"", ""motorway""],
+  ""layout"": { ""line-cap"": ""round"", ""line-join"": ""round"" },
+  ""paint"": {
+    ""line-color"": ""#c0c0c0"",
+    ""line-width"": [
+      ""interpolate"", [""linear""], [""zoom""],
+      5, 0.5,
+      10, 2,
+      14, 6,
+      18, 12
+    ],
+    ""line-opacity"": 1
+  }
+},
+{
+  ""id"": ""road-motorway-casing"",
+  ""type"": ""line"",
+  ""source"": ""osm"",
+  ""source-layer"": ""transportation"",
+  ""filter"": [""=="", ""class"", ""motorway""],
+  ""layout"": { ""line-cap"": ""round"", ""line-join"": ""round"" },
+  ""paint"": {
+    ""line-color"": ""#5a5a5a"",
+    ""line-width"": [
+      ""interpolate"", [""linear""], [""zoom""],
+      5, 1,
+      10, 3,
+      14, 8,
+      18, 14
+    ],
+    ""line-opacity"": 1
+  }
+}
+```
+
+*Key points*  
+
+- **Two layers**: a *fill* (lighter) and a *casing* (darker). The casing is always a few pixels wider, creating a crisp “edge” that separates the road from the imagery.  
+- **No `line-opacity` < 1** – keep both layers fully opaque.  
+- **Width ramps** keep hierarchy; you can still make motorways thick at high zoom while keeping them thin enough at low zoom.
+
+### 2.3 Optional: Zoom-based color interpolation
+
+If you want the roads to become a touch brighter as you zoom in (so they stand out when the map is dense), interpolate the fill color:
+
+```json
+{
+  ""id"": ""road-primary-fill"",
+  ""type"": ""line"",
+  ""source"": ""osm"",
+  ""source-layer"": ""transportation"",
+  ""filter"": [""=="", ""class"", ""primary""],
+  ""paint"": {
+    ""line-color"": [
+      ""interpolate"",
+      [""linear""], [""zoom""],
+      8, ""#b8b8b8"",   // darker at low zoom
+      12, ""#c8c8c8"",  // lighter at mid zoom
+      16, ""#d8d8d8""   // brightest at high zoom
+    ],
+    ""line-width"": [
+      ""interpolate"", [""linear""], [""zoom""],
+      8, 1,
+      12, 3,
+      16, 6
+    ],
+    ""line-opacity"": 1
+  }
+}
+```
+
+The same pattern can be applied to any road class. The **casing** should stay a constant dark grey (or a darker shade of the fill) so the edge remains distinct.
+
+---
+
+## 3. Add a subtle halo (optional but recommended)
+
+If you still feel the roads blend into bright snowfields or sun-lit roofs, you can give the *fill* a thin halo using the `line-gap-width` + `line-blur` trick, or (more simply) a **halo line** underneath the fill:
+
+```json
+{
+  ""id"": ""road-secondary-halo"",
+  ""type"": ""line"",
+  ""source"": ""osm"",
+  ""source-layer"": ""transportation"",
+  ""filter"": [""=="", ""class"", ""secondary""],
+  ""paint"": {
+    ""line-color"": ""rgba(0,0,0,0.4)"",   // dark semi-transparent halo
+    ""line-width"": [
+      ""interpolate"", [""linear""], [""zoom""],
+      8, 2,
+      12, 5,
+      16, 9
+    ],
+    ""line-opacity"": 1
+  }
+}
+```
+
+Place the halo **below** the fill layer (i.e., add it earlier in the `layers` array). The halo is thin enough not to look like a “stroke” but thick enough to separate the road from bright patches of imagery.
+
+---
+
+## 4. Layer ordering – make sure the roads sit **under** labels
+
+The order in the `layers` array matters. A typical ordering for a satellite-based style looks like this (bottom → top):
+
+1. `background` (optional solid colour)  
+2. **Raster imagery** (`type: raster`) – your satellite tiles  
+3. **Hillshade** (if you have a terrain source) – semi-transparent, sits just above imagery  
+4. **Land-cover polygons** (water, parks, land) – muted fills  
+5. **Road casings** (dark, slightly wider) – *below* the fill but *above* hillshade  
+6. **Road fills** (light grey) – *above* casings  
+7. **Road halos** (optional) – *below* fills, *above* casings  
+8. **Basemap symbol layers** (place labels, road-name labels) – **must be after** all road geometry so labels are on top  
+9. **Your custom data layers** (points, polygons, extra labels) – insert **before** the first symbol layer if you want them under the basemap labels, or after if you need them on top.
+
+**Injection pattern** (runtime):
+
+```js
+// Find the first symbol layer in the existing style
+const firstSymbolId = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
+// Add your road layers before that symbol layer
+map.addLayer(roadCasingLayer, firstSymbolId);
+map.addLayer(roadFillLayer, firstSymbolId);
+```
+
+If you forget the second argument, `addLayer` puts the new layer on top of everything, covering the basemap labels.
+
+---
+
+## 5. Accessibility check
+
+- **Contrast**: With a light grey fill (`#c0c0c0`) on a dark grey casing (`#5a5a5a`) the *combined* visual contrast against the imagery is roughly 5:1–7:1 (depending on the underlying pixel). That satisfies WCAG AA for normal-size text/lines.  
+- **Avoid color-only encoding**: If you need to differentiate road classes beyond width, you can add a subtle pattern (e.g., dash-array for service roads) or a tiny icon (e.g., a bike symbol for cycleways).  
+- **Minimum line width**: Keep the smallest visible width at ≥ 1 px at the lowest zoom where the road appears; otherwise it may disappear on high-DPI screens.
+
+---
+
+## 6. Full example – minimal “satellite-ready” road style
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""osm"": {
+      ""type"": ""vector"",
+      ""url"": ""https://tile.openstreetmap.org/{z}/{x}/{y}.pbf""
+    },
+    ""sat"": {
+      ""type"": ""raster"",
+      ""tiles"": [""https://my-satellite-tiles/{z}/{x}/{y}.jpg""],
+      ""tileSize"": 256
+    }
+  },
+  ""layers"": [
+    { ""id"": ""background"", ""type"": ""background"", ""paint"": { ""background-color"": ""#ffffff"" } },
+
+    { ""id"": ""satellite"", ""type"": ""raster"", ""source"": ""sat"" },
+
+    /* optional hillshade layer here */
+
+    /* land-cover polygons (water, parks) – muted fills */
+    {
+      ""id"": ""water"",
+      ""type"": ""fill"",
+      ""source"": ""osm"",
+      ""source-layer"": ""water"",
+      ""paint"": { ""fill-color"": ""#a0c8ff"", ""fill-opacity"": 0.6 }
+    },
+
+    /* ---- ROAD CASINGS (dark) ---- */
+    {
+      ""id"": ""road-motorway-casing"",
+      ""type"": ""line"",
+      ""source"": ""osm"",
+      ""source-layer"": ""transportation"",
+      ""filter"": [""=="", ""class"", ""motorway""],
+      ""layout"": { ""line-cap"": ""round"", ""line-join"": ""round"" },
+      ""paint"": {
+        ""line-color"": ""#5a5a5a"",
+        ""line-width"": [
+          ""interpolate"", [""linear""], [""zoom""],
+          5, 1,
+          10, 3,
+          14, 8,
+          18, 14
+        ]
+      }
+    },
+
+    /* ---- ROAD FILLS (light) ---- */
+    {
+      ""id"": ""road-motorway-fill"",
+      ""type"": ""line"",
+      ""source"": ""osm"",
+      ""source-layer"": ""transportation"",
+      ""filter"": [""=="", ""class"", ""motorway""],
+      ""layout"": { ""line-cap"": ""round"", ""line-join"": ""round"" },
+      ""paint"": {
+        ""line-color"": ""#c0c0c0"",
+        ""line-width"": [
+          ""interpolate"", [""linear""], [""zoom""],
+          5, 0.5,
+          10, 2,
+          14, 6,
+          18, 12
+        ]
+      }
+    },
+
+    /* repeat the casing+fill pattern for primary, secondary, tertiary, etc.
+       (or generate them programmatically) */
+
+    /* ---- OPTIONAL HALO (under fill) ---- */
+    {
+      ""id"": ""road-primary-halo"",
+      ""type"": ""line"",
+      ""source"": ""osm"",
+      ""source-layer"": ""transportation"",
+      ""filter"": [""=="", ""class"", ""primary""],
+      ""paint"": {
+        ""line-color"": ""rgba(0,0,0,0.4)"",
+        ""line-width"": [
+          ""interpolate"", [""linear""], [""zoom""],
+          8, 2,
+          12, 5,
+          16, 9
+        ]
+      }
+    },
+
+    /* ---- BASemap LABELS (must be after all road geometry) ---- */
+    {
+      ""id"": ""road-labels"",
+      ""type"": ""symbol"",
+      ""source"": ""osm"",
+      ""source-layer"": ""transportation_name"",
+      ""layout"": {
+       ",PASS,1.00,,All assertions passed,
+negative — out-of-scope question about map camera animation,skills/maplibre-cartography/SKILL.md,How do I smoothly fly the camera to a new location in MapLibre GL JS after the user clicks a button?,"Below is a **complete, copy-and-paste ready** example that shows how to:
+
+1. **Add a button** to the page (you can also use an existing UI element).  
+2. **Listen for the click** and call `map.flyTo()` (or `map.easeTo()` if you want a custom easing curve).  
+3. Keep the transition **smooth and accessible** – set a reasonable duration, use an easing function, and optionally animate the pitch/bearing so the user can stay oriented.
+
+```html
+<!DOCTYPE html>
+<html lang=""en"">
+<head>
+  <meta charset=""UTF-8"">
+  <title>MapLibre – smooth flyTo on button click</title>
+  <style>
+    body, html { margin:0; height:100%; }
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+    /* Simple button styling – keep it reachable by keyboard */
+    #flyBtn {
+      position: absolute;
+      top: 10px; left: 10px;
+      padding: 0.5rem 1rem;
+      background: #fff;
+      border: 1px solid #999;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: sans-serif;
+    }
+    #flyBtn:focus { outline: 2px solid #0066ff; }
+  </style>
+
+  <!-- MapLibre GL JS (use the latest version you have) -->
+  <script src=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@4.4.0/dist/maplibre-gl.css"" rel=""stylesheet""/>
+</head>
+
+<body>
+<div id=""map""></div>
+<button id=""flyBtn"">Go to Paris</button>
+
+<script>
+  // -------------------------------------------------
+  // 1️⃣ Initialise the map (replace with your own style)
+  // -------------------------------------------------
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://demotiles.maplibre.org/style.json', // light vector basemap
+    center: [-74.006, 40.7128], // New York City
+    zoom: 10,
+    pitch: 0,
+    bearing: 0
+  });
+
+  // -------------------------------------------------
+  // 2️⃣ Define the target camera position
+  // -------------------------------------------------
+  const target = {
+    // Longitude, latitude of the new centre
+    center: [2.3522, 48.8566], // Paris, France
+    // Optional: zoom, pitch, bearing – adjust to your design
+    zoom: 12,
+    pitch: 45,          // tilt the view a bit for a 3-D feel
+    bearing: 30,        // rotate the map clockwise 30°
+    // Duration in ms (default 1000). 1500-2000 feels “smooth” for most UI.
+    duration: 1500,
+    // Easing function – MapLibre ships with a few helpers.
+    // `maplibregl.easeOut` is a good default (starts fast, slows down).
+    easing: maplibregl.easeOut,
+    // If you want the map to keep the user-controlled “dragging” ability
+    // during the animation, set `animate: true` (default).  Setting it to
+    // false would snap instantly after the animation finishes.
+    animate: true
+  };
+
+  // -------------------------------------------------
+  // 3️⃣ Hook the button click → flyTo
+  // -------------------------------------------------
+  const btn = document.getElementById('flyBtn');
+  btn.addEventListener('click', () => {
+    // `flyTo` automatically adds a smooth “flight” curve (zoom-in/out + pan).
+    // If you need a custom curve you can call `easeTo` with the same options.
+    map.flyTo(target);
+  });
+
+  // -------------------------------------------------
+  // 4️⃣ (Optional) Keep the button focusable for accessibility
+  // -------------------------------------------------
+  // The button already receives focus via the browser tab order.
+  // If you add more UI, remember to give each interactive element a
+  // visible focus style (see the CSS above) and an ARIA label if the
+  // text isn’t descriptive enough.
+</script>
+</body>
+</html>
+```
+
+---
+
+## Why `flyTo` (or `easeTo`)?
+
+| Feature | `flyTo` | `easeTo` |
+|---------|---------|----------|
+| **Default “flight” curve** (zoom-out, pan, zoom-in) | ✅ | ❌ (linear) |
+| **Custom easing** (`maplibregl.easeInOut`, `easeOut`, etc.) | ✅ (via `easing`) | ✅ |
+| **Control over pitch & bearing** | ✅ | ✅ |
+| **Stops user interaction** while animating (default) | ✅ (`animate: true`) | ✅ |
+| **Can be cancelled** (`map.stop()`) | ✅ | ✅ |
+
+If you want a **pure linear pan/zoom** (no “flight” arc), replace `map.flyTo(target)` with:
+
+```js
+map.easeTo({
+  ...target,
+  // remove the default fly-to curve by using a linear easing
+  easing: t => t   // identity function = linear
+});
+```
+
+---
+
+## Tips for a “smooth” experience
+
+| Tip | Reason |
+|-----|--------|
+| **Duration 1200-1800 ms** | Long enough to be perceived as a transition, short enough not to feel sluggish. |
+| **Easing `easeOut` or `easeInOut`** | Gives a natural acceleration/deceleration; `easeOut` feels like a “fly-by”. |
+| **Don’t change the style while animating** | Switching basemap tiles or toggling layers mid-flight can cause a jarring visual jump. |
+| **Keep pitch ≤ 60°** | Higher pitch can make the map feel “tilted too far” and may hide labels. |
+| **Maintain label readability** – if you’re flying over an imagery basemap, keep the halo settings from the *maplibre-cartography* skill (white text + dark semi-transparent halo). |
+| **Keyboard accessibility** – ensure the button is reachable via `Tab` and has a clear focus outline (see CSS). |
+| **Screen-reader hint** – if the button triggers a major context change, add `aria-live=""polite""` to a hidden status element that announces the new location. |
+
+```html
+<div id=""status"" aria-live=""polite"" style=""position:absolute; left:-9999px;""></div>
+<script>
+  btn.addEventListener('click', () => {
+    map.flyTo(target);
+    document.getElementById('status').textContent = 'Flying to Paris, France';
+  });
+</script>
+```
+
+---
+
+## Quick checklist before you ship
+
+1. **Label colors** – If your basemap is satellite imagery, make sure any custom labels you add (or the default basemap labels) use the recommended halo (`rgba(0,0,0,0.75)`) and white text.  
+2. **Layer order** – If you inject extra data layers (e.g., a polygon overlay for Paris), add them **before the first symbol layer** so they don’t cover existing place-name labels.  
+3. **Contrast** – Verify the combined text-halo contrast meets WCAG 2.1 AA (≥ 4.5:1).  
+4. **Performance** – `flyTo` is GPU-accelerated; avoid heavy raster layers with full opacity at low zooms, as they can slow the animation.  
+
+That’s it! Click the button and the map will glide smoothly from New York to Paris, preserving readability and respecting cartographic best practices. Happy mapping!",PASS,1.00,,All assertions passed,

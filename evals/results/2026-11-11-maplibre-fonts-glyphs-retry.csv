@@ -1,0 +1,361 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"explicit — omitted glyphs field, text renders in wrong font",skills/maplibre-fonts-glyphs/SKILL.md,"My MapLibre GL JS stylesheet has no `glyphs` property set at all, and my symbol layers have `text-font` set to a font name. Text labels are showing up, but in a generic font, not the one I specified. Is this a bug I need to fix, or expected behavior? What's actually happening?","### Short answer  
+**It’s not a bug – it’s the intended “local-fonts” fallback that MapLibre GL JS uses when the style has no `glyphs` URL.**  
+
+When `glyphs` is omitted, GL JS falls back to rendering every label with the browser’s text engine (TinySDF) instead of fetching SDF glyph PBFs. The `text-font` array is treated exactly like a CSS `font-family` list:
+
+1. **If the named font is already available on the device** (system font) → it is used.  
+2. **If you have added a web-font with `@font-face` (or `font-faces` in the style)** → the browser will download that file and use it.  
+3. **If the name cannot be resolved** → the browser picks its generic fallback (usually “sans-serif”), which is why you see a “generic” font.
+
+So the map is working as designed; the only thing missing is a way for the browser to locate the exact font you asked for.
+
+---
+
+## What’s really happening under the hood
+
+| Step | What MapLibre does | Result you see |
+|------|-------------------|----------------|
+| **Style parsing** | No `glyphs` field → “local-fonts mode”. | No network request for `…/{fontstack}/{range}.pbf`. |
+| **Label layout** | `text-font` is read as a **fallback list** of font-family names, exactly like CSS. | The first name that the browser can resolve wins. |
+| **Glyph generation** | For each code-point, GL JS calls **TinySDF** (a tiny SDF generator) to rasterise the glyph from the resolved font. | Sharp, scalable text, but using whatever font the browser found. |
+| **Missing font** | If the name isn’t found, the browser falls back to its built-in generic family (`sans-serif` on most platforms). | You see a generic, platform-dependent font. |
+| **Logging** | In the console you’ll see messages like `Unable to load glyph range … Rendering codepoint U+4E00 locally instead.` when a glyph PBF would have been requested (if `glyphs` existed). | Helpful for debugging, but not an error. |
+
+> **Important:** This local-fonts fallback exists **only in MapLibre GL JS** (≥ 5.11). MapLibre Native still requires a valid `glyphs` URL; otherwise the style will fail to render text.
+
+---
+
+## How to get the exact font you want
+
+### 1. Load the font in the browser (the simplest way)
+
+```html
+<link rel=""preload"" href=""https://example.com/fonts/NotoSans-Regular.woff2""
+      as=""font"" type=""font/woff2"" crossorigin>
+<style>
+  @font-face {
+    font-family: ""Noto Sans Regular"";   /* must match the name used in text-font */
+    src: url(""https://example.com/fonts/NotoSans-Regular.woff2"") format(""woff2"");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+</style>
+```
+
+*Make sure the `font-family` string exactly matches the entry you put in `text-font`.*
+
+```json
+{
+  ""type"": ""symbol"",
+  ""layout"": {
+    ""text-field"": [""get"", ""name""],
+    ""text-font"": [""Noto Sans Regular"", ""Arial Unicode MS"", ""sans-serif""]
+  }
+}
+```
+
+If the font loads successfully, the map will render with **Noto Sans Regular** (or whatever you declared).
+
+### 2. Declare the font in the style’s `font-faces` property (recommended for portability)
+
+```json
+{
+  ""font-faces"": {
+    ""Noto Sans Regular"": [
+      {
+        ""url"": ""https://example.com/fonts/NotoSans-Regular.ttf"",
+        ""unicode-range"": [""U+0000-FFFF""]   // optional, can limit to the script you need
+      }
+    ]
+  },
+  ""layers"": [
+    {
+      ""id"": ""place-labels"",
+      ""type"": ""symbol"",
+      ""layout"": {
+        ""text-field"": [""get"", ""name""],
+        ""text-font"": [""Noto Sans Regular"", ""sans-serif""]
+      }
+    }
+  ]
+}
+```
+
+*Why use `font-faces`?*  
+
+* It makes the font part of the **style definition**, so anyone who loads the style (including MapLibre Native) knows where to fetch the file.  
+* It works with `map.setFontFaces()` at runtime if you need to swap fonts dynamically.  
+* It respects `unicode-range` so you can ship a single TTF that only covers the scripts you need.
+
+> **CORS note** – The font URL must be reachable from the page that runs GL JS. If you host the font on a different origin, be sure the server sends `Access-Control-Allow-Origin: *` (or your domain).
+
+### 3. Verify the font is actually being used
+
+Open the browser’s **Developer Tools → Elements → Computed Styles** on a label (you can inspect a label by right-click → “Inspect”). Look for the `font-family` property; it should list the name you supplied first.
+
+You can also watch the console for messages like:
+
+```
+[maplibre-gl] Loaded font Noto Sans Regular from https://example.com/fonts/NotoSans-Regular.woff2
+```
+
+If you still see the generic fallback, double-check:
+
+| Possible cause | Fix |
+|----------------|-----|
+| Font file 404 or CORS blocked | Verify URL, add proper CORS headers, or serve from same origin. |
+| `font-family` name typo | Ensure exact match (case-sensitive). |
+| Font file format unsupported by the browser | Use WOFF2/WOFF for web, TTF/OTF works but may be slower. |
+| `text-font` list does not include the custom name first | Put your custom name before generic families. |
+| `font-faces` entry missing `unicode-range` that excludes needed code points | Remove `unicode-range` or extend it to cover the characters you need. |
+
+---
+
+## When you *don’t* need to do anything
+
+If you are happy with the generic system font (e.g., you only need a quick prototype) you can leave the style as-is. The map will continue to render correctly, just not with the exact visual identity you intended.
+
+---
+
+## TL;DR checklist
+
+| ✅ | Action |
+|---|--------|
+| **1** | Ensure the style **omits** `glyphs` (you already have this). |
+| **2** | Load the desired font in the browser **via `@font-face`** *or* declare it in the style’s **`font-faces`** property. |
+| **3** | Make the `text-font` entry **exactly match** the `font-family` name you loaded. |
+| **4** | Verify the font URL is reachable and CORS-allowed. |
+| **5** | Test in the browser – the label should now use your font. |
+| **6** (optional) | If you also need the same look on **MapLibre Native**, add a proper `glyphs` URL that serves SDF PBFs for the same font (or use a hosted glyph server). |
+
+---
+
+### Bottom line
+
+- **No `glyphs` → local-font fallback** (expected behavior).  
+- The generic font you see means the browser couldn’t find the font name you asked for.  
+- **Fix it by loading the font (via `@font-face` or `font-faces`) and matching the name**.  
+
+Once the font is available to the browser, MapLibre GL JS will render your labels exactly as you specified. Happy styling!",PASS,1.00,,All assertions passed,
+"explicit — omitted glyphs field, text renders in wrong font",skills/maplibre-fonts-glyphs/SKILL.md,"My MapLibre GL JS stylesheet has no `glyphs` property set at all, and my symbol layers have `text-font` set to a font name. Text labels are showing up, but in a generic font, not the one I specified. Is this a bug I need to fix, or expected behavior? What's actually happening?","### Short answer  
+**It’s not a bug – it’s the intended “local-fonts” fallback that MapLibre GL JS uses when the style has no `glyphs` URL.**  
+
+When `glyphs` is omitted, GL JS falls back to the browser’s normal font-stack resolution (the same algorithm CSS uses for `font-family`). Every name you put in `text-font` is treated as a **web- or system-font name**. If the browser can’t find a font that matches that name, it falls back to its generic default (usually *sans-serif*), which is why you see a “generic” look.
+
+Below is a step-by-step explanation of what’s happening, why you’re seeing the generic font, and what you can do to get the exact font you want.
+
+---
+
+## 1. What MapLibre GL JS does when `glyphs` is missing
+
+| Version | Behaviour |
+|---------|-----------|
+| **MapLibre GL JS ≥ 5.11.0** (the current stable line) | If the style’s root `glyphs` property is **absent**, the engine **does not try to fetch any glyph PBFs**. Instead it renders text **locally** using TinySDF, and resolves each entry in `text-font` exactly like a CSS `font-family` list. |
+| **MapLibre GL JS ≥ 5.11.0** (fallback case) | If a `glyphs` URL is present **but a particular glyph range fails to load** (404, wrong font name, CORS, etc.), the same local-render path is taken *just for that range*. The layer stays visible, but the missing characters are drawn with a generic system font. |
+| **MapLibre Native** | No such fallback exists. A style **must** provide a valid `glyphs` URL, otherwise the map will fail to render any text. (Native will soon get a similar feature, but it’s not there yet.) |
+
+So, with **no `glyphs` field**, GL JS is deliberately using the **local-font mode**. Nothing is “broken”; it’s just the default behaviour.
+
+---
+
+## 2. Why you see a *generic* font instead of the one you named
+
+1. **The font name you wrote in `text-font` does not match any font the browser can resolve.**  
+   - `text-font: [""My Fancy Font""]` → the browser looks for a font whose *family name* is exactly **My Fancy Font**.  
+   - If that font isn’t installed on the OS **and** you haven’t loaded it via `@font-face` (or a `<link>` to a web-font), the browser falls back to its generic family (usually `sans-serif`).
+
+2. **The font is loaded, but the name you used is wrong.**  
+   - Font files often have internal family names that differ from the filename.  
+   - Example: `NotoSans-Regular.ttf` has the family name **Noto Sans** (note the space). If you write `""NotoSans""` in `text-font`, the browser won’t match it.
+
+3. **CORS / loading errors** (if you tried to load a web-font from another origin without proper CORS headers). The browser silently discards the font and falls back.
+
+Because the fallback is *local* rendering, the map never goes “invisible” – you just get whatever the browser thinks is the best generic font.
+
+---
+
+## 3. How to get the exact font you want
+
+You have three main options, depending on whether you want to stay **glyph-free** (local-fonts only) or you prefer the classic **glyph-PBF** route.
+
+### A. Keep the “no-glyphs” approach and load the font locally (recommended for offline / simple setups)
+
+1. **Load the font in the page** – either via a CSS `@font-face` rule or a `<link>` to a hosted web-font.
+
+   ```css
+   @font-face {
+     font-family: ""My Fancy Font"";
+     src: url(""https://example.com/fonts/MyFancyFont-Regular.woff2"") format(""woff2"");
+     font-weight: 400;
+     font-style: normal;
+   }
+   ```
+
+   *or*  
+
+   ```html
+   <link rel=""stylesheet""
+         href=""https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap"">
+   ```
+
+2. **Make sure the `font-family` name in the rule matches exactly the string you use in `text-font`.**  
+   ```json
+   ""layers"": [
+     {
+       ""id"": ""city-labels"",
+       ""type"": ""symbol"",
+       ""layout"": {
+         ""text-field"": [""get"", ""name""],
+         ""text-font"": [""My Fancy Font"", ""sans-serif""]
+       }
+   ]
+   ```
+
+3. **(Optional) Use the `font-faces` property** if you want the style to be portable to MapLibre Native later, or if you want to limit the font to a specific Unicode range.
+
+   ```json
+   ""font-faces"": {
+     ""My Fancy Font"": [
+       {
+         ""url"": ""https://example.com/fonts/MyFancyFont-Regular.ttf"",
+         ""unicode-range"": [""U+0000-00FF""]   // Latin block, for example
+       }
+     ]
+   }
+   ```
+
+   - GL JS reads `font-faces` automatically (since v6.7.0) and will load the same file you declared in CSS, *but* the file must be reachable from the browser (i.e., served over HTTP(S) with CORS allowed).  
+   - Native reads `font-faces` directly from the style, so adding it now makes the style work on both platforms later.
+
+4. **Verify the font is actually loaded** (Chrome DevTools → **Network → Font** tab, or `document.fonts.ready.then(() => console.log([...document.fonts]))`). If the font appears there, the map will use it.
+
+### B. Switch to a classic glyph-PBF server (useful when you need identical rendering on Native)
+
+1. **Add a `glyphs` URL** that points at a server that serves SDF glyph PBFs.
+
+   ```json
+   ""glyphs"": ""https://myselfhosted.example.com/fonts/{fontstack}/{range}.pbf""
+   ```
+
+2. **Make sure the folder names match the `text-font` strings** exactly (case-sensitive).  
+   Example folder structure for `Noto Sans`:
+
+   ```
+   /fonts/
+     Noto%20Sans/
+       0-255.pbf
+       256-511.pbf
+       …
+   ```
+
+3. **If you want to keep the ability to work offline**, you can self-host the pre-built glyph PBFs from the open-source repos:
+
+   - **OpenMapTiles fonts**: <https://github.com/openmaptiles/fonts>
+   - **UNDP-Data fonts**: <https://github.com/UNDP-Data/fonts>
+
+   Clone the repo, serve the `fonts/` directory via any static web server (nginx, Apache, GitHub Pages, Cloudflare Workers, etc.), and point `glyphs` at that origin.
+
+4. **Test** – open the map, open the Network tab, and you should see requests like:
+
+   ```
+   GET https://myselfhosted.example.com/fonts/Noto%20Sans/0-255.pbf
+   ```
+
+   If they succeed, the text will be rendered with the exact glyph shapes from the PBFs, and the appearance will be identical on GL JS **and** Native.
+
+### C. Hybrid: keep `glyphs` for complex scripts, but still use local fonts for Latin
+
+You can **omit `glyphs` for the majority of the map** (Latin, Cyrillic, etc.) and **add a `glyphs` URL only for scripts that need shaping** (Arabic, Devanagari, Thai, etc.). The engine will:
+
+- Use local fonts for any `text-font` entry that resolves to a loaded web-font.
+- Fall back to the glyph server **only** for characters that the local font cannot render (or for scripts that GL JS now draws via the browser’s shaping engine, which ignores the glyph PBFs anyway).
+
+This is a bit more advanced, but it can reduce the number of glyph requests while still supporting right-to-left or complex-script shaping.
+
+---
+
+## 4. Special notes for non-Latin scripts
+
+| Script | Recommended handling (GL JS ≥ 6.15) | Why |
+|--------|-----------------------------------|-----|
+| **CJK (Chinese, Japanese, Korean)** | **Leave `glyphs` out** (or keep it, but set `localIdeographFontFamily` to a nice on-device font). GL JS generates ideographs locally with TinySDF; serving PBFs would cause thousands of tiny requests per tile. | Local rendering is fast and avoids massive glyph traffic. |
+| **Arabic / Hebrew (RTL)** | No extra plugin needed from GL JS 6.9.0 onward. Just list the appropriate Noto font in `text-font` (e.g., `""Noto Sans Arabic""`). | GL JS now does shaping and RTL layout internally. |
+| **Devanagari, Thai, Khmer, Myanmar, etc.** | **Declare the font in `font-faces`** (or load it via CSS). The browser will shape grapheme clusters; the glyph PBFs are ignored. | The glyph server can’t provide the combined glyphs needed for these scripts. |
+| **Other scripts (Greek, Cyrillic, etc.)** | Either local-font mode or glyph PBFs work fine. Choose based on whether you need identical rendering on Native. | Both approaches render correctly. |
+
+---
+
+## 5. Checklist – “Is my map doing what I expect?”
+
+| ✅ | Item |
+|----|------|
+| **1** | `glyphs` is **absent** in the style (or you deliberately omitted it). |
+| **2** | Every font name used in `text-font` **exactly matches** a loaded web-font’s `font-family` (or a system font that exists on the target OS). |
+| **3** | The font files are reachable from the browser (CORS headers `Access-Control-Allow-Origin: *` or your domain). |
+| **4** | If you want the style to work on **MapLibre Native**, add a `glyphs` URL **or** add `font-faces` entries that point at files the native runtime can read (e.g., `file:///android_asset/...` on Android). |
+| **5** | For CJK, you **did not** set `localIdeographFontFamily: false` unless you really need the served glyph shapes. |
+| **6** | For RTL scripts, you are on GL JS ≥ 6.9.0 (no `setRTLTextPlugin` needed). |
+| **7** | Test on at least two browsers/OSes to confirm the font loads everywhere you need it. |
+
+If any of the above fails, you’ll see the generic fallback you described.
+
+---
+
+## 6. Quick “fix it now” code snippet
+
+```javascript
+// 1️⃣ Load the font (example: Noto Sans Arabic)
+const link = document.createElement('link');
+link.rel = 'stylesheet';
+link.href = 'https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&display=swap';
+document.head.appendChild(link);
+
+// 2️⃣ Tell MapLibre about the font (optional but useful for Native later)
+map.setFontFaces({
+  ""Noto Sans Arabic"": [
+    {
+      url: ""https://fonts.gstatic.com/s/notosansarabic/v13/....ttf"",
+      // optional unicode-range, omit to use whole font
+    }
+  ]
+});
+
+// 3️⃣ Create the map (no glyphs property)
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    // no ""glyphs"" field here
+    layers: [
+      {
+        id: 'place-labels',
+        type: 'symbol',
+        source: 'osm',
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-font': ['Noto Sans Arabic', 'sans-serif'],
+          'text-size': 14
+        }
+      }
+    ]
+  },
+  // optional: improve CJK rendering
+  localIdeographFontFamily: '""Noto Sans CJK SC"", sans-serif'
+});
+```
+
+After the font loads, the labels will appear in **Noto Sans Arabic** (or whatever font you specified) instead of the generic fallback.
+
+---
+
+## 7. TL;DR
+
+- **No `glyphs` → GL JS uses the browser’s font-resolution path.**  
+- The generic font you see means the browser **couldn’t find** a font that matches the name you gave.  
+- **Fix it** by loading the desired font (CSS `@font-face` or `<link>`), making sure the `text-font` string matches the font’s family name, and optionally declaring it in `font-faces` for cross-platform portability.  
+- If you need **identical rendering on Native** or you want to use a custom brand font, **add a `glyphs` URL** (self-hosted or third-party) and serve the corresponding PBFs.  
+- For CJK keep the local-ideograph mode; for Arabic, Hebrew, Devanagari, Thai, etc., rely on the browser’s shaping engine and `font-faces`.
+
+That’s the whole story—nothing is broken, just the default behaviour of the newer MapLibre GL JS engine. Happy labeling!",PASS,1.00,,All assertions passed,
