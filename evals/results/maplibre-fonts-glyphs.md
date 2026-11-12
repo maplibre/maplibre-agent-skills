@@ -10,6 +10,8 @@ Run: 2026-10-26, on the final text with the judge `google:gemini-3.1-flash-lite`
 
 Run: 2026-11-11, test 1 with its `@font-face` check and new rubric, judge `google:gemini-3.1-flash-lite` · baseline [three runs](latest/maplibre-fonts-glyphs-baseline-test1_2026-11-11.csv), with skill [six runs](latest/maplibre-fonts-glyphs-with-skill-test1_2026-11-11.csv) and [the full config](latest/maplibre-fonts-glyphs-with-skill_2026-11-11.csv), which passes.
 
+Test 1's check now also accepts `document.fonts` or `FontFace`. Re-checked against the saved 2026-11-11 outputs rather than re-run, every verdict stands: no baseline answer names any of the three, and every with-skill answer names `@font-face`.
+
 | #   | Test                                              | Type         | Baseline (no skill)                                                                                     | With skill                                                                                  |
 | --- | ------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | 1   | Omitted `glyphs`, text renders in wrong font      | Explicit     | FAIL 3/3 — invents a built-in default glyphs URL and says MapLibre never uses the browser's fonts       | PASS 6/6                                                                                    |
