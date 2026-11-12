@@ -1,0 +1,436 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+explicit — color-relief exists on MapLibre Native,skills/maplibre-native-gl-js-parity/SKILL.md,"Android, MapLibre Native (Kotlin). I have Terrarium-encoded DEM tiles and I want elevation-banded color under my vector layers — green lowlands through brown to white peaks, with the breakpoints in the style so our cartographer can tune them. Can I do that in a MapLibre Android app, or do I have to pre-render colored raster tiles and ship those instead?
+","**Short answer:**  
+Yes – you can colour-band a Terrarium-encoded DEM directly in a MapLibre Android app.  
+All you need is a **`raster-dem` source** that points at your Terrarium tiles and a **`color-relief` layer** that uses an `[""interpolate"", …, [""elevation""], …]` expression.  
+The feature has been part of MapLibre Native since **android-v13.0.0** (and iOS v6.24.0). If you are on an older release you must upgrade or fall back to pre-rendered raster tiles.
+
+Below is a complete, copy-and-paste-ready guide:
+
+---
+
+## 1️⃣ Prerequisites
+
+| What you need | Minimum version |
+|---------------|-----------------|
+| MapLibre Android SDK | **13.0.0** (released 2025-09-03) |
+| Terrarium-encoded DEM tiles (z/x/y.png) | – |
+| Kotlin 1.6+ (or Java) | – |
+
+If you are still on, say, `android-v12.x.x`, upgrade the SDK in your `build.gradle`:
+
+```gradle
+implementation ""org.maplibre.gl:android-sdk:13.0.0""
+```
+
+(Or a newer version – the latest stable is always safe.)
+
+---
+
+## 2️⃣ The style JSON (the “declarative” way)
+
+You can keep the whole thing in a style file and just load it with `MapView.getMapAsync { … }`.  
+Only the two parts that matter are shown here:
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""dem"": {
+      ""type"": ""raster-dem"",
+      ""url"": ""https://my.cdn.com/terrarium/{z}/{x}/{y}.png"",
+      ""tileSize"": 256,
+      ""encoding"": ""terrarium"",          // <-- tells MapLibre the Terrarium format
+      ""maxzoom"": 14
+    }
+  },
+
+  ""layers"": [
+    {
+      ""id"": ""relief"",
+      ""type"": ""color-relief"",
+      ""source"": ""dem"",
+      ""paint"": {
+        ""color-relief-color"": [
+          ""interpolate"",
+          [""linear""],
+          [""elevation""],               // the DEM value at the pixel
+          0,   ""#2e8b57"",              // low-land green
+          500, ""#6b8e23"",
+          1500, ""#8b5a2b"",             // mid-range brown
+          2500, ""#c2b280"",
+          3500, ""#e5e5e5"",
+          4500, ""#ffffff""              // snow-white peaks
+        ]
+      }
+    },
+
+    // …your vector layers go here, placed *above* the relief layer
+    {
+      ""id"": ""roads"",
+      ""type"": ""line"",
+      ""source"": ""my-vector-source"",
+      ""source-layer"": ""road"",
+      ""paint"": { ""line-color"": ""#000"", ""line-width"": 2 }
+    }
+  ]
+}
+```
+
+*Why it works*  
+
+* `raster-dem` + `""encoding"":""terrarium""` tells the native renderer to decode the 16-bit Terrarium PNGs into real metres.  
+* `color-relief` is a raster layer that reads the **`[""elevation""]`** expression (built-in) and maps it to colours via any `interpolate` ramp you like.  
+* Because the layer is a **raster** layer, it sits *under* your vector layers automatically – just order it before the vector layers in the `layers` array.
+
+---
+
+## 3️⃣ Adding the same thing programmatically (Kotlin)
+
+If you prefer to build the style in code (e.g. you need to switch DEM archives at runtime), the API mirrors the JSON exactly.
+
+```kotlin
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.sources.RasterDemSource
+import org.maplibre.android.style.layers.ColorReliefLayer
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.expressions.Expression.*
+
+mapView.getMapAsync { mapboxMap ->
+    mapboxMap.setStyle(Style.Builder()) { style ->
+
+        // 1️⃣ Add the Terrarium DEM source
+        val demSource = RasterDemSource(
+            ""dem"",
+            ""https://my.cdn.com/terrarium/{z}/{x}/{y}.png"",
+            256
+        ).apply {
+            // Terrarium is the default for raster-dem, but being explicit never hurts
+            setEncoding(""terrarium"")
+            maxZoom = 14
+        }
+        style.addSource(demSource)
+
+        // 2️⃣ Add the colour-relief layer
+        val reliefLayer = ColorReliefLayer(""relief"", ""dem"").withProperties(
+            PropertyFactory.colorReliefColor(
+                // The same interpolate ramp as in the JSON example
+                raw(
+                    """"""[""interpolate"",
+                       [""linear""],
+                       [""elevation""],
+                       0,   ""#2e8b57"",
+                       500, ""#6b8e23"",
+                       1500, ""#8b5a2b"",
+                       2500, ""#c2b280"",
+                       3500, ""#e5e5e5"",
+                       4500, ""#ffffff""]""""""
+                )
+            )
+        )
+        // Insert it before any vector layers you will add later
+        style.addLayerBelow(reliefLayer, ""water"")   // or any existing layer id
+
+        // 3️⃣ Add your vector source / layers as usual …
+        // style.addSource(...)
+        // style.addLayer(...)
+    }
+}
+```
+
+**Key points in the code**
+
+* `RasterDemSource` → `setEncoding(""terrarium"")`.  
+* `ColorReliefLayer` → `PropertyFactory.colorReliefColor(...)`.  
+* The colour ramp is supplied via `Expression.raw()` (or `Expression.literal()` if you prefer building it piece-by-piece).  
+* The layer must be added **below** the vector layers you want to appear on top.
+
+---
+
+## 4️⃣ How the cartographer can tune the break-points
+
+Because the colour ramp lives in the style JSON (or in the `Expression.raw` string), the cartographer can edit it without touching any Kotlin code:
+
+```json
+""color-relief-color"": [
+  ""interpolate"",
+  [""linear""],
+  [""elevation""],
+  0,   ""#2e8b57"",
+  800, ""#6b8e23"",
+  1800, ""#8b5a2b"",
+  2800, ""#c2b280"",
+  3800, ""#e5e5e5"",
+  4800, ""#ffffff""
+]
+```
+
+*Just change the numbers or colours, rebuild the style file (or reload it from the server), and the app will instantly reflect the new banding.*
+
+If you need a UI inside the app to let a user slide break-points, you can rebuild the `Expression.raw` string at runtime and call `reliefLayer.setProperties(...)` again – the renderer updates instantly.
+
+---
+
+## 5️⃣ What to do if you are on an older SDK
+
+| SDK version | What you’ll see | Work-around |
+|-------------|----------------|------------|
+| `< 13.0.0`  | The `color-relief` layer is ignored (the whole layer is dropped, no crash). | Upgrade to at least **13.0.0**. If you cannot upgrade, pre-render coloured raster tiles (e.g. using GDAL or Mapbox-style-tools) and serve them as a normal `raster` source. |
+| `< 13.7.1`  | `interpolate-hcl` / `interpolate-lab` are unavailable (they would cause the layer to be dropped). | Use a plain `[""interpolate"", [""linear""], …]` ramp with enough intermediate stops – the visual result is the same, just in sRGB space. |
+
+---
+
+## 6️⃣ TL;DR checklist
+
+1. **Upgrade** to `org.maplibre.gl:android-sdk:13.0.0` (or newer).  
+2. Add a **`raster-dem` source** with `""encoding"":""terrarium""`.  
+3. Add a **`color-relief` layer** that references that source.  
+4. Supply the colour ramp via an `[""interpolate"", [""linear""], [""elevation""], …]` expression – the cartographer can edit the numbers in the style JSON.  
+5. Place the `color-relief` layer **below** your vector layers.  
+
+That’s it – no need to pre-render coloured raster tiles, no extra server, and the colour bands are fully controllable from the style. Happy mapping!",PASS,1.00,,All assertions passed,
+explicit — color-relief exists on MapLibre Native,skills/maplibre-native-gl-js-parity/SKILL.md,"Android, MapLibre Native (Kotlin). I have Terrarium-encoded DEM tiles and I want elevation-banded color under my vector layers — green lowlands through brown to white peaks, with the breakpoints in the style so our cartographer can tune them. Can I do that in a MapLibre Android app, or do I have to pre-render colored raster tiles and ship those instead?
+","**Short answer:**  
+Yes – you can colour-code a Terrarium-encoded DEM directly in a MapLibre Android app.  
+All you need is:
+
+1. **MapLibre Android v13.0.0 or newer** (the version that introduced the `color-relief` layer).  
+2. A **`raster-dem` source** that points at your Terrarium tiles and declares the `""encoding"":""terrarium""` property.  
+3. A **`color-relief` layer** that uses the built-in `[""elevation""]` expression and an `interpolate-*` ramp (or a plain `interpolate` if you are on a pre-v13.7.1 release).
+
+If you are stuck on an older native release you must either upgrade or fall back to pre-rendered coloured raster tiles, but the feature is fully supported in current releases.
+
+---
+
+## 1️⃣ Why it works – the parity table
+
+| Feature | GL JS | MapLibre Native (Android) | Gap closed in |
+|---------|------|---------------------------|---------------|
+| `color-relief` layer | ✅ (since GL JS 5.6) | ✅ (since **android-v13.0.0**) | 13.0.0 |
+| Terrarium DEM encoding | ✅ (`raster-dem` + `""encoding"":""terrarium""`) | ✅ (same JSON keys are understood) | 13.0.0 |
+| `interpolate-hcl` / `interpolate-lab` | ✅ | ✅ (since **android-v13.7.1**) | 13.7.1 |
+| `[""elevation""]` expression | ✅ | ✅ (since the first `color-relief` release) | 13.0.0 |
+
+So the only thing you have to watch is the **minimum native version**. Anything older will simply drop the `color-relief` layer (you’ll see a log line like `[ParseStyle]: value must be a string` and the layer disappears).
+
+---
+
+## 2️⃣ The style you can ship
+
+You can keep the whole thing in a **style JSON** (the same you would use with GL JS) and load it with `MapView.getMapAsync { map -> map.setStyle(styleUrl) }`.  
+Below is a minimal example that you can paste into your style file.
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""dem"": {
+      ""type"": ""raster-dem"",
+      ""url"": ""https://my.cdn.com/terrarium/{z}/{x}/{y}.png"",
+      ""tileSize"": 256,
+      ""encoding"": ""terrarium"",          // <-- important for Terrarium tiles
+      ""maxzoom"": 14
+    },
+    ""vector"": {
+      ""type"": ""vector"",
+      ""url"": ""https://my.cdn.com/tiles/{z}/{x}/{y}.pbf""
+    }
+  },
+
+  ""layers"": [
+    // 1️⃣ The colour-relief background
+    {
+      ""id"": ""relief"",
+      ""type"": ""color-relief"",
+      ""source"": ""dem"",
+      ""paint"": {
+        ""color-relief-color"": [
+          ""interpolate"",
+          [""linear""],               // you can swap for interpolate-hcl/lab on v13.7.1+
+          [""elevation""],            // DEM value at the pixel
+          0,   ""#2e8b57"",           // lowland – dark-green
+          500, ""#6abf40"",           // gentle-green
+          1500, ""#b5a642"",          // low-brown
+          2500, ""#c28e3c"",          // mid-brown
+          3500, ""#d07c34"",          // high-brown
+          4500, ""#e0692c"",          // near-summit
+          5500, ""#ffffff""           // snow-white
+        ]
+      }
+    },
+
+    // 2️⃣ Your vector layers (fills, lines, symbols…) go *above* the relief layer
+    {
+      ""id"": ""roads"",
+      ""type"": ""line"",
+      ""source"": ""vector"",
+      ""source-layer"": ""roads"",
+      ""paint"": {
+        ""line-color"": ""#ffffff"",
+        ""line-width"": 2
+      }
+    }
+    // …more vector layers…
+  ]
+}
+```
+
+*What you can tweak:*  
+- **Break-points** (`0, 500, 1500 …`) are the exact numbers your cartographer will adjust.  
+- **Colours** are any CSS hex strings (or `rgba()`).  
+- If you prefer perceptual colour ramps, replace `[""linear""]` with `[""interpolate-hcl""]` or `[""interpolate-lab""]` – those work on Android v13.7.1+.
+
+---
+
+## 3️⃣ Adding the same thing from Kotlin (if you prefer code)
+
+If you generate the style at runtime or want to add the layer programmatically, the API mirrors the JSON exactly.
+
+```kotlin
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.ColorReliefLayer
+import org.maplibre.android.style.sources.RasterDemSource
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.expressions.Expression.*
+
+mapView.getMapAsync { mapboxMap ->
+    mapboxMap.setStyle(
+        Style.Builder()
+            .fromUri(""asset://my-base-style.json"")   // or a remote URL
+            .withSource(
+                RasterDemSource(""dem"") {
+                    url(""https://my.cdn.com/terrarium/{z}/{x}/{y}.png"")
+                    tileSize(256)
+                    encoding(""terrarium"")
+                    maxzoom(14)
+                }
+            )
+            .withLayer(
+                ColorReliefLayer(""relief"", ""dem"").withProperties(
+                    PropertyFactory.colorReliefColor(
+                        raw(
+                            """"""[
+                              ""interpolate"",""linear"",
+                              [""elevation""],
+                              0,""#2e8b57"",
+                              500,""#6abf40"",
+                              1500,""#b5a642"",
+                              2500,""#c28e3c"",
+                              3500,""#d07c34"",
+                              4500,""#e0692c"",
+                              5500,""#ffffff""
+                            ]""""""
+                        )
+                    )
+                )
+            )
+    )
+}
+```
+
+*Key points in the code above*  
+
+| What you’re doing | Native API call | Why it matters |
+|-------------------|----------------|----------------|
+| Declare a DEM source | `RasterDemSource(...).encoding(""terrarium"")` | Tells the raster-dem loader to decode Terrarium PNGs (the same as `""encoding"":""terrarium""` in JSON). |
+| Add a colour-relief layer | `ColorReliefLayer(...).withProperties(PropertyFactory.colorReliefColor(...))` | The only layer type that can read `[""elevation""]`. |
+| Use `Expression.raw()` (or `raw(""""""…"""""")`) | Allows you to paste the exact GL JS expression verbatim, including `[""elevation""]`. | Typed builders stop at `interpolate`; `raw` is the simplest way to get the full expression. |
+| Place the layer **before** your vector layers | Add the `ColorReliefLayer` first, then add vector layers later (or set its `above`/`below` property). | The colour-relief is drawn *under* everything else, just like a hill-shade background. |
+
+---
+
+## 4️⃣ What to do if you can’t upgrade to v13.0.0+
+
+*Older native releases (≤ v12.x)* simply **ignore** the `color-relief` layer. The map will still load the DEM (you can still use a `hillshade` layer), but the colour ramp will never appear.
+
+**Work-arounds**
+
+| Option | How it works | Pros | Cons |
+|-------|--------------|------|------|
+| **Pre-render coloured raster tiles** (e.g. generate PNGs with the same colour ramp on the server) | Treat them as ordinary raster tiles (`type"":""raster""`). | Works on any native version. | Requires a build step, larger tile size, no on-the-fly colour tweaking. |
+| **Use `hillshade`** (flat shading) | `type"":""hillshade""` on the same DEM source. | No extra build step, works on all releases. | Only grayscale shading, no colour bands. |
+| **Upgrade** | Bump your Gradle dependency to `implementation ""org.maplibre.gl:android-sdk:13.0.0""` (or newer). | Gives you the full `color-relief` feature plus later parity fixes. | May require a small code-base update (e.g., new API signatures). |
+
+If you are already on **android-v13.0.0** (or later) you’re good to go – no extra work needed.
+
+---
+
+## 5️⃣ Quick checklist before you ship
+
+| ✅ Checklist | What to verify |
+|--------------|----------------|
+| **Native version** | `MapLibre.getVersion()` ≥ 13.0.0 (for `color-relief`). |
+| **DEM source** | `""type"":""raster-dem""` **and** `""encoding"":""terrarium""` (or set `encoding(""terrarium"")` in Kotlin). |
+| **Layer order** | `color-relief` layer is *below* any vector layers that need to be coloured on top. |
+| **Expression syntax** | Use `[""interpolate"", …]` (or `interpolate-hcl/lab` if you’re on ≥ 13.7.1). |
+| **Cache / offline** | If you need offline tiles, bundle the DEM as an `asset://` URL and reference it as `pmtiles://asset://…` (supported since android-v13.7.1). |
+| **Log check** | Run the app with `Logcat` and look for `[ParseStyle]` warnings – they indicate a dropped layer. |
+
+---
+
+## 6️⃣ TL;DR code snippet (full minimal app)
+
+```kotlin
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var mapView: MapView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        MapLibre.getInstance(this)          // make sure the SDK is initialized
+        setContentView(R.layout.activity_main)
+        mapView = findViewById(R.id.mapView)
+
+        mapView.getMapAsync { mapboxMap ->
+            mapboxMap.setStyle(
+                Style.Builder()
+                    .fromUri(""asset://empty.json"")   // any base style
+                    .withSource(
+                        RasterDemSource(""dem"") {
+                            url(""https://my.cdn.com/terrarium/{z}/{x}/{y}.png"")
+                            tileSize(256)
+                            encoding(""terrarium"")
+                        }
+                    )
+                    .withLayer(
+                        ColorReliefLayer(""relief"", ""dem"").withProperties(
+                            PropertyFactory.colorReliefColor(
+                                raw(
+                                    """"""[
+                                      ""interpolate"",""linear"",
+                                      [""elevation""],
+                                      0,""#2e8b57"",
+                                      500,""#6abf40"",
+                                      1500,""#b5a642"",
+                                      2500,""#c28e3c"",
+                                      3500,""#d07c34"",
+                                      4500,""#e0692c"",
+                                      5500,""#ffffff""
+                                    ]""""""
+                                )
+                            )
+                        )
+                    )
+            )
+        }
+    }
+
+    override fun onStart() = super.onStart().also { mapView.onStart() }
+    override fun onStop()  = super.onStop().also { mapView.onStop() }
+    override fun onLowMemory() = super.onLowMemory().also { mapView.onLowMemory() }
+    override fun onDestroy() = super.onDestroy().also { mapView.onDestroy() }
+}
+```
+
+Run this on a device with Android 13 (or any API level) – you’ll see a green-to-brown-to-white colour ramp that follows the Terrarium DEM, and you can change the break-points in the JSON or via `PropertyFactory.colorReliefColor(Expression.raw(...))` at runtime.
+
+---
+
+### Bottom line
+
+- **Yes**, you can colour-code a Terrarium DEM directly in a MapLibre Android app.  
+- Use a **`raster-dem` source** with `""encoding"":""terrarium""` and a **`color-relief` layer**.  
+- Make sure you are on **android-v13.0.0+** (or upgrade).  
+- If you cannot upgrade, fall back to pre-rendered coloured raster tiles or a simple hillshade.
+
+Happy mapping! 🚀",PASS,1.00,,All assertions passed,
