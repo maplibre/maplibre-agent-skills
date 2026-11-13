@@ -12,6 +12,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Changed
 
+- `maplibre-fonts-glyphs`: prefers local and web fonts to font stacks on GL JS, keeping a `glyphs` URL for older GL JS and for Native ([#197](https://github.com/maplibre/maplibre-agent-skills/pull/197))
 - `maplibre-tile-sources`: point Leaflet migrations at the GL JS Leaflet migration guide ([#177](https://github.com/maplibre/maplibre-agent-skills/pull/177))
 
 ### Fixed
