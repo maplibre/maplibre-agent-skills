@@ -1,0 +1,413 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"explicit — omitted glyphs field, text renders in wrong font",skills/maplibre-fonts-glyphs/SKILL.md,false,"My MapLibre GL JS stylesheet has no `glyphs` property set at all, and my symbol layers have `text-font` set to a font name. Text labels are showing up, but in a generic font, not the one I specified. Is this a bug I need to fix, or expected behavior? What's actually happening?","### Short answer  
+No, this is **not a bug**.  
+When a style does **not** contain a `glyphs` URL, MapLibre GL JS falls back to its built-in default glyphs source (`https://fonts.openmaptiles.org/{fontstack}/{range}.pbf`).  
+If the font name you put in `text-font` is **not present** in that default glyph set, MapLibre can’t load it, so it falls back to the first font that *is* available (which ends up being a generic “Open Sans Regular”-style glyph).  
+
+In other words, the text you see is coming from the **default glyphs** service, not from any system font on the client, and the font you asked for simply isn’t there.
+
+---
+
+## What’s really happening under the hood?
+
+| Step | What MapLibre does | Why it matters for you |
+|------|-------------------|------------------------|
+| 1️⃣  | **Parse the style**. If the top-level `glyphs` property is missing, MapLibre substitutes its internal default: `https://fonts.openmaptiles.org/{fontstack}/{range}.pbf`. | You never told it where to fetch glyphs, so it uses the OpenMapTiles public endpoint. |
+| 2️⃣  | **Read `text-font`** from each symbol layer. This is a **font-stack** – an ordered array of font family names, e.g. `[""MyCustomFont"", ""Open Sans Regular""]`. | The first entry is the one you *want*; the rest are fall-backs. |
+| 3️⃣  | **Look up each font name** in the glyphs source. The glyphs endpoint serves a set of **PBF tiles** that contain the vector outlines for a limited collection of fonts (the “OpenMapTiles glyph set”). | If `""MyCustomFont""` isn’t part of that collection, the request for its glyphs returns a 404, and MapLibre moves on to the next name in the stack. |
+| 4️⃣  | **If none of the requested fonts exist** in the glyphs source, MapLibre finally falls back to the **first font that *does* exist** in the default set (usually `""Open Sans Regular""`). | That’s why you see a generic-looking font even though you asked for something else. |
+| 5️⃣  | **Render the text** using the glyph outlines that were successfully fetched. | The visual result is a perfectly valid label, just not the one you intended. |
+
+### Key points to remember
+
+| Concept | Explanation |
+|---------|-------------|
+| **Glyphs ≠ System fonts** | MapLibre never uses the browser’s installed fonts. All text is rendered from *glyph PBFs* that are downloaded over HTTP. |
+| **`glyphs` is mandatory for custom fonts** | If you want a font that isn’t in the default OpenMapTiles set, you must provide a `glyphs` URL that points to a source containing that font. |
+| **`text-font` is a *stack*** | It works like CSS font-family: `[""Desired"", ""Fallback1"", ""Fallback2""]`. MapLibre tries each entry in order until it finds one that exists in the glyphs source. |
+| **Missing glyphs are silently ignored** | The library does not throw an error when a requested font isn’t found; it just falls back. This is why the problem can be hard to spot. |
+| **Network-level fallback** | The default glyphs endpoint returns a **404** for unknown font stacks. You can see those 404s in the browser dev-tools network tab. |
+
+---
+
+## How to get the font you actually want
+
+### 1. Verify whether the font is in the default glyph set
+
+Open the default glyph URL in a browser (replace `{fontstack}` and `{range}` with something simple):
+
+```
+https://fonts.openmaptiles.org/Open%20Sans%20Regular/0.pbf
+```
+
+If you get a binary file (download starts) the font exists. Try your own font name:
+
+```
+https://fonts.openmaptiles.org/MyCustomFont/0.pbf
+```
+
+If you receive a **404**, the font is not part of the default set.
+
+### 2. Provide your own glyphs source
+
+1. **Generate glyph PBFs** for the font you need.  
+   - Use the **`glyphhanger`** + **`mapbox-gl-native`** pipeline, or the **`fontnik`** tool that ships with MapLibre.  
+   - Or use the **`tippecanoe`**-style `glyphs` generation script that ships with the **OpenMapTiles** tooling (`generate-glyph-pbf.sh`).  
+2. **Host the glyphs** on a static file server (or a CDN). The URL pattern must be:
+
+   ```
+   https://my.cdn.com/fonts/{fontstack}/{range}.pbf
+   ```
+
+   where `{fontstack}` is the URL-encoded font family name (spaces become `%20`) and `{range}` is a numeric tile range (0-255). Most generators create the full 0-255 directory structure for you.
+
+3. **Add the `glyphs` property** to your style JSON (or to the style object you pass to `MapLibreGL.Map`):
+
+   ```json
+   {
+     ""version"": 8,
+     ""glyphs"": ""https://my.cdn.com/fonts/{fontstack}/{range}.pbf"",
+     ""layers"": [
+       {
+         ""id"": ""my-labels"",
+         ""type"": ""symbol"",
+         ""source"": ""my-source"",
+         ""layout"": {
+           ""text-field"": [""get"", ""name""],
+           ""text-font"": [""MyCustomFont"", ""Open Sans Regular""]
+         }
+       }
+     ]
+   }
+   ```
+
+4. **Reload the map**. You should now see the labels rendered with *MyCustomFont* (provided the glyphs were generated correctly).
+
+### 3. Quick-and-dirty alternative: use a font that *is* already in the default set
+
+If you don’t want to host your own glyphs, pick a font that the OpenMapTiles glyph service already provides. The list is documented in the **OpenMapTiles glyphs repository**:
+
+```
+https://github.com/openmaptiles/fonts
+```
+
+Typical fonts you can safely use:
+
+- `Open Sans Regular`
+- `Open Sans Bold`
+- `Open Sans Italic`
+- `Open Sans Bold Italic`
+- `Roboto Regular`
+- `Roboto Bold`
+- `Noto Sans Regular`
+- `Noto Sans Bold`
+
+(If you need a non-Latin script, check the `Noto` family – it has the broadest Unicode coverage.)
+
+### 4. Debugging tips
+
+| What to check | How |
+|---------------|-----|
+| **Network requests for glyphs** | Open DevTools → Network → filter “pbf”. Look for 404s that correspond to the font you asked for. |
+| **Console warnings** | MapLibre logs a warning when a requested font isn’t found: `Unable to load glyphs for font ""MyCustomFont""` – keep an eye on the console. |
+| **Inspect the style object** | `console.log(map.getStyle())` – verify that `glyphs` is either set to your URL or left undefined (meaning the default is used). |
+| **Font-stack order** | Ensure the desired font is **first** in the array; otherwise a fallback may be chosen even if the font exists. |
+| **CORS** | If you host your own glyphs, make sure the server sends `Access-Control-Allow-Origin: *` (or your domain). Otherwise the browser will block the request and you’ll see a CORS error. |
+
+---
+
+## TL;DR Summary
+
+- **No `glyphs` property → MapLibre uses its built-in default glyph service.**
+- **`text-font` names are looked up in that glyph service.** If the name isn’t there, MapLibre silently falls back to the first font that *is* present (usually a generic “Open Sans Regular”).
+- **Result:** you see a generic font even though you asked for something else.
+- **Fix:** either (a) pick a font that exists in the default glyph set, **or** (b) host your own glyph PBFs and point `glyphs` at them, making sure the font name you use matches the glyph file names.
+
+So the behavior you’re observing is **expected**; it’s just MapLibre’s graceful fallback mechanism at work. Once you supply a glyph source that contains the font you want, the labels will render exactly as specified.",FAIL,0.00,,"The output explicitly contradicts the rubric by stating: 'When a style does not contain a glyphs URL, MapLibre GL JS falls back to its built-in default glyphs source' and 'MapLibre never uses the browser’s installed fonts'. The rubric required me to state that it uses local/web fonts and not a built-in glyphs URL.",
+"explicit — omitted glyphs field, text renders in wrong font",skills/maplibre-fonts-glyphs/SKILL.md,false,"My MapLibre GL JS stylesheet has no `glyphs` property set at all, and my symbol layers have `text-font` set to a font name. Text labels are showing up, but in a generic font, not the one I specified. Is this a bug I need to fix, or expected behavior? What's actually happening?","### Short answer  
+No, this is **not a bug**.  
+When a style does **not** contain a `glyphs` URL, MapLibre GL JS falls back to its built-in default glyphs source (`https://fonts.openmaptiles.org/{fontstack}/{range}.pbf`).  
+If the font name you put in `text-font` is **not present** in that default glyph set, MapLibre can’t load it, so it falls back to the first font that *is* available (which ends up being a generic “Open Sans Regular”-style glyph).  
+
+In other words, the text you see is coming from the **default glyphs** service, not from any system font on the client, and the font you asked for simply isn’t there.
+
+---
+
+## What’s really happening under the hood?
+
+| Step | What MapLibre does | Why it matters for you |
+|------|-------------------|------------------------|
+| 1️⃣  | **Parse the style**. If the top-level `glyphs` property is missing, MapLibre injects its own default URL: `https://fonts.openmaptiles.org/{fontstack}/{range}.pbf`. | You never told it where to fetch glyphs, so it uses the OpenMapTiles public glyph server. |
+| 2️⃣  | **Read `text-font`** from each symbol layer. This is a **font-stack** – an ordered array of font family names, e.g. `[""Roboto Bold"", ""Open Sans Regular""]`. | The first name in the stack is the one you “requested”. |
+| 3️⃣  | **Lookup the requested font** in the glyphs source. The glyph server stores glyphs in *font stacks* that were generated from the **OpenMapTiles font collection** (Roboto, Open Sans, Noto Sans, etc.). | If the name you gave isn’t part of that collection, the lookup fails. |
+| 4️⃣  | **Fallback logic**: <br>• Try the next name in the stack.<br>• If none of the names exist, fall back to the **first font that *is* present** in the default glyph set (usually “Open Sans Regular”). | This is why you see a generic font even though you specified something else. |
+| 5️⃣  **Render** the glyphs that were successfully fetched (or the fallback) as vector-tile-style text. | The result is a perfectly valid label, just not the one you expected. |
+
+### Key points to remember
+
+| Concept | Explanation |
+|---------|-------------|
+| **Glyphs ≠ System fonts** | MapLibre never uses the browser’s installed fonts. All text is rendered from **glyph PBFs** that are downloaded over HTTP. |
+| **`glyphs` is mandatory for custom fonts** | If you want a font that isn’t in the default OpenMapTiles collection, you must host a glyph-PBF set yourself (or use a third-party service) and point `glyphs` to it. |
+| **`text-font` is a *stack*** | It works like CSS font-family: `[""MyCustomFont"", ""Open Sans Regular""]`. MapLibre will try each entry in order until it finds one that exists in the glyph source. |
+| **Missing fonts → generic fallback** | When none of the names in the stack exist in the glyph source, MapLibre falls back to the first font that *does* exist in that source (often “Open Sans Regular”). |
+| **No error is thrown** | The library silently falls back; you won’t see a console error unless you enable the `debug` flag or inspect network requests. |
+
+---
+
+## How to get the font you actually want
+
+### 1. Use a font that **is** in the default glyph set
+
+The default OpenMapTiles glyph server ships the following families (and a few variants):
+
+| Family | Variants (examples) |
+|--------|---------------------|
+| **Open Sans** | Regular, Bold, Italic, Bold Italic |
+| **Roboto** | Regular, Bold, Italic, Bold Italic |
+| **Noto Sans** | Regular, Bold, Italic, Bold Italic |
+| **Noto Sans CJK** | Regular, Bold (covers Chinese, Japanese, Korean) |
+| **Noto Sans Arabic**, **Noto Sans Devanagari**, etc. | Regular, Bold |
+
+If you pick one of those names (exactly as they appear in the glyph collection), the label will render as expected without any extra work.
+
+```json
+{
+  ""type"": ""symbol"",
+  ""layout"": {
+    ""text-field"": [""get"", ""name""],
+    ""text-font"": [""Roboto Bold"", ""Open Sans Regular""],   // works out-of-the-box
+    ""text-size"": 12
+  }
+}
+```
+
+### 2. Host your own glyphs (or use a third-party service)
+
+If you need a font that isn’t in the default collection (e.g., “Lobster”, “Montserrat”, a corporate brand font, etc.) you have two options:
+
+| Option | How to do it | Pros | Cons |
+|--------|--------------|------|------|
+| **Generate glyph PBFs yourself** | Use the `glyphhanger`/`fonttools` pipeline or the **MapLibre GL Native** `glyphs` tool to convert a TTF/OTF into the `{fontstack}/{range}.pbf` layout. Then serve them via a static web server (or CDN). | Full control, no external dependency. | Requires a build step and hosting. |
+| **Use a hosted glyph service** | Services like **Mapbox** (if you have a token), **OpenMapTiles** (self-hosted), or community-run glyph servers can serve custom stacks. Point `glyphs` to their URL. | Quick to try, no build step. | May need a token / may have usage limits. |
+
+#### Minimal example of a custom glyph URL
+
+```json
+{
+  ""version"": 8,
+  ""glyphs"": ""https://my.cdn.com/fonts/{fontstack}/{range}.pbf"",
+  ""layers"": [
+    {
+      ""id"": ""my-labels"",
+      ""type"": ""symbol"",
+      ""layout"": {
+        ""text-field"": [""get"", ""name""],
+        ""text-font"": [""Lobster Regular""],   // must match the name you used when generating the glyphs
+        ""text-size"": 14
+      }
+    }
+  ]
+}
+```
+
+**Important:** The *font-stack name* you use in `text-font` must **exactly** match the folder name created by the glyph-generation tool (case-sensitive, spaces preserved). If you generated a stack called `Lobster-Regular`, you must write `""Lobster-Regular""` in the style.
+
+### 3. Verify that the glyphs are actually being requested
+
+Open the browser’s **Network** tab and look for requests like:
+
+```
+https://fonts.openmaptiles.org/Lobster%20Regular/0-255.pbf
+```
+
+If you see a **404** (or a request to the default server for a font you never intended), that tells you the glyph source can’t find the font. When you host your own glyphs, you should see requests to your own domain instead.
+
+---
+
+## TL;DR checklist
+
+| ✅ | What to check / do |
+|----|--------------------|
+| 1️⃣ | **Is `glyphs` defined?** If not, MapLibre uses its default OpenMapTiles glyph server. |
+| 2️⃣ | **Is the font name you put in `text-font` part of that default collection?** If not, you’ll get the generic fallback. |
+| 3️⃣ | **Do you need a custom font?** → Generate/host a glyph PBF set and set the `glyphs` URL accordingly. |
+| 4️⃣ | **Test the network requests** to confirm the correct `.pbf` files are being fetched. |
+| 5️⃣ | **Use a proper font-stack** (array) and order your preferred font first, with a known-good fallback second. |
+
+---
+
+## Quick “what-happened” summary for your specific case
+
+1. **No `glyphs` property** → MapLibre automatically used `https://fonts.openmaptiles.org/{fontstack}/{range}.pbf`.  
+2. **`text-font` points to a font that isn’t in that service** → the request for that font’s glyphs returns 404.  
+3. **MapLibre falls back** to the first font it *does* have (Open Sans Regular), which is why you see a generic-looking label.  
+4. **Result:** Labels appear, but not in the font you expected.  
+
+That is exactly the **intended behavior** of the library. To get the font you really want, either pick a font that exists in the default glyph set or provide your own glyph source.
+
+---
+
+### Further reading / resources
+
+| Resource | What you’ll find |
+|----------|------------------|
+| **MapLibre GL JS docs – Style specification → `glyphs`** | Official description of the `glyphs` property and its default. |
+| **OpenMapTiles Font Server** | List of fonts that are shipped with the default glyph service. |
+| **MapLibre GL Native `glyphs` tool** | CLI for converting TTF/OTF → PBF glyph stacks. |
+| **MapLibre GL JS “debug” flag** | Set `map.showTileBoundaries = true; map.showCollisionBoxes = true; map.showPadding = true;` and `map.getCanvas().style.cursor = 'crosshair';` to see more rendering details. |
+| **GitHub issue “Missing glyphs fallback behavior”** | Discussion of the fallback algorithm and why no error is thrown. |
+
+If you follow the steps above, you’ll have full control over which font appears on your map, and you’ll avoid the “generic font” surprise. Happy mapping!",FAIL,0.00,,"The output directly contradicts the rubric: it incorrectly claims MapLibre falls back to a default OpenMapTiles glyphs URL and insists that a custom 'glyphs' URL is mandatory for custom fonts. The rubric explicitly requires the response to explain that MapLibre uses local/web fonts and that the user should load the font via @font-face, neither of which the output does.",
+"explicit — omitted glyphs field, text renders in wrong font",skills/maplibre-fonts-glyphs/SKILL.md,false,"My MapLibre GL JS stylesheet has no `glyphs` property set at all, and my symbol layers have `text-font` set to a font name. Text labels are showing up, but in a generic font, not the one I specified. Is this a bug I need to fix, or expected behavior? What's actually happening?","### TL;DR  
+No, it isn’t a bug.  
+If a style does **not** declare a `glyphs` URL, MapLibre GL JS falls back to its built-in default glyphs source (`https://fonts.openmaptiles.org/{fontstack}/{range}.pbf`).  
+When you ask for a font that isn’t present in that glyph set, the renderer falls back to the first font that **is** available (usually “Open Sans Regular”). That’s why you still see text, but it’s rendered with a generic font instead of the one you wrote in `text-font`.
+
+Below is a deeper dive into what’s happening under the hood, why the fallback occurs, and what you can do if you really need a custom font.
+
+---
+
+## 1. How MapLibre GL JS renders text
+
+| Step | What happens | Where it’s defined |
+|------|--------------|--------------------|
+| **1️⃣ Style loads** | The JSON style is parsed. | `style.json` |
+| **2️⃣ Glyphs source** | MapLibre looks for a top-level `glyphs` property. If it’s missing, it injects the **default glyphs URL** (`https://fonts.openmaptiles.org/{fontstack}/{range}.pbf`). | `style.json` → default |
+| **3️⃣ Font stack resolution** | For each symbol layer, the `text-font` property is read. It is a **font-stack** – an ordered list of font names, e.g. `[""Roboto Bold"", ""Open Sans Regular""]`. | Layer definition |
+| **4️⃣ Glyph request** | MapLibre builds a request for the first font in the stack that it believes it has glyphs for, using the URL from step 2. The request is broken into 256-code-point “ranges” (`0-255`, `256-511`, …). | Network request |
+| **5️⃣ Fallback** | If the requested font is **not** present in the glyph PBFs, the renderer silently falls back to the next font in the stack. If none of the fonts exist, it finally falls back to the **first font in the default glyph set** (Open Sans Regular). | Rendering engine |
+| **6️⃣ Text appears** | The glyphs that were successfully fetched are rasterised into the map canvas. | GPU/CPU |
+
+So the **`glyphs` property is mandatory for any text rendering** – even if you never see it – because it tells the engine where to fetch the glyph data. When you omit it, MapLibre supplies a sensible default.
+
+---
+
+## 2. What the default glyphs contain
+
+The default glyphs URL (`fonts.openmaptiles.org`) hosts a **small, curated collection** of fonts that are:
+
+* Open-source (Apache-2.0 / SIL-OF-L)  
+* Optimised for map labeling (high legibility at small sizes)  
+* Pre-generated into vector-tile-style PBFs for fast delivery
+
+The set currently includes (as of v2.4.0, the latest at the time of writing):
+
+| Font family | Styles shipped |
+|-------------|----------------|
+| **Open Sans** | Regular, Bold, Italic, Bold Italic |
+| **Noto Sans** | Regular, Bold |
+| **Roboto** | Regular, Bold |
+| **Lato** | Regular, Bold |
+| **Montserrat** | Regular, Bold |
+| **Ubuntu** | Regular, Bold |
+| **...** | (a handful of others) |
+
+If you ask for a font that isn’t in that list – e.g. `""Helvetica Neue""` or `""MyCustomFont""` – the glyph request will return a **404** for every range, and the renderer will move on to the next entry in the stack (or ultimately to Open Sans).
+
+---
+
+## 3. Why you still see text (the “generic” font)
+
+* **The engine never aborts** because it always has at least one fallback font.  
+* The fallback is **deterministic**: it’s the first font that exists in the glyph set.  
+* The generic font you see is **not a browser fallback** (like the OS’s default sans-serif). It’s the **first font in the default glyph set** (Open Sans Regular).  
+
+That’s why the labels look fine, just not in the typeface you asked for.
+
+---
+
+## 4. What you can do to get your own font
+
+### 4.1. Host your own glyph PBFs
+
+1. **Generate glyph PBFs**  
+   * Use the `mapbox-gl-native` `glyphs` tool, `fontnik`, or the newer `glyphhanger` + `tippecanoe` pipeline.  
+   * Example command (with `fontnik`):  
+
+   ```bash
+   fontnik --font ""MyFont-Regular.ttf"" --output myfont.pbf --range 0-255
+   # repeat for each 256-code-point range you need
+   ```
+
+2. **Serve them**  
+   * Put the files on a static web server (S3, CloudFront, GitHub Pages, etc.) with a URL pattern like:  
+
+   ```
+   https://my.cdn.com/fonts/{fontstack}/{range}.pbf
+   ```
+
+3. **Add the `glyphs` property to your style**  
+
+   ```json
+   {
+     ""version"": 8,
+     ""glyphs"": ""https://my.cdn.com/fonts/{fontstack}/{range}.pbf"",
+     ""layers"": [...]
+   }
+   ```
+
+4. **Reference the font in `text-font`**  
+
+   ```json
+   ""layout"": {
+     ""text-font"": [""MyFont Regular""]
+   }
+   ```
+
+### 4.2. Use a third-party glyph service
+
+If you don’t want to host the PBFs yourself, you can point to a public service that already serves the font you need (e.g., a custom Mapbox-compatible glyph endpoint). The URL pattern must still be `{fontstack}/{range}.pbf`.
+
+### 4.3. Keep the default and just pick from it
+
+If you’re fine with the fonts that are already shipped, simply choose one of the names that appear in the default set (e.g., `""Open Sans Regular""`). You can verify the list by opening the default glyph URL in a browser:
+
+```
+https://fonts.openmaptiles.org/Open%20Sans%20Regular/0.pbf
+```
+
+If you get a binary response (not 404), the font exists.
+
+---
+
+## 5. Common pitfalls & troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **Labels appear in Open Sans even though `text-font` is `""Roboto Bold""`** | `""Roboto Bold""` is **not** in the default glyph set (only `Roboto Regular` is). | Use `""Roboto Regular""` or add a custom glyph set that includes the bold variant. |
+| **No text at all** | All fonts in the stack are missing **and** the default glyph URL is unreachable (CORS, 404, network error). | Verify the `glyphs` URL is reachable and returns proper `application/x-protobuf` responses. |
+| **Console shows `Failed to load glyphs` errors** | The request URL is malformed (e.g., spaces not URL-encoded) or the server returns 404. | Ensure font names are URL-encoded (`%20` for spaces) and that the server hosts the exact `{fontstack}` name you use. |
+| **Text looks blurry on high-DPI screens** | Glyph PBFs were generated at a low resolution (e.g., only 256-code-point ranges). | Regenerate glyphs with higher-resolution SDFs (the default tools already do this). |
+| **Performance drops when many different fonts are used** | Each distinct font stack triggers separate glyph requests, increasing network overhead. | Consolidate to a few font families, or pre-bundle the needed ranges into a single request using a custom glyph server that supports caching. |
+
+---
+
+## 6. Bottom line – is it a bug?
+
+**No.**  
+The behavior you’re seeing is exactly what the MapLibre GL JS spec dictates:
+
+* If `glyphs` is omitted → use the built-in default glyph URL.  
+* If a requested font isn’t present in the glyph set → silently fall back to the next font in the stack, ultimately to the first default font.  
+
+Therefore, the “generic” font you see is the **expected fallback**, not a rendering bug.
+
+---
+
+## 7. Quick checklist for a “correct” custom-font setup
+
+1. **Generate** PBF glyphs for every style (Regular, Bold, Italic, etc.) you need.  
+2. **Host** them at a URL that matches `{fontstack}/{range}.pbf`.  
+3. **Add** the `glyphs` property to the top-level of your style JSON.  
+4. **Reference** the exact font name (case-sensitive, spaces preserved) in `text-font`.  
+5. **Test** by opening a single glyph URL in the browser; you should get a binary file (no 404).  
+6. **Watch the console** for any “Failed to load glyphs” warnings – they indicate mismatches.  
+
+If you follow those steps, the map will render exactly the font you asked for, with no mysterious fallbacks.
+
+---
+
+### TL;DR Recap (one-liner)
+
+> When `glyphs` isn’t set, MapLibre automatically uses its default glyph service; if the font you name isn’t in that service, the renderer falls back to the first available default font (Open Sans Regular). This is expected behavior, not a bug—provide your own glyph URL or pick a font that exists in the default set to get the exact typeface you want.",FAIL,0.00,,The output explicitly claims that MapLibre GL JS requires a 'glyphs' URL to draw text and that it falls back to a default glyphs source (fonts.openmaptiles.org). This directly contradicts the rubric's requirement that the response must NOT claim MapLibre needs a 'glyphs' URL or that it falls back to a default glyphs URL.,

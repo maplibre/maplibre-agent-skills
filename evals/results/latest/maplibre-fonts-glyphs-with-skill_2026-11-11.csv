@@ -1,0 +1,1114 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"explicit — omitted glyphs field, text renders in wrong font",skills/maplibre-fonts-glyphs/SKILL.md,"My MapLibre GL JS stylesheet has no `glyphs` property set at all, and my symbol layers have `text-font` set to a font name. Text labels are showing up, but in a generic font, not the one I specified. Is this a bug I need to fix, or expected behavior? What's actually happening?","### Short answer  
+**It’s not a bug – it’s the intended behaviour of MapLibre GL JS when the style has no `glyphs` URL.**  
+
+When `glyphs` is omitted, MapLibre falls back to **local-font rendering**. Every name you put in `text-font` is treated exactly like a CSS `font-family` list:
+
+1. **If the browser can find a matching system font** → it uses that font.  
+2. **If you have declared a web-font with `@font-face` (or via `map.setFontFaces()`)** → the browser loads that file and uses it.  
+3. **If nothing matches** → the browser picks its generic fallback (usually “sans-serif”), which is why you see a “generic” font on the map.
+
+So the fact that you see text at all is correct; the fact that it isn’t the exact font you named simply means the font wasn’t available locally.
+
+---
+
+## What’s really happening under the hood
+
+| Step | What MapLibre does | Why it matters for you |
+|------|-------------------|------------------------|
+| **Style parsing** | No `glyphs` field → “local-fonts mode”. | No glyph-PBF requests are ever made. |
+| **`text-font` resolution** | The array (e.g. `[""My Fancy Font Bold"", ""sans-serif""]`) is passed to the browser’s text layout engine, exactly like a CSS `font-family` list. | The engine looks for a font with that *postscript* name on the system or in any loaded `@font-face` rules. |
+| **Font loading** | If you have a matching `@font-face` rule, the browser fetches the URL you gave it. If you call `map.setFontFaces()` you can also supply a `font-faces` block from the style, which MapLibre will turn into `@font-face` rules for you. | This is where you can make your custom font appear. |
+| **Fallback** | If the name cannot be resolved, the browser falls back to the next name in the list, eventually ending up at its generic default. | That is the “generic font” you’re seeing. |
+| **Rendering** | The text is rendered with the browser’s native text rasterizer (SDF is not used because there are no glyph PBFs). | The result looks crisp at any zoom, but the exact shape depends on the local font file. |
+
+> **Note:** In GL JS ≥ 5.11.0 this local-font path is *first-class* – it is not a “fallback after a failed glyph request”, it is the normal code path when `glyphs` is missing.
+
+---
+
+## How to get the exact font you want
+
+### 1. Make sure the font is actually available locally
+
+#### a. System font
+* Install the font on the OS that runs the browser (or on the device for mobile browsers).  
+* Use the exact **PostScript name** (the name you see in Font Book, Windows Font Viewer, or `fc-list`) in `text-font`.
+
+#### b. Web-font via `@font-face`
+```css
+@font-face {
+  font-family: ""My Fancy Font"";
+  src: url(""/fonts/MyFancyFont-Regular.woff2"") format(""woff2"");
+  font-weight: 400;
+  font-style: normal;
+}
+```
+* The `font-family` value **must match** the string you put in `text-font`.  
+* The URL must be reachable from the page (CORS-allowed if on a different origin).  
+
+#### c. `font-faces` property in the style (MapLibre-GL-JS ≥ 6.7.0)
+If you prefer to keep everything inside the style JSON, add a `font-faces` block:
+
+```json
+{
+  ""font-faces"": {
+    ""My Fancy Font"": [
+      {
+        ""url"": ""https://example.com/fonts/MyFancyFont-Regular.ttf"",
+        ""unicode-range"": [""U+0000-FFFF""]
+      }
+    ]
+  }
+}
+```
+
+Then, after creating the map, tell MapLibre to read it:
+
+```js
+map.on('load', () => {
+  // If the style already contains the block, this is a no-op.
+  // If you want to add/replace at runtime:
+  map.setFontFaces(style['font-faces']);
+});
+```
+
+### 2. Verify the name matches exactly
+
+* **Case-sensitive** – `""My Fancy Font""` ≠ `""my fancy font""`.  
+* **Spaces and punctuation** must be identical.  
+* If you’re using a weight variant (`Bold`, `Italic`, etc.) you can either:
+  * List the exact variant name in `text-font` (e.g. `[""My Fancy Font Bold""]`), **or**
+  * Use the generic family name and let CSS weight/italic properties apply (e.g. `[""My Fancy Font""]` with `text-weight: ""bold""`).
+
+### 3. Check the browser console
+
+* Look for **`Failed to load resource: net::ERR_ABORTED`** messages that point to your font URL.  
+* Look for **`Unable to load glyph range … Rendering codepoint … locally instead.`** – this only appears when a `glyphs` URL is present and fails; it will *not* appear in pure local-font mode.
+
+### 4. Optional: Keep a `glyphs` URL as a safety net (older GL JS)
+
+If you need to support older MapLibre versions (< 5.11) that *require* a `glyphs` URL, you can:
+
+```json
+""glyphs"": ""https://myserver.com/fonts/{fontstack}/{range}.pbf""
+```
+
+*Serve the same font stack you use locally, or just point at the public demo server (`https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf`).*  
+When the browser can’t find the local font, the glyph PBF will be fetched and used, so you never end up with invisible text.
+
+---
+
+## Common pitfalls & how to fix them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Text appears, but in a different weight (e.g., regular instead of bold) | You listed `""My Fancy Font Bold""` but only loaded the regular TTF/WOFF. | Load the bold variant as a separate `@font-face` with `font-weight: 700` and reference it as `""My Fancy Font""` + `text-weight: ""bold""` (or list the exact name). |
+| No text at all (layer disappears) | Using an old MapLibre version (< 5.11) **and** no `glyphs` URL. | Upgrade MapLibre or add a `glyphs` URL. |
+| Text shows, but characters from a non-Latin script are missing or look wrong | The font you loaded does not contain those Unicode ranges. | Add a `unicode-range` entry in `font-faces` that points to a font file covering those code points, or add a second font to the `text-font` fallback list (e.g., `[""My Fancy Font"", ""Noto Sans CJK SC""]`). |
+| Console shows CORS errors when loading the font file | Font URL is on a different origin without `Access-Control-Allow-Origin`. | Serve the font with proper CORS headers, or host it on the same origin. |
+| Font loads on desktop but not on mobile | Mobile browsers sometimes block cross-origin fonts unless the `Access-Control-Allow-Origin` header includes the requesting origin **and** the `Access-Control-Allow-Credentials` header is not set. | Ensure the server sends `Access-Control-Allow-Origin: *` (or the specific origin) **without** `Access-Control-Allow-Credentials`. |
+
+---
+
+## TL;DR checklist
+
+1. **Confirm you’re on MapLibre GL JS ≥ 5.11** (local-fonts mode is only guaranteed from that version).  
+2. **Make the font available locally** – either install it on the OS, add an `@font-face` rule, **or** use the style’s `font-faces` block + `map.setFontFaces()`.  
+3. **Match the name exactly** between `text-font` and the `font-family` you declared.  
+4. **Check the console** for loading errors or CORS problems.  
+5. (Optional) **Add a `glyphs` URL** if you need to support older MapLibre versions or want a fallback when the local font can’t be loaded.
+
+Once the font is reachable and the name matches, the map will render the labels in the exact typeface you specified. The generic font you’re seeing now is simply the browser’s default fallback because it couldn’t locate the requested font. It’s expected behavior, not a bug.",PASS,1.00,,All assertions passed,
+"implicit — offline/local fonts on MapLibre Native, not GL JS",skills/maplibre-fonts-glyphs/SKILL.md,I'm building an offline map app with MapLibre Native on Android and want labels to render in local device fonts without running a glyphs server. What's the right way to configure this?,"## TL;DR  
+
+**MapLibre Native on Android can render all labels from fonts that you ship with the app – you just have to:**
+
+1. **Bundle the TTF/OTF files in your APK (e.g. `src/main/assets/fonts/`).**  
+2. **Add a `font-faces` section to the style JSON that points at those files with `file:///android_asset/...` URLs.**  
+3. **Make sure every `text-font` name used in the style matches a key in `font-faces`.**  
+4. **Give the style a *dummy* `glyphs` URL (it can point at a non-existent file or a tiny empty PBF).**  
+5. **Load the style with `MapLibreMapOptions` / `MapView` as you normally would.**  
+
+When the style is parsed, MapLibre Native will read the `font-faces` entries, load the fonts from the APK, and use HarfBuzz shaping to draw every script (Latin, Arabic, Devanagari, CJK, …). Because the glyphs URL never succeeds, the engine falls back to the local fonts – no external glyph server is required.
+
+Below is a step-by-step guide, plus a few gotchas for the most common scripts.
+
+---
+
+## 1. Put the font files in the APK
+
+```
+app/
+ └─ src/
+     └─ main/
+         └─ assets/
+             └─ fonts/
+                 ├─ NotoSans-Regular.ttf
+                 ├─ NotoSans-Bold.ttf
+                 ├─ NotoSansArabic-Regular.ttf
+                 ├─ NotoSansDevanagari-Regular.ttf
+                 └─ NotoSansCJKsc-Regular.otf   ← optional, huge (~30 MB)
+```
+
+*Tip:* If you only need a subset of CJK you can ship a “compact” CJK font (e.g. Noto Sans SC Compact) to keep the APK size reasonable.
+
+---
+
+## 2. Add a `font-faces` block to your style JSON
+
+```json
+{
+  ""version"": 8,
+  ""glyphs"": ""file:///android_asset/empty/{fontstack}/{range}.pbf"",   // dummy, see §4
+  ""font-faces"": {
+    ""Noto Sans Regular"": [
+      {
+        ""url"": ""file:///android_asset/fonts/NotoSans-Regular.ttf"",
+        ""unicode-range"": [""U+0000-00FF"", ""U+0100-024F""]   // Latin, Latin-Extended
+      }
+    ],
+    ""Noto Sans Bold"": [
+      {
+        ""url"": ""file:///android_asset/fonts/NotoSans-Bold.ttf"",
+        ""unicode-range"": [""U+0000-00FF"", ""U+0100-024F""]
+      }
+    ],
+    ""Noto Sans Arabic"": [
+      {
+        ""url"": ""file:///android_asset/fonts/NotoSansArabic-Regular.ttf"",
+        ""unicode-range"": [""U+0600-06FF"", ""U+0750-077F"", ""U+08A0-08FF""]
+      }
+    ],
+    ""Noto Sans Devanagari"": [
+      {
+        ""url"": ""file:///android_asset/fonts/NotoSansDevanagari-Regular.ttf"",
+        ""unicode-range"": [""U+0900-097F""]
+      }
+    ],
+    ""Noto Sans CJK SC"": [
+      {
+        ""url"": ""file:///android_asset/fonts/NotoSansCJKsc-Regular.otf"",
+        ""unicode-range"": [""U+4E00-9FFF"", ""U+3400-4DBF"", ""U+20000-2A6DF""]
+      }
+    ]
+  },
+
+  ""layers"": [
+    {
+      ""id"": ""place-labels"",
+      ""type"": ""symbol"",
+      ""source"": ""osm"",
+      ""source-layer"": ""place"",
+      ""layout"": {
+        ""text-field"": [""get"", ""name""],
+        ""text-font"": [
+          ""Noto Sans Bold"",
+          ""Noto Sans Regular""
+        ],
+        ""text-size"": 14
+      }
+    }
+    // … other layers …
+  ]
+}
+```
+
+### Why the `unicode-range`?
+
+* It tells the engine which characters each file actually covers.  
+* Characters **outside** any declared range will fall back to the `glyphs` URL (which we deliberately make unavailable, so they will simply be invisible – that’s why you must list *all* scripts you intend to use).
+
+---
+
+## 3. Use the same `text-font` names in your layers
+
+The `text-font` array is a **fallback list**. The first name that matches a loaded font-face wins.  
+If you want a bold weight for Latin but regular weight for Arabic, you can do:
+
+```json
+""text-font"": [
+  ""Noto Sans Bold"",          // Latin, Greek, Cyrillic
+  ""Noto Sans Arabic"",       // Arabic
+  ""Noto Sans Devanagari"",   // Devanagari
+  ""Noto Sans CJK SC""        // CJK
+]
+```
+
+Because the engine reads `font-faces` first, it never contacts a glyph server for any of those scripts.
+
+---
+
+## 4. Provide a *dummy* `glyphs` URL
+
+MapLibre Native still expects the `glyphs` field to exist (the spec requires it).  
+You can point it at a location that will **always fail** – the engine will then try the local `font-faces` and, if a character is not covered, simply skip drawing it.
+
+```json
+""glyphs"": ""file:///android_asset/empty/{fontstack}/{range}.pbf""
+```
+
+Create an empty file `assets/empty/` (any folder) and put a **single tiny PBF** (or nothing at all).  
+When the engine tries to fetch `…/Noto%20Sans%20Regular/0-255.pbf` it gets a 404, logs a warning, and falls back to the local font.
+
+*If you prefer not to have a dummy file at all, you can use a non-existent scheme such as `glyphs"": ""null://{fontstack}/{range}.pbf""` – the request will fail instantly.*
+
+---
+
+## 5. Load the style in Android
+
+```kotlin
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var mapView: MapView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // 1️⃣ Inflate layout that contains a MapView
+        setContentView(R.layout.activity_main)
+        mapView = findViewById(R.id.mapView)
+
+        // 2️⃣ Tell MapLibre where the style lives (inside assets)
+        val styleUri = ""file:///android_asset/style.json""
+
+        // 3️⃣ Create the map with the usual options
+        mapView.getMapAsync { mapboxMap ->
+            mapboxMap.loadStyleUri(styleUri) {
+                // style is now loaded, fonts are ready
+                // you can also call mapboxMap.setCamera(...) etc.
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        mapView.onStart()
+    }
+    override fun onStop() {
+        super.onStop()
+        mapView.onStop()
+    }
+    // … other lifecycle callbacks …
+}
+```
+
+*No extra SDK calls are needed – MapLibre Native reads `font-faces` automatically (since Android 11.13.0).*
+
+---
+
+## 6. Special script notes
+
+| Script | What you must do | Why |
+|--------|------------------|-----|
+| **Latin / Greek / Cyrillic** | Include a regular + bold TTF (or OTF) in `font-faces`. | These are simple glyphs; the engine will use the exact weight you list. |
+| **Arabic / Hebrew** | Add the appropriate Noto-Sans-Arabic / Noto-Sans-Hebrew files to `font-faces`. | Since GL JS 6.9.0 the RTL plugin is no longer needed; Native always uses HarfBuzz shaping when a local font is present. |
+| **Devanagari, Thai, Khmer, Myanmar, etc.** | Provide the script-specific TTF and list its Unicode range. | From Native 6.15.0 onward these scripts are rendered as grapheme clusters by HarfBuzz; the glyph PBFs are ignored, so the local font is the only source. |
+| **CJK (Chinese, Japanese, Korean)** | **Option A (recommended):** ship a CJK font (e.g. `NotoSansCJKsc-Regular.otf`) and reference it in `font-faces`. <br>**Option B (smaller APK):** rely on the device’s built-in CJK system fonts by *omitting* the CJK entry from `font-faces`. The engine will fall back to the system font because the glyph request fails. | CJK glyph sets are huge. If you have enough storage you get consistent shapes by bundling your own font; otherwise you can let the OS pick the font (the result will vary by device). |
+| **Symbols that mix scripts** (e.g. “北京 Paris”) | Ensure **all** scripts used in the same label have a matching entry in `font-faces`. The engine will switch fonts mid-string as needed. | HarfBuzz can handle font fallback per-code-point when multiple `font-faces` are present. |
+
+---
+
+## 7. Debugging checklist
+
+| Symptom | Likely cause | How to verify |
+|---------|--------------|----------------|
+| Some characters are missing (blank boxes) | No `font-faces` entry covering that Unicode range. | Look at Logcat for `Unable to load glyph range …` messages. |
+| Text appears in a different font than you bundled | The `text-font` name does not exactly match the key in `font-faces`. | Check spelling, case, and commas (e.g. `""Noto Sans Bold""` vs `""N",PASS,1.00,,All assertions passed,
+anti-pattern — porting a Native font-faces config to GL JS,skills/maplibre-fonts-glyphs/SKILL.md,I have a working `font-faces` config in my MapLibre Native app's stylesheet that renders local fonts offline with explicit Unicode ranges per file. I'm now building a MapLibre GL JS web app and want the same offline-font behavior — can I copy the same `font-faces` config into my GL JS stylesheet?,"## Short answer  
+
+**Yes – you can reuse the same `font-faces` block in a MapLibre GL JS style, but a few extra steps are required for it to work offline in a browser.**  
+
+| What you already have (Native) | What you need to add / change for GL JS |
+|--------------------------------|----------------------------------------|
+| `font-faces` with `url` pointing at local files (e.g. `file:///…/NotoSansDevanagari.ttf`) | The `url`s must be reachable **via HTTP(S)** (or a data-URL) because the browser can’t read raw device-file paths. |
+| No need for a `glyphs` URL for the fonts you listed | Either **omit the top-level `glyphs` field** (GL JS ≥ 5.11) **or** point it at a dummy endpoint. When a glyph PBF can’t be fetched GL JS falls back to the local-font path you defined. |
+| Offline-only app (native file system) | In the web you must **cache the font files** (Service Worker, `Cache API`, or `preload` + `Cache-Control`) so they’re available after the initial load. |
+| Font files are already on the device | Make sure the fonts are **CORS-accessible** (same-origin or proper `Access-Control-Allow-Origin` header). |
+| Native reads `font-faces` automatically | In GL JS you can either **declare the block statically in the style JSON** (GL JS ≥ 6.7) **or** call `map.setFontFaces()` at runtime to add/replace entries. |
+
+Below is a step-by-step guide that shows exactly how to copy the Native `font-faces` config into a GL JS web app and make it work **offline**.
+
+---
+
+## 1. Verify your GL JS version
+
+`font-faces` support landed in **MapLibre GL JS v6.7.0**.  
+If you are on an older version you must upgrade, or you can still use the “local-fonts mode” (omit `glyphs`) but you won’t get the `font-faces` mapping.
+
+```bash
+npm install maplibre-gl@^6.7   # or a newer 6.x/7.x release
+```
+
+---
+
+## 2. Keep the `font-faces` block exactly as you have it
+
+A typical Native block looks like this:
+
+```json
+{
+  ""font-faces"": {
+    ""Noto Sans Regular"": [
+      {
+        ""url"": ""file:///android_asset/fonts/NotoSans-Regular.ttf"",
+        ""unicode-range"": [""U+0000-00FF""]
+      }
+    ],
+    ""Noto Sans Devanagari"": [
+      {
+        ""url"": ""file:///android_asset/fonts/NotoSansDevanagari-Regular.ttf"",
+        ""unicode-range"": [""U+0900-097F""]
+      }
+    ]
+  }
+}
+```
+
+**What you need to change for the web:**
+
+1. **Replace `file:///…` URLs with HTTP(S) URLs** that the browser can fetch.  
+   - If you bundle the fonts with your web app, a relative URL works: `""url"": ""./fonts/NotoSans-Regular.ttf""`.  
+   - If you host them on a CDN, use the full CDN URL.  
+
+2. **Make sure the server serving the fonts sends CORS headers** (`Access-Control-Allow-Origin: *` or your origin). Otherwise the browser will block the request.
+
+Resulting block:
+
+```json
+{
+  ""font-faces"": {
+    ""Noto Sans Regular"": [
+      {
+        ""url"": ""/fonts/NotoSans-Regular.ttf"",
+        ""unicode-range"": [""U+0000-00FF""]
+      }
+    ],
+    ""Noto Sans Devanagari"": [
+      {
+        ""url"": ""/fonts/NotoSansDevanagari-Regular.ttf"",
+        ""unicode-range"": [""U+0900-097F""]
+      }
+    ]
+  }
+}
+```
+
+You can paste this block **directly into the root of your style JSON** (the same place you had it in the Native style).
+
+---
+
+## 3. Decide what to do with the top-level `glyphs` field
+
+### Option A – Omit `glyphs` completely (recommended for pure offline)
+
+```json
+{
+  // no ""glyphs"": ""https://…/{fontstack}/{range}.pbf""
+}
+```
+
+*Since GL JS ≥ 5.11, omitting `glyphs` tells the engine to use the **local-font fallback** for every `text-font`. The `font-faces` mapping you just added will be consulted, and the browser’s text-shaping engine will draw the characters.*
+
+### Option B – Keep a dummy `glyphs` URL
+
+If you need to keep the field for compatibility with older GL JS builds (or you want a graceful fallback when a font file is missing), point it at a harmless endpoint that returns 404:
+
+```json
+{
+  ""glyphs"": ""https://example.com/does-not-exist/{fontstack}/{range}.pbf""
+}
+```
+
+When a glyph PBF fails to load, GL JS logs a warning and **automatically falls back to the local-font path** you defined, so the user still sees text.
+
+---
+
+## 4. Load the style in GL JS
+
+```javascript
+import maplibregl from 'maplibre-gl';
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: '/styles/offline-style.json',   // the style that contains your font-faces block
+  center: [0, 0],
+  zoom: 2,
+  // optional – keep CJK rendering local (default)
+  // localIdeographFontFamily: '""Noto Sans CJK SC"", sans-serif'
+});
+```
+
+If you need to **add or replace** a `font-faces` entry after the map is created (e.g., you download a new font at runtime), use the runtime API:
+
+```javascript
+map.setFontFaces({
+  ""My Brand Font"": [
+    {
+      url: ""/fonts/MyBrand-Regular.ttf"",
+      ""unicode-range"": [""U+0000-00FF""]
+    }
+  ]
+});
+```
+
+`setFontFaces` merges with the existing block, so you can keep the static JSON and augment it later.
+
+---
+
+## 5. Make the fonts available **offline** in the browser
+
+### 5.1. Service-Worker caching (recommended)
+
+```javascript
+// sw.js
+self.addEventListener('install', (e) => {
+  e.waitUntil(
+    caches.open('maplibre-fonts').then(cache => {
+      return cache.addAll([
+        '/fonts/NotoSans-Regular.ttf',
+        '/fonts/NotoSansDevanagari-Regular.ttf',
+        // add any other font files you ship
+      ]);
+    })
+  );
+});
+
+self.addEventListener('fetch', (e) => {
+  const url = new URL(e.request.url);
+  if (url.pathname.startsWith('/fonts/')) {
+    e.respondWith(caches.match(e.request).then(resp => resp || fetch(e.request)));
+    return;
+  }
+  // normal network fallback for other requests
+});
+```
+
+Register the worker in your page:
+
+```javascript
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
+```
+
+Now the fonts are cached the first time the app loads and will be served from the cache on subsequent visits, even when the network is unavailable.
+
+### 5.2. `Cache-Control` + pre-load
+
+If you don’t want a Service Worker, you can rely on the browser’s HTTP cache:
+
+```html
+<link rel=""preload"" href=""/fonts/NotoSans-Regular.ttf"" as=""font"" type=""font/ttf"" crossorigin>
+<link rel=""preload"" href=""/fonts/NotoSansDevanagari-Regular.ttf"" as=""font"" type=""font/ttf"" crossorigin>
+```
+
+Make sure the server sends `Cache-Control: public, max-age=31536000` (or a long max-age) so the font stays cached.
+
+---
+
+## 6. Special script handling – what you need to know
+
+| Script | How GL JS draws it with `font-faces` | Anything extra you must do |
+|--------|--------------------------------------|-----------------------------|
+| **Latin / Greek / Cyrillic** | Browser draws via the font file you supplied. | None. |
+| **CJK (Chinese, Japanese, Korean)** | By default **local-ideograph generation** (`TinySDF`) – `text-font` is ignored (only weight matters). | If you *do* want to use a specific CJK font, set `localIdeographFontFamily` to that family name (must be a system font or a web-font you load). Do **not** serve CJK glyph PBFs unless you deliberately set `localIdeographFontFamily: false`. |
+| **Arabic / Hebrew (RTL)** | Since GL JS 6.9 the engine shapes RTL text itself; `font-faces` supplies the font file. | No `setRTLTextPlugin` needed. |
+| **Devanagari, Thai, Khmer, Myanmar, etc. (complex shaping)** | From GL JS 6.15 onward the browser’s shaping engine is used **even when a `glyphs` URL exists**. The `font-faces` entry determines which font file is used. | Ensure the font file covers the script’s Unicode range (via `unicode-range`). |
+| **Mixed-script labels** | The first matching `text-font` entry whose `unicode-range` covers the codepoint is used. If a codepoint falls outside all declared ranges, GL JS falls back to the glyph server (or to the generic system font). | Provide a fallback entry that covers the “missing” range, or keep a minimal `glyphs` URL as a safety net. |
+
+---
+
+## 7. Common pitfalls & troubleshooting checklist
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **No text appears at all** | `glyphs` field present *and* the server returns 404 for the requested range, **and** `font-faces` URLs are not reachable (CORS or 404). | Open the Network tab, look for `*.pbf` and `.ttf` requests. If the `.ttf` request fails, check the URL, CORS headers, and that the file is actually on the server. |
+| **Text appears but in a different font than expected** | Browser resolved the `text-font` name to a system font because the `font-faces` entry didn’t match the name exactly (case-sensitive). | Ensure the name in `text-font` (e.g., `""Noto Sans Devanagari""`) matches the key in `font-faces` exactly. |
+| **CJK characters look blocky or missing** | `localIdeographFontFamily` still points at a font that isn’t installed on the device, or you set it to `false` without serving CJK glyphs. | Either remove the option (let it default to `'sans-serif'`) or set it to a known system font (`""Noto Sans CJK SC"", sans-serif`). |
+| **Arabic text is displayed left-to-right** | Using a GL JS version < 6.9 or still loading the old RTL plugin. | Upgrade to ≥ 6.9 or, if you must stay on an older version, load `setRTLTextPlugin` **before** creating the map. |
+| **Fonts load on first visit but disappear after a hard refresh while offline** | Fonts were not cached (no Service Worker, no long `Cache-Control`). | Add a Service Worker or set `Cache-Control: max-age` on the font responses. |
+| **Console shows “Unable to load glyph range … Rendering codepoint … locally instead.”** | `glyphs` URL is present but the server can’t serve that range. This is *expected* when you rely on local fonts; the fallback works. | If you want to silence the warning, omit the `glyphs` field entirely. |
+| **`map.setFontFaces` throws “Invalid font-faces object”** | The object you passed is not in the correct shape (e.g., missing array wrapper). | The API expects `{ [fontName]: [{ url: string, ""unicode-range""?: string[] }] }`. Example: `map.setFontFaces({ ""MyFont"": [{ url: ""/fonts/MyFont.ttf"" }] });` |
+
+---
+
+## 8. Full example – a minimal offline-font style
+
+**`offline-style.json`**
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""osm"": {
+      ""type"": ""vector"",
+      ""url"": ""https://example.com/tiles/{z}/{x}/{y}.pbf""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""countries-label"",
+      ""type"": ""symbol"",
+      ""source"": ""osm"",
+      ""source-layer"": ""place_label"",
+      ""layout"": {
+        ""text-field"":",PASS,1.00,,All assertions passed,
+explicit — right-to-left Arabic and Hebrew labels on GL JS 6,skills/maplibre-fonts-glyphs/SKILL.md,My MapLibre GL JS 6 map has Arabic and Hebrew place names. What do I need to set up so those labels read right-to-left with the Arabic letters joined correctly?,"Below is a **step-by-step checklist** that gets Arabic and Hebrew place-name labels rendering correctly on a MapLibre GL JS 6 map:
+
+| What you need | Why it matters | How to do it |
+|---------------|----------------|--------------|
+| **MapLibre GL JS ≥ 6.9.0** | Since v6.9.0 the library ships a built-in HarfBuzz-based text-shaper that knows how to join Arabic letters, apply contextual forms, and lay out right-to-left (RTL) scripts. The old `setRTLTextPlugin` is no longer required (and is deprecated). | Check your bundle version (`maplibregl.version`). If you’re on an older 6.x release, upgrade to the latest 6.x (or 7.x) release. |
+| **`text-direction: ""auto""` (or `""rtl""` explicitly)** | The style tells the renderer which direction to use. `""auto""` lets the engine detect RTL characters automatically; `""rtl""` forces RTL for the whole layer (useful if the layer contains only RTL text). | In every symbol layer that shows Arabic/Hebrew, add: <br>`""text-direction"": ""auto""` <br>or <br>`""text-direction"": ""rtl""` |
+| **A font that contains the needed script** | The glyph-shaper needs a font that actually has Arabic/Hebrew glyphs. If you are using a `glyphs` URL, the glyph PBFs for those scripts are ignored on GL JS ≥ 6.15 – the browser’s text engine draws the characters from a **local/web font**. | 1. **Declare the font in the style’s `font-faces` property** (GL JS reads this since v6.7.0). <br>2. Load the font file with `@font-face` (or let the style load it automatically). <br>Example: <br>```json\n\""font-faces\"": {\n  \""Noto Sans Arabic\"": [\n    { \""url\"": \""https://example.com/fonts/NotoSansArabic-Regular.ttf\"", \""unicode-range\"": [\""U+0600-06FF\""] }\n  ],\n  \""Noto Sans Hebrew\"": [\n    { \""url\"": \""https://example.com/fonts/NotoSansHebrew-Regular.ttf\"", \""unicode-range\"": [\""U+0590-05FF\""] }\n  ]\n}\n``` |
+| **Make sure the `text-font` list references those names** | `text-font` is the cascade that the engine uses to pick a font. The first name that resolves to a loaded font wins. | In each symbol layer: <br>```json\n\""layout\"": {\n  \""text-field\"": \""{name_ar}\"",\n  \""text-font\"": [\""Noto Sans Arabic\"", \""Noto Sans\"", \""sans-serif\""],\n  \""text-direction\"": \""auto\""\n}\n``` |
+| **(Optional) `glyphs` URL** | You can keep a `glyphs` URL for other scripts (Latin, CJK, etc.). It will be ignored for Arabic/Hebrew because the browser now draws those scripts locally, but keeping it avoids breaking other layers. | ```json\n\""glyphs\"": \""https://my-tileserver.com/fonts/{fontstack}/{range}.pbf\""\n``` |
+| **(Optional) `localIdeographFontFamily`** | This option only affects CJK ideographs; it does **not** affect Arabic/Hebrew. You can leave it at the default. | No action needed. |
+| **Test on a few languages** | Verify that letters join correctly, that diacritics appear in the right place, and that the whole label is right-aligned. | Use a layer with a known Arabic string, e.g. `""text-field"": ""مكة""` or Hebrew `""תל אביב""`. |
+
+---
+
+## Full Minimal Example
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>Arabic & Hebrew RTL labels</title>
+  <script src=""https://unpkg.com/maplibre-gl@6.15.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@6.15.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+    @font-face {
+      font-family: ""Noto Sans Arabic"";
+      src: url(""https://example.com/fonts/NotoSansArabic-Regular.ttf"") format(""truetype"");
+    }
+    @font-face {
+      font-family: ""Noto Sans Hebrew"";
+      src: url(""https://example.com/fonts/NotoSansHebrew-Regular.ttf"") format(""truetype"");
+    }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+<script>
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      ""version"": 8,
+      ""glyphs"": ""https://my-tileserver.com/fonts/{fontstack}/{range}.pbf"",
+      ""font-faces"": {
+        ""Noto Sans Arabic"": [{ ""url"": ""https://example.com/fonts/NotoSansArabic-Regular.ttf"", ""unicode-range"": [""U+0600-06FF""] }],
+        ""Noto Sans Hebrew"": [{ ""url"": ""https://example.com/fonts/NotoSansHebrew-Regular.ttf"", ""unicode-range"": [""U+0590-05FF""] }]
+      },
+      ""sources"": {
+        ""osm"": {
+          ""type"": ""vector"",
+          ""url"": ""https://example.com/tiles/{z}/{x}/{y}.pbf""
+        }
+      },
+      ""layers"": [
+        {
+          ""id"": ""places-ar"",
+          ""type"": ""symbol"",
+          ""source"": ""osm"",
+          ""source-layer"": ""place"",
+          ""filter"": [""=="", [""get"", ""language""], ""ar""],
+          ""layout"": {
+            ""text-field"": [""get"", ""name_ar""],
+            ""text-font"": [""Noto Sans Arabic"", ""Noto Sans"", ""sans-serif""],
+            ""text-size"": 12,
+            ""text-direction"": ""auto"",
+            ""text-anchor"": ""center""
+          },
+          ""paint"": {
+            ""text-color"": ""#222""
+          }
+        },
+        {
+          ""id"": ""places-he"",
+          ""type"": ""symbol"",
+          ""source"": ""osm"",
+          ""source-layer"": ""place"",
+          ""filter"": [""=="", [""get"", ""language""], ""he""],
+          ""layout"": {
+            ""text-field"": [""get"", ""name_he""],
+            ""text-font"": [""Noto Sans Hebrew"", ""Noto Sans"", ""sans-serif""],
+            ""text-size"": 12,
+            ""text-direction"": ""auto"",
+            ""text-anchor"": ""center""
+          },
+          ""paint"": {
+            ""text-color"": ""#222""
+          }
+        }
+      ]
+    },
+    center: [35, 31],
+    zoom: 5
+  });
+</script>
+</body>
+</html>
+```
+
+### What this does
+
+1. **Loads MapLibre GL JS 6.15** – the version that already contains the built-in RTL shaper.
+2. **Declares two `@font-face` rules** (Arabic & Hebrew) that the browser can fetch.
+3. **Maps those font-family names in `font-faces`** so the style can resolve them.
+4. **Uses `text-direction: ""auto""`** – the engine detects the RTL characters and lays them out right-to-left.
+5. **Relies on the browser’s text engine** (via HarfBuzz) to join Arabic letters and position Hebrew diacritics correctly. No `setRTLTextPlugin` call is needed.
+
+---
+
+## If You’re Stuck
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Arabic letters appear **disconnected** (each character rendered separately) | Running a MapLibre version **< 6.9.0** or the RTL plugin not loaded. | Upgrade to ≥ 6.9.0 **or** load the RTL plugin (see below). |
+| Labels are **missing** or show a generic “□” box | Font file not reachable or `font-faces` name mismatched. | Verify the URL works (open in browser), and that the name in `text-font` exactly matches the key in `font-faces`. |
+| Text is **left-aligned** even though it’s Arabic | `text-direction` is missing or set to `""ltr""`. | Add `""text-direction"": ""auto""` (or `""rtl""`). |
+| You see **CJK glyphs** from the glyph server and they’re huge/slow | `localIdeographFontFamily` is set to `false`. | Remove that override or set it back to the default (`""sans-serif""`). CJK is unrelated to Arabic/Hebrew. |
+
+### Legacy fallback (pre-6.9.0)
+
+If you cannot upgrade, you must load the old RTL plugin **once**, before creating the map:
+
+```js
+import { setRTLTextPlugin } from 'maplibre-gl';
+setRTLTextPlugin(
+  'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/dist/mapbox-gl-rtl-text.js',
+  false   // false = don’t wait for the plugin to load before continuing
+);
+```
+
+After that, keep `text-direction: ""auto""` and the same `font-faces` setup. The plugin will perform shaping on the CPU and feed the resulting glyphs to the renderer.
+
+---
+
+### TL;DR Checklist
+
+1. **Use MapLibre GL JS ≥ 6.9.0** (prefer the latest 6.x/7.x).  
+2. **Add `text-direction: ""auto""`** (or `""rtl""`) to every symbol layer that contains Arabic/Hebrew.  
+3. **Load a font that covers the script** (e.g., Noto Sans Arabic / Noto Sans Hebrew).  
+   * Declare it in `font-faces`.  
+   * Optionally add an `@font-face` rule for the browser.  
+4. **Reference that font in `text-font`** (fallback list).  
+5. **Keep a `glyphs` URL** for other scripts if you need them; it will be ignored for Arabic/Hebrew.  
+6. **Test** with a few known RTL strings; verify correct joining and right-to-left layout.  
+
+Follow those steps and your Arabic and Hebrew place-name labels will render correctly, with proper shaping and RTL direction, on a MapLibre GL JS 6 map.",PASS,1.00,,All assertions passed,
+implicit — Devanagari labels drawn letter by letter,skills/maplibre-fonts-glyphs/SKILL.md,"Hindi labels on my MapLibre GL JS map come out wrong: vowel signs and conjuncts land in the wrong place, as if each letter were drawn on its own. My style has a glyphs URL that serves Noto Sans Devanagari. How do I fix it?","## TL;DR  
+
+| What you need to do | Why it works |
+|---------------------|--------------|
+| **Upgrade MapLibre GL JS to ≥ 6.15.0** (or at least 6.9.0) | From v6.7 the engine started drawing grapheme clusters with the browser, and from v6.15 it does it for *all* complex scripts (Devanagari, Khmer, Thai, etc.). |
+| **Add a `font-faces` entry that points to a Devanagari TTF/OTF** (e.g. Noto Sans Devanagari) and give it the proper `unicode-range` | The glyph-PBFs you are serving can’t shape vowel signs or conjuncts – they only contain isolated glyphs. `font-faces` tells the SDK to load a real font file and let the browser’s text engine do the shaping. |
+| **(Optional) Remove or ignore the `glyphs` URL for Devanagari** | Once a `font-faces` entry exists the glyph server is bypassed for those code points, so you won’t waste network requests. |
+| **(Optional) Call `map.setFontFaces()` at runtime if you need to change the mapping later** | Allows hot-reloading of a new font file without rebuilding the style. |
+
+After those steps the Hindi labels will be rendered correctly – vowel signs will sit on the base consonants, and conjuncts (e.g. “क्ष”) will appear as a single shaped glyph.
+
+Below is a step-by-step guide that shows exactly how to implement each item.
+
+---
+
+## 1. Verify your MapLibre GL JS version
+
+```bash
+npm list maplibre-gl
+# or check the CDN version you load:
+<script src=""https://unpkg.com/maplibre-gl@6.15.0/dist/maplibre-gl.js""></script>
+```
+
+If you are on a version **older than 6.15.0**, upgrade:
+
+```bash
+npm install maplibre-gl@^6.15.0   # npm / yarn
+# or, if you use a CDN:
+<script src=""https://unpkg.com/maplibre-gl@6.15.0/dist/maplibre-gl.js""></script>
+```
+
+> **Why 6.15?**  
+> * v6.7 introduced cluster-based shaping for some scripts, but Devanagari still fell back to the old per-code-point drawing.  
+> * v6.9 added proper right-to-left shaping for Arabic/Hebrew.  
+> * v6.15 finally made *all* complex scripts (including Devanagari, Khmer, Thai, Myanmar, etc.) use the browser’s shaping engine **even when a `glyphs` URL is present**.  
+
+If you cannot upgrade (e.g. a locked-down legacy app), the only alternative is to **omit the `glyphs` field entirely** and rely on the local-font fallback introduced in GL JS 5.11, but that still requires a web-font to be loaded via `@font-face`. The upgrade path is far simpler.
+
+---
+
+## 2. Add a `font-faces` entry for Devanagari
+
+### 2.1. Choose a font file
+
+The easiest is the official **Noto Sans Devanagari** TTF, which is free and covers the whole Hindi block.
+
+*Download* (or host it yourself) from:
+
+```
+https://github.com/googlefonts/noto-fonts/blob/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf
+```
+
+Place it on a domain that your map page can fetch (same origin or CORS-enabled).
+
+### 2.2. Edit the style JSON
+
+Add a top-level `font-faces` object (if it does not already exist) and map the **exact** `text-font` name you use in your layers to the TTF file.
+
+```json
+{
+  ""version"": 8,
+  ""glyphs"": ""https://my-glyphs.example.com/{fontstack}/{range}.pbf"",
+  ""font-faces"": {
+    ""Noto Sans Devanagari Regular"": [
+      {
+        ""url"": ""https://my-cdn.example.com/fonts/NotoSansDevanagari-Regular.ttf"",
+        ""unicode-range"": [""U+0900-097F""]   // Hindi block (Devanagari)
+      }
+    ]
+  },
+  ""layers"": [
+    {
+      ""id"": ""place-labels-hi"",
+      ""type"": ""symbol"",
+      ""source"": ""osm"",
+      ""source-layer"": ""place"",
+      ""filter"": [""=="", ""$type"", ""Point""],
+      ""layout"": {
+        ""text-field"": [""get"", ""name:hi""],
+        ""text-font"": [""Noto Sans Devanagari Regular""],   // <-- matches key above
+        ""text-size"": 12
+      },
+      ""paint"": {
+        ""text-color"": ""#222""
+      }
+    }
+  ]
+}
+```
+
+**Important points**
+
+| Item | What to watch for |
+|------|-------------------|
+| `text-font` name | Must **exactly** match the key in `font-faces`. No extra spaces, case-sensitive. |
+| `unicode-range` | Limits the file to Devanagari code points. If you omit it, the whole TTF will be loaded (fine, but larger). |
+| URL | Must be reachable from the browser (CORS headers `Access-Control-Allow-Origin: *` or your domain). |
+| Multiple fonts | You can list several objects per name (e.g. regular + bold) – the engine picks the first that covers the requested code point. |
+
+### 2.3. (Optional) Remove the Devanagari stack from `glyphs`
+
+If you want to avoid the extra network request for the Devanagari PBFs (they will never be used now), you can either:
+
+* **Delete the Devanagari folder** from your glyph server, **or**
+* **Leave it** – the SDK will first try `font-faces` for the range; only if no matching entry exists will it fall back to the glyph PBF. Keeping the folder does no harm, just a tiny extra 404 that is ignored.
+
+---
+
+## 3. Load the style and verify
+
+```javascript
+import maplibregl from 'maplibre-gl';
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://my-host.example.com/styles/hindi-style.json',
+  center: [77.2090, 28.6139], // Delhi
+  zoom: 10
+});
+
+// If you need to change the mapping after the map is created:
+map.setFontFaces({
+  ""Noto Sans Devanagari Regular"": [
+    {
+      url: ""https://my-cdn.example.com/fonts/NotoSansDevanagari-Regular.ttf"",
+      ""unicode-range"": [""U+0900-097F""]
+    }
+  ]
+});
+```
+
+Open the map, zoom in on a Hindi label (e.g. “कृष्ण”), and you should see:
+
+* Vowel signs (e.g. “ि”, “ा”) attached to the base consonant.
+* Conjuncts (e.g. “क्ष”) rendered as a single glyph, not as two separate letters.
+
+If you still see the “letter-by-letter” effect, double-check:
+
+1. **Browser console** – any CORS errors loading the TTF?  
+2. **`font-faces` key spelling** – does it match exactly the `text-font` array?  
+3. **MapLibre version** – `maplibregl.version` should be `>=6.15.0`.  
+
+---
+
+## 4. Why the glyph-PBF approach fails for Devanagari
+
+| Feature | Glyph-PBF (served) | `font-faces` (web font) |
+|---------|-------------------|--------------------------|
+| **Shaping** | Only isolated glyphs; the engine draws each Unicode code point separately → vowel signs appear detached, conjuncts split. | Browser’s text engine (Harfbuzz on Native, native layout on the web) shapes the whole grapheme cluster → correct placement. |
+| **Performance** | One request per 256-code-point range; many requests for a single tile that contains many Devanagari characters. | Single TTF download (cached) → far fewer requests. |
+| **Flexibility** | Must pre-generate PBFs for every font you want to use. | Any web-font can be used on-the-fly; just add a `font-faces` entry. |
+| **Offline / Local** | Needs a glyph server (or self-hosted static files). | Works with local `file:` URLs or bundled assets, as long as the browser can read the font file. |
+
+Because Devanagari (and other scripts that use combining marks) requires **context-aware shaping**, the glyph-PBF method is fundamentally insufficient. The `font-faces` mechanism is the official way to support these scripts.
+
+---
+
+## 5. Full example (self-contained)
+
+Below is a minimal HTML page that demonstrates the whole flow. It uses the CDN for MapLibre GL JS 6.15, loads Noto Sans Devanagari from a public CDN, and sets the `font-faces` mapping.
+
+```html
+<!DOCTYPE html>
+<html lang=""en"">
+<head>
+  <meta charset=""utf-8"">
+  <title>Hindi labels – correct shaping</title>
+  <link href=""https://unpkg.com/maplibre-gl@6.15.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script src=""https://unpkg.com/maplibre-gl@6.15.0/dist/maplibre-gl.js""></script>
+<script>
+  const style = {
+    ""version"": 8,
+    ""glyphs"": ""https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf"",
+    ""font-faces"": {
+      ""Noto Sans Devanagari Regular"": [
+        {
+          ""url"": ""https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-devanagari/files/noto-sans-devanagari-all-400-normal.ttf"",
+          ""unicode-range"": [""U+0900-097F""]
+        }
+      ]
+    },
+    ""sources"": {
+      ""osm"": {
+        ""type"": ""vector"",
+        ""url"": ""https://demotiles.maplibre.org/tiles/planet.json""
+      }
+    },
+    ""layers"": [
+      {
+        ""id"": ""water"",
+        ""type"": ""fill"",
+        ""source"": ""osm"",
+        ""source-layer"": ""water"",
+        ""paint"": { ""fill-color"": ""#a0c8f0"" }
+      },
+      {
+        ""id"": ""place-labels-hi"",
+        ""type"": ""symbol"",
+        ""source"": ""osm"",
+        ""source-layer"": ""place"",
+        ""filter"": [""=="", ""$type"", ""Point""],
+        ""layout"": {
+          ""text-field"": [""get"", ""name:hi""],
+          ""text-font"": [""Noto Sans Devanagari Regular""],
+          ""text-size"": 14,
+          ""text-anchor"": ""top""
+        },
+        ""paint"": {
+          ""text-color"": ""#222""
+        }
+      }
+    ]
+  };
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: style,
+    center: [77.2090, 28.6139],
+    zoom: 12
+  });
+</script>
+</body>
+</html>
+```
+
+Open this file in a browser; you should see Delhi’s place names (in Hindi) rendered correctly.
+
+---
+
+## 6. Checklist for future projects
+
+| ✅ | Item |
+|----|------|
+| **Version** | Use MapLibre GL JS ≥ 6.15 (or the latest stable). |
+| **`font-faces`** | Declare every complex-script font you need, with correct `unicode-range`. |
+| **`text-font`** | Match the key in `font-faces` exactly. |
+| **CORS** | Font URLs must be CORS-enabled for the browser to load them. |
+| **Testing** | Verify on at least two browsers (Chrome, Firefox) because shaping engines differ slightly. |
+| **Fallback** | Keep a generic fallback (e.g. `""sans-serif""`) at the end of the `text-font` list for browsers that cannot load the custom font. |
+| **Performance** | Once the TTF is cached, no further network traffic for Devanagari labels. |
+
+---
+
+## 7. Common pitfalls & how to diagnose them
+
+| Symptom | Likely cause | How to confirm |
+|---------|--------------|----------------|
+| Vowel signs appear *to the right* of the base consonant (e.g. “कि” → “क ि”) | `font-faces` entry missing or miss-spelled, so the engine falls back to glyph-PBFs. | Open DevTools → Network → look for the Devanagari TTF request. If 404 or not sent, the mapping isn’t being used. |
+| No Hindi text at all (labels disappear) | `glyphs` URL unreachable **and** no `font-faces` entry (older GL JS version). | Console error: `Unable to load glyph range …` followed by `Failed to load font …`. Upgrade GL JS or add `font-faces`. |
+| Text renders but with a *different* font (e.g. system “Arial”) | CORS block on",PASS,1.00,,All assertions passed,
+negative — out-of-scope question about hillshade/terrain layers,skills/maplibre-fonts-glyphs/SKILL.md,How do I add a hillshade layer from a raster-dem source to my MapLibre GL JS style?,"Below is a step-by-step recipe you can copy-paste into a MapLibre GL JS app to turn a **raster-DEM** tile set into a hillshade layer.
+
+---
+
+## 1. Add the DEM source to the style
+
+```js
+// Inside map.on('load', …) or before you call map.addLayer()
+map.addSource('my-dem', {
+  type: 'raster-dem',          // <-- tells MapLibre this is elevation data
+  url: 'https://example.com/tiles/{z}/{x}/{y}.png', // any raster-DEM tile URL
+  // optional but recommended:
+  tileSize: 256,               // 256 px (or 512 if your tiles are that size)
+  maxzoom: 14,                 // highest zoom you have tiles for
+  // If your DEM tiles are encoded as 16-bit PNG/TIFF you can add:
+  // encoding: 'mapbox'   // for Mapbox-style elevation encoding
+});
+```
+
+* **`type: 'raster-dem'`** is the only source type that hillshade can read.  
+* The URL can be a TileJSON endpoint (`url: 'https://myserver.com/dem.json'`) or a simple XYZ template as shown.  
+* Make sure the server sends the correct CORS headers (`Access-Control-Allow-Origin: *` or your domain) so the browser can fetch the tiles.
+
+---
+
+## 2. Add the hillshade layer
+
+```js
+map.addLayer({
+  id: 'hillshade',
+  type: 'hillshade',
+  source: 'my-dem',            // matches the source name above
+  // optional: limit the layer to a specific zoom range
+  minzoom: 0,
+  maxzoom: 14,
+
+  // Paint properties – tweak to get the look you want
+  paint: {
+    // Light direction (azimuth, in degrees clockwise from north)
+    'hillshade-illumination-direction': 315,
+
+    // How strong the shading looks (default 0.5)
+    'hillshade-exaggeration': 0.5,
+
+    // Colors – you can keep the defaults or customize
+    'hillshade-shadow-color': 'rgba(0,0,0,0.5)',
+    'hillshade-highlight-color': 'rgba(255,255,255,0.5)',
+    'hillshade-accent-color': 'rgba(255,255,255,0.2)'
+  }
+});
+```
+
+### What the paint properties do
+
+| Property | Meaning | Typical range |
+|----------|---------|---------------|
+| `hillshade-illumination-direction` | Sun azimuth (0 = north, 90 = east) | 0-360 |
+| `hillshade-exaggeration` | Boosts the apparent relief | 0-1 (or higher for dramatic effect) |
+| `hillshade-shadow-color` | Color of the “shadowed” side | any CSS color |
+| `hillshade-highlight-color` | Color of the illuminated side | any CSS color |
+| `hillshade-accent-color` | Color for the “mid-tone” slope | any CSS color |
+
+---
+
+## 3. (Optional) Add a terrain source for 3-D extrusion
+
+If you also want to enable true 3-D terrain (e.g. drape other layers over the DEM), add a **terrain** source:
+
+```js
+map.setTerrain({
+  source: 'my-dem',
+  exaggeration: 1.5   // make mountains look taller
+});
+```
+
+> **Note:** The hillshade layer works **without** a terrain source; the terrain call is only needed for 3-D visualisation.
+
+---
+
+## 4. Full minimal example
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre Hillshade Demo</title>
+  <script src=""https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+<script>
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://demotiles.maplibre.org/style.json', // any base style
+    center: [-122.447303, 37.753574],
+    zoom: 12,
+    // CJK/ideograph handling is irrelevant here, but you can set it if you need it
+    // localIdeographFontFamily: 'sans-serif'
+  });
+
+  map.on('load', () => {
+    // 1️⃣ DEM source
+    map.addSource('my-dem', {
+      type: 'raster-dem',
+      url: 'https://example.com/dem/{z}/{x}/{y}.png',
+      tileSize: 256,
+      maxzoom: 14
+    });
+
+    // 2️⃣ Hillshade layer
+    map.addLayer({
+      id: 'hillshade',
+      type: 'hillshade',
+      source: 'my-dem',
+      paint: {
+        'hillshade-illumination-direction': 315,
+        'hillshade-exaggeration': 0.6,
+        'hillshade-shadow-color': 'rgba(0,0,0,0.5)',
+        'hillshade-highlight-color': 'rgba(255,255,255,0.5)'
+      }
+    });
+
+    // 3️⃣ (optional) 3-D terrain
+    // map.setTerrain({ source: 'my-dem', exaggeration: 1.5 });
+  });
+</script>
+</body>
+</html>
+```
+
+---
+
+## 5. Common pitfalls & troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **No hillshade appears** | DEM source not loading (404, CORS) | Open the tile URL in the browser; check network tab for CORS errors. |
+| **Only a flat gray surface** | `raster-dem` tiles are not encoded as elevation (e.g., plain imagery) | Use true elevation tiles (16-bit PNG/TIFF, or Mapbox-style encoding). |
+| **Hillshade looks too flat** | `hillshade-exaggeration` is low (default 0.5) | Increase the value (e.g., `0.8` or `1.0`). |
+| **Colors look wrong** | Paint colors overridden by a later style layer | Ensure the hillshade layer is added **after** any background/symbol layers you want it to sit beneath, or set its `layout: { visibility: 'visible' }` explicitly. |
+| **Performance drops at high zoom** | Very high-resolution DEM tiles (512 px) with many requests | Use a lower `maxzoom` for the DEM source or serve a lower-resolution tile set for zooms > 12. |
+
+---
+
+## 6. References
+
+* **MapLibre GL JS style spec – raster-dem source**: <https://maplibre.org/maplibre-style-spec/sources/#raster-dem>
+* **Hillshade layer type**: <https://maplibre.org/maplibre-gl-js/docs/style-spec/layers/#hillshade>
+* **Terrain (3-D) API**: <https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/#setterrain>
+
+That’s all you need to get a hillshade layer up and running from a raster-DEM source. Happy mapping!",PASS,1.00,,All assertions passed,
