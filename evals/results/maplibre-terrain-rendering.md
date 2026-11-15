@@ -6,6 +6,8 @@ Run: 2026-10-22 · model `groq:openai/gpt-oss-120b` · judge `google:gemini-2.5-
 
 Run: 2026-10-26 · same model and judge · after test 4 gained a `not-regex` that fails a `setFog` call: all five tests once with the skill, then test 4 seven more times with the skill and three times without. Raw CSVs: [with skill](latest/maplibre-terrain-rendering-with-skill_2026-10-26.csv), [test 1 with skill](latest/maplibre-terrain-rendering-with-skill-test1_2026-10-26.csv), [test 4 with skill](latest/maplibre-terrain-rendering-with-skill-test4_2026-10-26.csv), [test 4 baseline](latest/maplibre-terrain-rendering-baseline-test4_2026-10-26.csv). All five passed; test 1's first grade was the judge's unparseable output, and its re-run passed.
 
+Run: 2026-11-15 · same model, judge `google:gemini-3.1-flash-lite` · test 4 six times with the skill after its sky bullet said style validation rejects Mapbox's sky keys: 5 of 6 pass, and the sixth sets `'sky-type': 'gradient'` in `map.setSky()`, like the 2026-10-26 failure. Raw CSV: [test 4 with skill](latest/maplibre-terrain-rendering-with-skill-test4_2026-11-15.csv).
+
 | #   | Test                                              | Type         | Baseline (no skill)                                                                                                                                                                          | With skill                                                                                           |
 | --- | ------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | 1   | Client-side hypsometric tint (`color-relief`)     | Explicit     | **FAIL** — a `raster` layer with `raster-color` / `raster-value`; judge: "the rubric explicitly states that `raster-color`, `raster-value` … should not be presented as MapLibre properties" | **PASS** — `color-relief` layer, `color-relief-color` with `interpolate` on `["elevation"]`          |
@@ -16,7 +18,7 @@ Run: 2026-10-26 · same model and judge · after test 4 gained a `not-regex` tha
 
 \* All four put a `{z}/{x}/{y}` template in the `raster-dem` source's `url`, where TileJSON belongs; the skill shows both correctly, and the rubric does not grade the DEM source.
 
-† The eighth sets `'sky-type': 'gradient'` inside `map.setSky()`, which the skill says does nothing here, and the first `not-regex` fails it. The 2026-10-25 scheduled run passed an answer that sets fog with `map.setFog({ range, 'high-color' })`; the second `not-regex` fails it.
+† The eighth sets `'sky-type': 'gradient'` inside `map.setSky()`, which style validation rejects, and the first `not-regex` fails it. The 2026-10-25 scheduled run passed an answer that sets fog with `map.setFog({ range, 'high-color' })`; the second `not-regex` fails it.
 
 **Result: the launch bar is cleared.** Four gaps demonstrated closed, none open; the negative holds in both directions. `status: verified` since the 2026-10-25 drift run passed this config.
 

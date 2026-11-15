@@ -19,7 +19,7 @@ These are symptoms as you would observe them, before you know the cause:
 - **Runtime contour lines:** contour lines straight from a `raster-dem` source, with no pre-generated contour tileset (`maplibre-contour`, not a hand-rolled marching-squares pipeline).
 - **Flat 3D terrain:** `map.setTerrain()` is on and nothing extrudes (the camera is at `pitch: 0`, and raising `exaggeration` will not fix it).
 - **Blank horizon:** pitching the camera shows empty page background above the terrain (no root-level `sky` object or `map.setSky()`; there is no `type: "sky"` layer in MapLibre).
-- **Silent property failures:** a hillshade, sky, or terrain-coloring property does nothing and raises no error (a Mapbox GL JS property MapLibre never had).
+- **Unknown-property errors:** a hillshade, sky, or terrain-coloring property makes the console log `unknown property`; the call that set it changes nothing, and a style that holds it does not load (a Mapbox GL JS property MapLibre never had).
 - **Terrain lag or frame drops:** stutter when panning or tilting with terrain on (stacked hillshade passes, dense draped layers).
 
 **Not this skill.** Elevation values that are wrong, spiky, or inverted, choosing an elevation tileset,
@@ -170,12 +170,7 @@ map.setSky({
 - **Pitch is what makes it visible.** At `pitch: 0` an extruded surface is seen straight down and reads as
   flat. Set `pitch` on the map (or `map.easeTo({ pitch: 60 })`) before concluding the terrain is broken —
   and raise `exaggeration` only after the camera is tilted, never as the fix for a flat-looking map.
-- **There is no `sky` layer type in MapLibre.** The layer types are `fill`, `line`, `symbol`, `circle`,
-  `heatmap`, `fill-extrusion`, `raster`, `hillshade`, `color-relief`, and `background`.[1] Sky is a
-  root-level `sky` object, or `map.setSky()`: `sky-color`, `horizon-color`, `fog-color`,
-  `sky-horizon-blend`, `horizon-fog-blend`, `fog-ground-blend`, `atmosphere-blend`.[5] `sky-type`,
-  `sky-atmosphere-sun`, and `sky-atmosphere-sun-intensity` are Mapbox GL JS properties and do nothing here.
-  `fog-color` requires 3D terrain.[5]
+- **There is no `sky` layer type in MapLibre.** The layer types are `fill`, `line`, `symbol`, `circle`, `heatmap`, `fill-extrusion`, `raster`, `hillshade`, `color-relief`, and `background`.[1] Sky is a root-level `sky` object, or `map.setSky()`: `sky-color`, `horizon-color`, `fog-color`, `sky-horizon-blend`, `horizon-fog-blend`, `fog-ground-blend`, `atmosphere-blend`.[5] `sky-type`, `sky-atmosphere-sun`, and `sky-atmosphere-sun-intensity` are Mapbox GL JS properties that style validation rejects: `setSky` with one applies nothing, and a style whose `sky` holds one does not load. `fog-color` requires 3D terrain.[5]
 - **Fog is part of `sky`.** MapLibre GL JS has no `setFog` method and no root `fog` object; haze comes from `fog-color`, `horizon-fog-blend`, and `fog-ground-blend` in `sky`.[5] [6]
 - `map.queryTerrainElevation(lngLat)` returns the elevation under a location once terrain is on.[6]
 
