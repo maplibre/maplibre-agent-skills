@@ -1,6 +1,6 @@
 ---
 name: maplibre-terrain-rendering
-description: Drawing elevation in MapLibre GL JS once a raster-dem source works — hillshade and `hillshade-method`, the `color-relief` layer and the `["elevation"]` expression, runtime contours with `maplibre-contour`, and 3D terrain with its camera and sky. Use when relief looks harsh, flat, or absent, or when the layer type or property for an elevation effect is unclear.
+description: Drawing elevation in MapLibre GL JS once a raster-dem source works — hillshade and `hillshade-method`, the `color-relief` layer and the `["elevation"]` expression, runtime contours with `maplibre-contour`, and 3D terrain with its camera, sky, fog and haze. Use when relief looks harsh, flat, or absent, when the horizon is blank or a Mapbox `setFog` call fails after migrating, or when the layer type or property for an elevation effect is unclear.
 metadata:
   status: verified
 ---
@@ -18,7 +18,7 @@ These are symptoms as you would observe them, before you know the cause:
 - **Dynamic elevation coloring:** the map needs coloring by height, client-side, with no pre-rendered tiles (a `color-relief` layer over `["elevation"]`, not `raster-color` on a `raster` layer).
 - **Runtime contour lines:** contour lines straight from a `raster-dem` source, with no pre-generated contour tileset (`maplibre-contour`, not a hand-rolled marching-squares pipeline).
 - **Flat 3D terrain:** `map.setTerrain()` is on and nothing extrudes (the camera is at `pitch: 0`, and raising `exaggeration` will not fix it).
-- **Blank horizon:** pitching the camera shows empty page background above the terrain (no root-level `sky` object or `map.setSky()`; there is no `type: "sky"` layer in MapLibre).
+- **Blank horizon or missing haze:** pitching the camera shows empty page background above the terrain, or Mapbox's `map.setFog` is not a function after migrating (no root-level `sky` object or `map.setSky()`; there is no `type: "sky"` layer in MapLibre).
 - **Unknown-property errors:** a hillshade, sky, or terrain-coloring property makes the console log `unknown property`; the call that set it changes nothing, and a style that holds it does not load (a Mapbox GL JS property MapLibre never had).
 - **Terrain lag or frame drops:** stutter when panning or tilting with terrain on (stacked hillshade passes, dense draped layers).
 
