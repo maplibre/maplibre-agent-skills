@@ -31,6 +31,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- evals: `maplibre-fonts-glyphs` test 6 fails font configuration in the answer's code, not a passing mention of `glyphs` ([#200](https://github.com/maplibre/maplibre-agent-skills/pull/200))
 - evals: `maplibre-source-wiring` test 7 no longer fails an answer for leaving out that nothing warns ([#196](https://github.com/maplibre/maplibre-agent-skills/pull/196))
 - `scripts/run-evals.js`: call-site comments shrink to what each function does and any non-obvious invariant, and `evals/README.md` explains how the runner bounds each child and kills its process group. ([#189](https://github.com/maplibre/maplibre-agent-skills/pull/189))
 - The results docs name their judge, `lint:model-pins` checks them against the pins, and each run's records now include the generator and judge ids. ([#191](https://github.com/maplibre/maplibre-agent-skills/pull/191))
