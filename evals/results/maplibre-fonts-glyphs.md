@@ -14,6 +14,8 @@ Run: 2026-11-15, after the CJK paragraph said which font draws CJK since GL JS 5
 
 Test 1's check now also accepts `document.fonts` or `FontFace`. Re-checked against the saved 2026-11-11 outputs rather than re-run, every verdict stands: no baseline answer names any of the three, and every with-skill answer names `@font-face`.
 
+Test 6's check changed on 2026-11-15 from any mention of `glyphs` to a `glyphs` or `font-faces` key in the answer's code. Re-checked against the 38 saved with-skill answers rather than re-run: the old check failed 10, nine of them for a passing mention, most often a troubleshooting row the answer itself calls unrelated ("CJK labels disappear after adding hillshade"). The new check fails only the 2026-10-26 answer that adds `font-faces` for labels over the hillshade.
+
 | #   | Test                                              | Type         | Baseline (no skill)                                                                                     | With skill                                                                                  |
 | --- | ------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | 1   | Omitted `glyphs`, text renders in wrong font      | Explicit     | FAIL 3/3 — invents a built-in default glyphs URL and says MapLibre never uses the browser's fonts       | PASS 6/6                                                                                    |

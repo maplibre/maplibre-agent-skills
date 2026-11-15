@@ -17,6 +17,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Fixed
 
+- `maplibre-terrain-rendering`: says that a Mapbox-only property fails style validation, so the call that sets it changes nothing and a style that holds it does not load ([#201](https://github.com/maplibre/maplibre-agent-skills/pull/201))
 - `maplibre-mapbox-migration`: rewrites and streamlines instructions, gives a verdict for each plugin the user names instead of sending them to awesome-maplibre, reorders the steps (token and style before API changes), and covers callbacks that became promises in v4 and behavior that changed in later MapLibre versions ([#186](https://github.com/maplibre/maplibre-agent-skills/pull/186))
 - `maplibre-source-wiring`: states in the `tileSize` lead sentence that a 256px source left at the 512 default renders a zoom level off, so a short answer still says it; test 10's rubric drops its "should" clause. ([#192](https://github.com/maplibre/maplibre-agent-skills/pull/192))
 - `maplibre-mapbox-migration`: recommends OpenFreeMap by URL in the tile-source step and gives the v1.13 fork as the reason a Mapbox v2 call fails, in the paragraphs a short answer is drawn from ([#178](https://github.com/maplibre/maplibre-agent-skills/pull/178))
@@ -31,6 +32,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- evals: `maplibre-fonts-glyphs` test 6 fails font configuration in the answer's code, not a passing mention of `glyphs` ([#200](https://github.com/maplibre/maplibre-agent-skills/pull/200))
 - evals: `maplibre-source-wiring` test 7 no longer fails an answer for leaving out that nothing warns ([#196](https://github.com/maplibre/maplibre-agent-skills/pull/196))
 - `scripts/run-evals.js`: call-site comments shrink to what each function does and any non-obvious invariant, and `evals/README.md` explains how the runner bounds each child and kills its process group. ([#189](https://github.com/maplibre/maplibre-agent-skills/pull/189))
 - The results docs name their judge, `lint:model-pins` checks them against the pins, and each run's records now include the generator and judge ids. ([#191](https://github.com/maplibre/maplibre-agent-skills/pull/191))
