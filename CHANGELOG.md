@@ -18,6 +18,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Fixed
 
+- `maplibre-fonts-glyphs`: says which layers `localIdeographFontFamily` reaches since GL JS 5.11.0, and picks the CJK font in every layer with `font-faces` and a `unicode-range` ([#202](https://github.com/maplibre/maplibre-agent-skills/pull/202))
 - `maplibre-terrain-rendering`: says that a Mapbox-only property fails style validation, so the call that sets it changes nothing and a style that holds it does not load ([#201](https://github.com/maplibre/maplibre-agent-skills/pull/201))
 - `maplibre-mapbox-migration`: rewrites and streamlines instructions, gives a verdict for each plugin the user names instead of sending them to awesome-maplibre, reorders the steps (token and style before API changes), and covers callbacks that became promises in v4 and behavior that changed in later MapLibre versions ([#186](https://github.com/maplibre/maplibre-agent-skills/pull/186))
 - `maplibre-source-wiring`: states in the `tileSize` lead sentence that a 256px source left at the 512 default renders a zoom level off, so a short answer still says it; test 10's rubric drops its "should" clause. ([#192](https://github.com/maplibre/maplibre-agent-skills/pull/192))
