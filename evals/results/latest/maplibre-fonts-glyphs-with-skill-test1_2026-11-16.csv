@@ -1,0 +1,143 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+"explicit — omitted glyphs field, text renders in wrong font",skills/maplibre-fonts-glyphs/SKILL.md,"My MapLibre GL JS stylesheet has no `glyphs` property set at all, and my symbol layers have `text-font` set to a font name. Text labels are showing up, but in a generic font, not the one I specified. Is this a bug I need to fix, or expected behavior? What's actually happening?","### Short answer  
+No – it’s **expected** behaviour.  
+When a style **does not have a `glyphs` URL**, MapLibre GL JS falls back to its **local-font mode** (added in v5.11). Every `text-font` name is treated exactly like a CSS `font-family` list:
+
+1. The browser tries to find a **system font** with that name.  
+2. If you have supplied a **web-font** (via `@font-face` or `map.setFontFaces()`), it will be used.  
+3. If the name can’t be resolved, the browser falls back to its generic default (usually “sans-serif”), which is what you’re seeing.
+
+So the map isn’t “broken”; it’s simply rendering with whatever font the browser could locate.
+
+---
+
+## What’s really happening under the hood
+
+| Step | What MapLibre does | Why it matters for you |
+|------|-------------------|------------------------|
+| **Style parsing** | No `glyphs` field → *local-fonts mode* is activated. | No glyph-PBF requests are ever made. |
+| **Layer evaluation** | `text-font: [""My Fancy Font""]` is read as a CSS font-family list. | The name must match a font the browser can resolve. |
+| **Font resolution** | 1️⃣ Look for a **system font** named *My Fancy Font*.<br>2️⃣ If you called `map.setFontFaces({ ""My Fancy Font"": [{url:""…""}] })` (or declared the same mapping in the style’s `font-faces` property), the browser will download that file and use it.<br>3️⃣ If neither step succeeds, the browser falls back to its generic family (`sans-serif`, `serif`, etc.). | The generic font you see is the browser’s fallback. |
+| **Rendering** | Glyphs are generated on-the-fly with **TinySDF** (an SDF rasterizer) from the resolved font. | No glyph-PBFs, no network errors, but the visual result depends on the actual font used. |
+
+> **Key point:** The `glyphs` URL is *not* required for any text to appear. It is only needed when you want to serve pre-computed SDF glyph PBFs (the classic Mapbox-style approach) or when you need the same style to work on older MapLibre GL JS versions or on MapLibre Native (which still expects a `glyphs` URL).
+
+---
+
+## Why you’re seeing a “generic” font
+
+1. **The font isn’t installed on the client OS** – e.g., “My Fancy Font” is a custom corporate font that only exists on your design workstation.  
+2. **You haven’t loaded it as a web-font** – no `@font-face` rule, no `font-faces` entry, and you didn’t call `map.setFontFaces()`.  
+3. **The name you wrote in `text-font` does not exactly match the font’s internal name** – CSS is case-sensitive for the family name you declare in `@font-face`.  
+4. **CORS / fetch failure** – if you did declare a `font-faces` entry but the URL can’t be fetched (blocked by CORS, 404, etc.), the browser discards it and falls back.
+
+All of these result in the browser’s generic fallback being used, which is why the labels look “plain”.
+
+---
+
+## How to get the exact font you want
+
+### 1. Load the font as a web-font (recommended)
+
+```css
+/* In your page’s CSS */
+@font-face {
+  font-family: ""My Fancy Font"";
+  src: url(""https://example.com/fonts/MyFancyFont.woff2"") format(""woff2"");
+  font-weight: normal;
+  font-style: normal;
+}
+```
+
+or, if you prefer to keep the mapping inside the style JSON:
+
+```json
+{
+  ""font-faces"": {
+    ""My Fancy Font"": [
+      {
+        ""url"": ""https://example.com/fonts/MyFancyFont.woff2""
+      }
+    ]
+  }
+}
+```
+
+Then, after the map is created (or before, if you use the JSON form), you can also call:
+
+```js
+map.setFontFaces({
+  ""My Fancy Font"": [
+    { url: ""https://example.com/fonts/MyFancyFont.woff2"" }
+  ]
+});
+```
+
+**Result:** `text-font: [""My Fancy Font""]` will now resolve to the exact font you supplied, and TinySDF will rasterise that font for every label.
+
+### 2. Use a system-installed font
+
+If the font is already installed on every target device (e.g., “Arial”, “Helvetica”, “Noto Sans”), just make sure the name you write in `text-font` matches the system name exactly. No extra work is needed.
+
+### 3. Serve glyph PBFs instead (only if you need them)
+
+If you want to support older GL JS versions or MapLibre Native, add a `glyphs` URL that points at a glyph server (e.g., `https://mytileserver.com/fonts/{fontstack}/{range}.pbf`). Then:
+
+```json
+{
+  ""glyphs"": ""https://mytileserver.com/fonts/{fontstack}/{range}.pbf"",
+  ""layers"": [
+    {
+      ""id"": ""place-labels"",
+      ""type"": ""symbol"",
+      ""layout"": {
+        ""text-field"": ""{name}"",
+        ""text-font"": [""My Fancy Font""]
+      }
+    }
+  ]
+}
+```
+
+Now the map will request the pre-computed SDF glyphs instead of generating them locally. This is **optional** for modern GL JS but required for native clients.
+
+### 4. Verify the name matches the font-face entry
+
+The name used in `text-font` **must** be identical to the key you use in `font-faces` or the `font-family` you declare in CSS. Example of a mismatch:
+
+```json
+""text-font"": [""My Fancy Font""]   // <-- expects exactly this string
+```
+
+```json
+""font-faces"": {
+  ""MyFancyFont"": [               // <-- missing space → mismatch
+    { ""url"": ""..."" }
+  ]
+}
+```
+
+Fix the typo and the font will be found.
+
+---
+
+## Quick checklist for “generic font” problems
+
+| ✅ | Action |
+|---|--------|
+| **1** | Confirm the `glyphs` property is **absent** (or you deliberately omitted it). |
+| **2** | Verify the font you want is either (a) installed on the OS **or** (b) served as a web-font. |
+| **3** | If using a web-font, make sure the `font-family` name in `@font-face` **exactly** matches the string in `text-font`. |
+| **4** | If you prefer the style-JSON way, add a matching entry under `font-faces` (or call `map.setFontFaces()`). |
+| **5** | Check the network console for any 404 / CORS errors on the font file URL. |
+| **6** | If you need the style to work on older GL JS or on MapLibre Native, add a proper `glyphs` URL instead of relying on local-font mode. |
+
+---
+
+## TL;DR for your situation
+
+- **What you see is normal**: without a `glyphs` URL, MapLibre falls back to the browser’s font-resolution mechanism.
+- **Why you get a generic font**: the browser can’t find a font that matches the name you gave.
+- **Fix**: load the desired font as a web-font (via `@font-face`, `font-faces`, or `map.setFontFaces()`), or install it on the client OS. If you need the classic glyph-PBF path (e.g., for older GL JS or native), add a `glyphs` URL that serves the appropriate PBFs.
+
+Once the font is correctly reachable, the labels will render in the exact typeface you specified. No bug to file—just a matter of supplying the font the browser can actually use.",PASS,1.00,,All assertions passed,

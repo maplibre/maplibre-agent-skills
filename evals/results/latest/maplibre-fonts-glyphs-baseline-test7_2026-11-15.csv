@@ -1,0 +1,736 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+explicit — CJK labels in a chosen font where layers set text-font,skills/maplibre-fonts-glyphs/SKILL.md,false,"I'm on the latest MapLibre GL JS. My style has a glyphs URL, and every label layer sets `text-font` to `[""Roboto Regular""]`. Chinese place names render in the browser's default sans-serif. I want them drawn in Noto Sans SC, which I can host as a font file, without changing how the Latin labels look. How do I set that up?","Below is a **step-by-step recipe** that will let you keep the Latin labels in *Roboto* while drawing every Chinese label with *Noto Sans SC* – all without touching the rest of your style.
+
+---
+
+## 1.  Make the Noto Sans SC glyphs available to MapLibre
+
+MapLibre (just like Mapbox GL JS) does **not** read a font file directly from the browser.  
+It asks a *glyph-pbf* service for the glyphs it needs, using the URL you set in the top-level `glyphs` property of the style:
+
+```json
+{
+  ""glyphs"": ""https://my-fonts.example.com/{fontstack}/{range}.pbf"",
+  …
+}
+```
+
+So you have to:
+
+1. **Download the TTF/OTF** for Noto Sans SC (Regular is enough for most maps).  
+   ```bash
+   curl -O https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/NotoSansSC-Regular.otf
+   ```
+
+2. **Convert the TTF/OTF into the Mapbox glyph-pbf format**.  
+   The easiest way is to use the `glyphs` CLI that ships with `@mapbox/fontnik` (or the newer `@mapbox/mbgl-glyphs`).
+
+   ```bash
+   # install the tool (once)
+   npm i -g @mapbox/mbgl-glyphs
+
+   # generate the whole Unicode range (0-65535) – you can limit it if you want
+   mbgl-glyphs NotoSansSC-Regular.otf ./glyphs
+   ```
+
+   This creates a directory tree like:
+
+   ```
+   glyphs/
+     Noto Sans SC Regular/
+       0-255.pbf
+       256-511.pbf
+       …
+   ```
+
+3. **Serve the directory over HTTP** (any static file server will do).  
+   Example with `python -m http.server`:
+
+   ```bash
+   cd glyphs
+   python -m http.server 8080
+   ```
+
+   The glyphs are now reachable at  
+
+   ```
+   http://localhost:8080/Noto%20Sans%20SC%20Regular/0-255.pbf
+   ```
+
+4. **Add the new base URL to your style** (or replace the existing one if you host both Roboto and Noto there).
+
+   ```json
+   {
+     ""glyphs"": ""http://localhost:8080/{fontstack}/{range}.pbf"",
+     …
+   }
+   ```
+
+   *Important*: The same base URL is used for **all** fonts, so you must also have the Roboto glyphs in the same directory structure (or point the URL to a place that already contains both). If you already have a glyph service that serves Roboto, just copy the `Noto Sans SC Regular` folder next to the existing `Roboto Regular` folder.
+
+---
+
+## 2.  Tell MapLibre *when* to use Noto Sans SC
+
+MapLibre’s `text-font` property can be **data-driven**, i.e. an expression that decides which font stack to use for each feature.  
+We’ll use the language tag that is already present in most vector-tile sources (`text_language` or the language-specific name fields). If your source does **not** contain a language tag, you can fall back to a simple regex that detects Chinese characters.
+
+### 2.1  The simplest “fallback stack” (works if you don’t mind Noto providing Latin glyphs)
+
+```json
+""text-font"": [""Noto Sans SC Regular"", ""Roboto Regular""]
+```
+
+MapLibre will try the first font; if a glyph is missing it falls back to the second.  
+Because Noto Sans SC contains *all* Chinese glyphs **and** a full Latin set, this will make *all* labels use Noto, which is **not** what you asked for.
+
+### 2.2  Language-aware expression (the recommended way)
+
+Add an expression that picks the font **only when the feature’s language is Chinese**.
+
+```json
+""text-font"": [
+  ""case"",
+  // 1️⃣  Does the feature have a Chinese language tag?
+  [""=="", [""get"", ""text_language""], ""zh""],          // Mapbox/MapLibre convention
+  // → use Noto for Chinese
+  [""Noto Sans SC Regular""],
+  // 2️⃣  Otherwise keep the original Roboto
+  [""Roboto Regular""]
+]
+```
+
+If your tiles use the more explicit `name_zh`, `name_zh-Hans`, … fields instead of a `text_language` property, you can test for their existence:
+
+```json
+""text-font"": [
+  ""case"",
+  [""any"",
+    [""has"", ""name_zh""],
+    [""has"", ""name_zh-Hans""],
+    [""has"", ""name_zh-CN""]
+  ],
+  [""Noto Sans SC Regular""],
+  [""Roboto Regular""]
+]
+```
+
+### 2.3  Pure-regex detection (when you have no language tag)
+
+```json
+""text-font"": [
+  ""case"",
+  // Does the label contain at least one CJK Unified Ideograph?
+  [""match"",
+    [""regexp_match"", [""get"", ""name""], ""[\\u4e00-\\u9fff]""],
+    true,
+    [""Noto Sans SC Regular""],
+    [""Roboto Regular""]
+  ]
+]
+```
+
+> **Tip** – `regexp_match` is a MapLibre expression that returns a boolean.  
+> The Unicode range `\u4e00-\u9fff` covers the “common” Chinese characters.
+
+---
+
+## 3.  Apply the expression to every label layer
+
+You can edit each label layer manually, but it’s easier to let a script do it (or use the style editor in MapLibre Studio / Mapbox Studio).  
+Below is a **minimal example** of a typical `place-label` layer that you would find in an OpenMapTiles-based style.
+
+```json
+{
+  ""id"": ""place-label"",
+  ""type"": ""symbol"",
+  ""source"": ""openmaptiles"",
+  ""source-layer"": ""place"",
+  ""layout"": {
+    ""text-field"": [
+      ""coalesce"",
+      [""get"", ""name_zh""],
+      [""get"", ""name""]
+    ],
+    ""text-font"": [
+      ""case"",
+      [""any"",
+        [""has"", ""name_zh""],
+        [""has"", ""name_zh-Hans""]
+      ],
+      [""Noto Sans SC Regular""],
+      [""Roboto Regular""]
+    ],
+    ""text-size"": 12,
+    ""text-anchor"": ""center"",
+    ""text-allow-overlap"": false
+  },
+  ""paint"": {
+    ""text-color"": ""#222""
+  }
+}
+```
+
+Do the same for any other symbol layer that shows place names, road names, POI labels, etc.
+
+---
+
+## 4.  Verify it works
+
+1. **Open the map** in a browser (or your dev server).  
+2. Open the DevTools → Network tab and look for requests like  
+
+   ```
+   http://localhost:8080/Noto%20Sans%20SC%20Regular/0-255.pbf
+   ```
+
+   You should see them fire **only for tiles that contain Chinese labels**.  
+3. Zoom into a Chinese city (e.g. 北京, Shanghai) – the characters should now be rendered with the crisp Noto glyphs.  
+4. Zoom into a European city – the glyph requests should be for `Roboto Regular` only, and the Latin text should look unchanged.
+
+---
+
+## 5.  Full minimal style snippet (for copy-paste)
+
+```json
+{
+  ""version"": 8,
+  ""glyph",FAIL,0.00,,The provided output suggests using MapLibre's `text-font` expressions for font selection and a custom `glyphs` endpoint for the entire font stack. It does not mention or implement the `font-faces` property (introduced in MapLibre GL JS v4+) or the `unicode-range` mechanism required by the rubric to handle fallback at the glyph level.,
+explicit — CJK labels in a chosen font where layers set text-font,skills/maplibre-fonts-glyphs/SKILL.md,false,"I'm on the latest MapLibre GL JS. My style has a glyphs URL, and every label layer sets `text-font` to `[""Roboto Regular""]`. Chinese place names render in the browser's default sans-serif. I want them drawn in Noto Sans SC, which I can host as a font file, without changing how the Latin labels look. How do I set that up?","Below is a **step-by-step recipe** that will give you:
+
+* Latin labels → **Roboto Regular** (exactly as they are now)  
+* Chinese characters → **Noto Sans SC Regular** (your own hosted copy)  
+
+The trick is to **serve a glyph-pbf for Noto Sans SC** and then tell the style to try that font **only when the first one can’t draw the glyph** (or, if you prefer, only for the Chinese language).  
+
+---
+
+## 1. Prepare the Noto Sans SC glyphs
+
+MapLibre (and Mapbox GL JS) do **not** read a TTF/OTF directly in the browser.  
+They request *glyph-pbf* files from a URL that looks like  
+
+```
+https://my-fonts.com/{fontstack}/{range}.pbf
+```
+
+where  
+
+* **{fontstack}** is the exact name you will use in `text-font` (e.g. `Noto Sans SC Regular`)  
+* **{range}** is a Unicode range block (`0-255`, `256-511`, … up to `65536-65535`).
+
+### 1.1 Install the conversion tool
+
+```bash
+# on macOS / Linux
+npm i -g @mapbox/ttf2pbf   # or use the mapbox/fontnik binary if you prefer
+```
+
+### 1.2 Convert the TTF/OTF
+
+```bash
+# download the regular weight (you can also add Bold, Medium …)
+wget https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansSC-Regular.otf \
+     -O NotoSansSC-Regular.otf
+
+# generate the 0-255 block (repeat for each block you need)
+ttf2pbf NotoSansSC-Regular.otf 0-255 > 0-255.pbf
+ttf2pbf NotoSansSC-Regular.otf 256-511 > 256-511.pbf
+# … continue until you have covered the whole CJK range (0-65535 is safe)
+```
+
+### 1.3 Host the files
+
+Put the generated `.pbf` files on a static web server (S3, Cloudflare R2, GitHub Pages, your own Nginx, …) with the following layout:
+
+```
+/fonts/
+   Noto%20Sans%20SC%20Regular/
+       0-255.pbf
+       256-511.pbf
+       512-767.pbf
+       …
+```
+
+> **Important:** The folder name must be URL-escaped exactly as you will write it in the style (`Noto%20Sans%20SC%20Regular`).  
+
+If you already have a glyph server for Roboto (e.g. `https://my-fonts.com/{fontstack}/{range}.pbf`), just add the new folder next to the existing `Roboto%20Regular` folder – the same base URL works for all fonts.
+
+---
+
+## 2. Tell MapLibre where to fetch glyphs
+
+In your style JSON (or via `map.setStyle()`), add or edit the top-level `glyphs` property:
+
+```json
+{
+  ""version"": 8,
+  ""glyphs"": ""https://my-fonts.com/fonts/{fontstack}/{range}.pbf"",
+  ...
+}
+```
+
+Now MapLibre can request **any** font stack that lives under that URL, including the one you just added.
+
+---
+
+## 3. Use a *fallback* font stack in the label layers
+
+MapLibre will try the fonts **in order** and will fall back to the next one **only for the glyphs that are missing** in the previous font.  
+That means you can keep the existing `""text-font"": [""Roboto Regular""]` **and just add Noto Sans SC as a second entry**.
+
+### 3.1 The simplest “fallback” approach
+
+```json
+{
+  ""id"": ""place-labels"",
+  ""type"": ""symbol"",
+  ""source"": ""openmaptiles"",
+  ""source-layer"": ""place"",
+  ""layout"": {
+    ""text-field"": [""coalesce"", [""get"", ""name_zh""], [""get"", ""name""]],
+    ""text-font"": [""Roboto Regular"", ""Noto Sans SC Regular""],
+    ""text-size"": 12
+  },
+  ""paint"": {
+    ""text-color"": ""#222""
+  }
+}
+```
+
+* **What happens?**  
+  * For Latin characters Roboto has the glyph → it is used.  
+  * For Chinese characters Roboto has none → MapLibre automatically falls back to Noto Sans SC, which *does* have them.
+
+That’s all you need if you are happy with the “use Noto only when Roboto can’t draw”.
+
+### 3.2 If you want an explicit language-based switch (optional)
+
+If you prefer to **force** Noto Sans SC only for Chinese (or any other language) you can use an expression:
+
+```json
+{
+  ""layout"": {
+    ""text-field"": [""coalesce"", [""get"", ""name_zh""], [""get"", ""name""]],
+    ""text-font"": [
+      ""case"",
+      [""=="", [""get"", ""text_language""], ""zh""],   // MapLibre automatically sets this when you use `text-language`
+      [""Noto Sans SC Regular""],
+      [""Roboto Regular""]
+    ],
+    ""text-size"": 12,
+    ""text-language"": [""zh"", ""en""]   // optional: tell the style which languages to look for
+  }
+}
+```
+
+* `text-language` tells the style which language property to read from the source (e.g. `name_zh`).  
+* The `case` expression picks the appropriate font stack.
+
+Both approaches give the same visual result; the first one is shorter and works even if the source data does **not** contain a `text_language` property.
+
+---
+
+## 4. Verify it works
+
+1. Open the map in the browser.  
+2. Open DevTools → Network and look for requests like  
+
+   ```
+   https://my-fonts.com/fonts/Noto%20Sans%20SC%20Regular/0-255.pbf
+   ```
+
+   (you should see them only for tiles that contain Chinese characters).  
+3. Inspect a label with Chinese text – the computed style should show `font-family: ""Noto Sans SC Regular""`.
+
+If you still see the browser’s default sans-serif, double-check:
+
+* The glyph URL is reachable (no 404).  
+* The folder name matches the exact string in `text-font`.  
+* The `.pbf` files contain the needed Unicode ranges (you can open one with `mapbox-gl-js`’s `GlyphAtlas` demo or the `glyph-pbf` npm package).  
+
+---
+
+## 5. Full minimal style snippet (for copy-paste)
+
+```json
+{
+  ""version"": 8,
+  ""glyphs"": ""https://my-fonts.com/fonts/{fontstack}/{range}.pbf"",
+  ""sources"": {
+    ""openmaptiles"": {
+      ""type"": ""vector"",
+      ""url"": ""https://example.com/tiles.json""
+    }
+  },
+  ""layers"": [
+    {
+      ""id"": ""place-labels"",
+      ""type"": ""symbol"",
+      ""source"": ""openmaptiles"",
+      ""source-layer"": ""place"",
+      ""layout"": {
+        ""text-field"": [""coalesce"", [""get"", ""name_zh""], [""get"", ""name""]],
+        ""text-font"": [""Roboto Regular"", ""Noto Sans SC Regular""],
+        ""text-size"": 12,
+        ""text-language"": [""zh"", ""en""]
+      },
+      ""paint"": {
+        ""text-color"": ""#222""
+      }
+    }
+  ]
+}
+```
+
+Replace `https://my-fonts.com/fonts/` with the real URL where you uploaded the glyph-pbf files.
+
+---
+
+## TL;DR Checklist
+
+| ✅ | Action |
+|---|---|
+| 1 | Convert `NotoSansSC-Regular.otf` → a set of `{range}.pbf` files (`ttf2pbf`). |
+| 2 | Host those files under `…/fonts/Noto%20Sans%20SC%20Regular/{range}.pbf`. |
+| 3 | Set the style’s top-level `glyphs` URL to point at the folder that contains **both** Roboto and Noto. |
+| 4 | Change every label layer’s `text-font` to `[""Roboto Regular"", ""Noto Sans SC Regular""]` (or use a `case` expression if you want language-specific logic). |
+| 5 | Reload the map – Chinese place names now use Noto Sans SC, Latin stays Roboto. |
+
+That’s it! 🎉 Once the glyphs are served, MapLibre does the rest automatically. Happy mapping!",FAIL,0.00,,"The provided output suggests using a glyph-pbf server-based approach with 'text-font' fallback in MapLibre, which is the standard way to handle multi-font stacks in WebGL/MapLibre GL. It does not use the CSS-style 'font-faces' or 'map.setFontFaces' approach, nor does it define a 'unicode-range' in the manner specified by the rubric (as glyph-pbf files are handled differently via the glyphs URL logic). Therefore, the output fails the specific technical requirements defined in the rubric.",
+explicit — CJK labels in a chosen font where layers set text-font,skills/maplibre-fonts-glyphs/SKILL.md,false,"I'm on the latest MapLibre GL JS. My style has a glyphs URL, and every label layer sets `text-font` to `[""Roboto Regular""]`. Chinese place names render in the browser's default sans-serif. I want them drawn in Noto Sans SC, which I can host as a font file, without changing how the Latin labels look. How do I set that up?","Below is a **step-by-step recipe** that will let you keep the Latin labels in *Roboto* while drawing every Chinese label with *Noto Sans SC* – all without touching the rest of the style.
+
+---
+
+## 1. Get the font into the MapLibre “glyph-pbf” format
+
+MapLibre (just like Mapbox GL JS) does **not** read a raw `.ttf`/`.otf` file in the browser.  
+It expects a **glyph-pbf** tile set that is served from a URL template:
+
+```
+https://my-fonts.example.com/{fontstack}/{range}.pbf
+```
+
+### 1.1. Download the TTF
+
+```bash
+wget https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf
+```
+
+### 1.2. Install the glyph-generation tool
+
+The easiest way is to use the official `glyphs` CLI that ships with **@mapbox/fontnik** (or the newer `@mapbox/mbtiles`-based tool).  
+Both are pure-node, so you only need Node ≥ 14.
+
+```bash
+npm install -g @mapbox/fontnik   # installs the `glyphs` binary
+```
+
+### 1.3. Generate the glyph-pbf set
+
+```bash
+# Create a folder that will hold the tiles
+mkdir -p fonts/Noto\ Sans\ SC\ Regular
+
+# Run the generator – it will create one .pbf per 256-code-point range
+glyphs \
+  --font NotoSansSC-Regular.otf \
+  --output fonts/Noto\ Sans\ SC\ Regular \
+  --range 0-255,256-511,512-767,768-1023,1024-1279,1280-1535,1536-1791,1792-2047,2048-2303,2304-2559,2560-2815,2816-3071,3072-3327,3328-3583,3584-3839,3840-4095,4096-4351,4352-4607,4608-4863,4864-5119,5120-5375,5376-5631,5632-5887,5888-6143,6144-6399,6400-6655,6656-6911,6912-7167,7168-7423,7424-7679,7680-7935,7936-8191,8192-8447,8448-8703,8704-8959,8960-9215,9216-9471,9472-9727,9728-9983,9984-10239,10240-10495,10496-10751,10752-11007,11008-11263,11264-11519,11520-11775,11776-12031,12032-12287,12288-12543,12544-12799,12800-13055,13056-13311,13312-13567,13568-13823,13824-14079,14080-14335,14336-14591,14592-14847,14848-15103,15104-15359,15360-15615,15616-15871,15872-16127,16128-16383,16384-16639,16640-16895,16896-17151,17152-17407,17408-17663,17664-17919,17920-18175,18176-18431,18432-18687,18688-18943,18944-19199,19200-19455,19456-19711,19712-19967,19968-20223,20224-20479,20480-20735,20736-20991,20992-21247,21248-21503,21504-21759,21760-22015,22016-22271,22272-22527,22528-22783,22784-23039,23040-23295,23296-23551,23552-23807,23808-24063,24064-24319,24320-24575,24576-24831,24832-25087,25088-25343,25344-25599,25600-25855,25856-26111,26112-26367,26368-26623,26624-26879,26880-27135,27136-27391,27392-27647,27648-27903,27904-28159,28160-28415,28416-28671,28672-28927,28928-29183,29184-29439,29440-29695,29696-29951,29952-30207,30208-30463,30464-30719,30720-30975,30976-31231,31232-31487,31488-31743,31744-31999,32000-32255,32256-32511,32512-32767,32768-33023,33024-33279,33280-33535,33536-33791,33792-34047,34048-34303,34304-34559,34560-34815,34816-35071,35072-35327,35328-35583,35584-35839,35840-36095,36096-36351,36352-36607,36608-36863,36864-37119,37120-37375,37376-37631,37632-37887,37888-38143,38144-38399,38400-38655,38656-38911,38912-39167,39168-39423,39424-39679,39680-39935,39936-40191,40192-40447,40448-40703,40704-40959,40960-41215,41216-41471,41472-41727,41728-41983,41984-42239,42240-42495,42500-42755,42756-43011,43012-43267,43268-43523,43524-43779,43780-44035,44036-44291,44292-44547,44548-44803,44804-45059,45060-45315,45316-45571,45572-45827,45828-46083,46084-46339,46340-46595,46596-46851,46852-47107,47108-47363,47364-47619,47620-47875,47876-48131,48132-48387,48388-48643,48644-48899,48900-49155,49156-49411,49412-49667,49668-49923,49924-50179,50180-50435,50436-50691,50692-50947,50948-51203,51204-51459,51460-51715,51716-51971,51972-52227,52228-52483,52484-52739,52740-52995,52996-53251,53252-53507,53508-53763,53764-54019,54020-54275,54276-54531,54532-54787,54788-55043,55044-55299,55300-55555,55556-55811,55812-56067,56068-56323,56324-56579,56580-56835,56836-57091,57092-57347,57348-57603,57604-57859,57860-58115,58116-58371,58372-58627,58628-58883,58884-59139,59140-59395,59396-59651,59652-59907,59908-60163,60164-60419,60420-60675,60676-60931,60932-61187,61188-61443,61444-61699,61700-61955,61956-62211,62212-62467,62468-62723,62724-62979,62980-63235,63236-63491,63492-63747,63748-64003,64004-64259,64260-64515,64516-64771,64772-65027,65028-65283,65284-65535
+```
+
+> **Why the huge `--range` list?**  
+> The glyph-pbf format stores glyphs in 256-code-",FAIL,0.00,,"The output provides instructions on how to generate and host the glyph-pbf tiles but fails to include the necessary step of declaring the font face in the MapLibre style (e.g., using 'font-faces' or 'map.setFontFaces') or defining the 'unicode-range' to ensure Latin characters fall back to the existing Roboto font.",
+explicit — CJK labels in a chosen font where layers set text-font,skills/maplibre-fonts-glyphs/SKILL.md,false,"I'm on the latest MapLibre GL JS. My style has a glyphs URL, and every label layer sets `text-font` to `[""Roboto Regular""]`. Chinese place names render in the browser's default sans-serif. I want them drawn in Noto Sans SC, which I can host as a font file, without changing how the Latin labels look. How do I set that up?","Below is a **complete, step-by-step recipe** that will let you keep all of your existing Latin labels in *Roboto Regular* while drawing every Chinese character with *Noto Sans SC*.  
+The solution works with any recent version of **MapLibre GL JS** (the same steps also apply to Mapbox GL JS if you ever need them).
+
+---
+
+## 1. Overview of the three things you have to do  
+
+| What you need | Why you need it | How you do it |
+|---------------|----------------|---------------|
+| **A glyph-pbf server** that can serve `…/fonts/{fontstack}/{range}.pbf` | MapLibre fetches glyphs from the URL you give it in the style’s `glyphs` property. | Host the files yourself (static web server, CDN, or a tiny Node/Go server). |
+| **A glyph-pbf set for Noto Sans SC** (Chinese only) | The server must be able to return the glyphs for the font name you will use in the style (`""Noto Sans SC Regular""`). | Generate the glyphs from the TTF/OTF file (or use the pre-built ones from the MBGL-fonts repo). |
+| **A style change** that tells MapLibre to use Noto Sans SC for Chinese and Roboto for everything else | The style’s `text-font` property decides which font-stack is tried first. | Add an expression (or a simple fallback stack) to each label layer. |
+
+All three steps are independent, so you can test each one before moving on to the next.
+
+---
+
+## 2. Generate the Noto Sans SC glyph-pbf files  
+
+### 2.1. Get the font file
+
+```bash
+# Grab the full Noto Sans SC OTF from Google Fonts
+wget https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/NotoSansSC-Regular.otf
+```
+
+> **Tip:** If you want *only* the Chinese glyphs (so that Latin characters still fall back to Roboto), subset the font first (see 2.3).
+
+### 2.2. Install the glyph-generation tools
+
+You need **`fontnik`** (the library that turns a TTF/OTF into MapLibre glyph-pbf tiles) and the **`mbgl-fonts`** helper script.
+
+```bash
+# Node-based tools
+npm install -g @mapbox/fontnik
+npm install -g @mapbox/mbgl-fonts
+```
+
+> **Alternative** – If you prefer a Docker container, the `mapbox/mbgl-fonts` image already contains everything.
+
+### 2.3 (Optional) Subset the font to Chinese only  
+
+If you *don’t* want Noto to replace the Latin glyphs, strip them out:
+
+```bash
+# Install pyftsubset (part of fonttools)
+pip install fonttools
+
+# Keep only the Unicode ranges that contain CJK Unified Ideographs
+pyftsubset NotoSansSC-Regular.otf \
+  --output-file=NotoSansSC-CJK.otf \
+  --unicodes=U+4E00-9FFF,U+3400-4DBF,U+20000-2A6DF,U+2A700-2B73F,U+2B740-2B81F,U+2B820-2CEAF,U+F900-FAFF,U+2F800-2FA1F \
+  --layout-features='*' \
+  --glyphs='*' \
+  --passthrough-tables
+```
+
+Now you have a **CJK-only** OTF (`NotoSansSC-CJK.otf`). Use this file for the next step.
+
+### 2.4. Build the glyph-pbf tiles
+
+```bash
+# Create a folder that will become the root of your glyph server
+mkdir -p glyphs/Noto\ Sans\ SC\ Regular
+
+# Run the mbgl-fonts script – it will write one .pbf per 256-code-point range
+mbgl-fonts \
+  --font Noto\ Sans\ SC\ Regular=NotoSansSC-CJK.otf \
+  --output glyphs
+```
+
+The command creates a directory structure that looks like:
+
+```
+glyphs/
+ └─ Noto Sans SC Regular/
+      ├─ 0-255.pbf
+      ├─ 256-511.pbf
+      ├─ …
+      └─ 61440-61695.pbf
+```
+
+> **If you used the full OTF** (not subset) you’ll get glyphs for *all* Unicode blocks, which is fine – the fallback logic (see §4) will still keep Latin in Roboto.
+
+### 2.5. Serve the glyphs
+
+The simplest way is a static web server:
+
+```bash
+# From the directory that contains the `glyphs` folder:
+npx serve .   # or `python -m http.server 8080`
+```
+
+Assume it’s reachable at `https://myfonts.example.com/`.  
+The **base URL** you will put into the style is then:
+
+```
+https://myfonts.example.com/glyphs/{fontstack}/{range}.pbf
+```
+
+> **If you already have a CDN or S3 bucket**, just upload the `glyphs/` folder there and use the bucket URL as the base.
+
+---
+
+## 3. Point your MapLibre style at the new glyph server  
+
+In your style JSON (or wherever you create the map), change the top-level `glyphs` property:
+
+```json
+{
+  ""version"": 8,
+  ""glyphs"": ""https://myfonts.example.com/glyphs/{fontstack}/{range}.pbf"",
+  ...
+}
+```
+
+> **Important:** The `{fontstack}` placeholder is case-sensitive and must match the *exact* name you used when generating the glyphs (`Noto Sans SC Regular`).  
+> If you also want to keep the original Roboto glyphs, you can keep the MapLibre default glyph URL as a *fallback* by adding a second `glyphs` entry in the style’s `metadata` (MapLibre will try the first URL, then the second). Most people just host both fonts under the same base URL.
+
+---
+
+## 4. Tell MapLibre which font to use for which language  
+
+There are **two common patterns**. Choose the one that best fits your workflow.
+
+### 4.1. Simple fallback stack (no data-driven expression)
+
+If you generated a **CJK-only** Noto font (see §2.3), you can just prepend it to the stack:
+
+```json
+""text-font"": [""Noto Sans SC Regular"", ""Roboto Regular""]
+```
+
+MapLibre will try the first font for every glyph.  
+* For Chinese characters, Noto has the glyph → it is drawn with Noto.  
+* For Latin characters, Noto has *no* glyph (because you stripped them) → it falls back to Roboto.
+
+**Pros:**  
+* One-liner, no expressions, works on every layer.  
+* No need to add language metadata to your source data.
+
+**Cons:**  
+* Requires a subsetted font (otherwise you’ll see Noto’s Latin glyphs).
+
+---
+
+### 4.2. Data-driven expression that selects a font by language  
+
+If you prefer to keep the **full** Noto font (or you want to be",FAIL,0.00,,"The provided output focuses on generating and serving glyph PBF files for MapLibre/Mapbox and using 'text-font' stacking for font fallback. It does not contain instructions for declaring font-faces via 'font-faces' or 'map.setFontFaces', nor does it mention defining 'unicode-range' at the font-face level to constrain the font usage.",
+explicit — CJK labels in a chosen font where layers set text-font,skills/maplibre-fonts-glyphs/SKILL.md,false,"I'm on the latest MapLibre GL JS. My style has a glyphs URL, and every label layer sets `text-font` to `[""Roboto Regular""]`. Chinese place names render in the browser's default sans-serif. I want them drawn in Noto Sans SC, which I can host as a font file, without changing how the Latin labels look. How do I set that up?","Below is a **step-by-step recipe** that will let you keep the Latin labels in *Roboto* while drawing every Chinese label with *Noto Sans SC* – all without touching the rest of your style.
+
+---
+
+## 1.  Make the Noto Sans SC glyphs available to MapLibre
+
+MapLibre (just like Mapbox GL JS) does **not** read a font file directly from the browser.  
+It asks a *glyph-pbf* service for the glyphs it needs, using the URL you set in the top-level `glyphs` property of the style:
+
+```json
+{
+  ""glyphs"": ""https://my-fonts.example.com/{fontstack}/{range}.pbf"",
+  …
+}
+```
+
+So you have to:
+
+| Step | What to do | Why |
+|------|------------|-----|
+| **a. Download the TTF** | `wget https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SC/NotoSansSC-Regular.otf` | This is the source font that contains the Chinese glyphs you want. |
+| **b. Convert it to the Mapbox glyph format** | Use the `glyphs` CLI that ships with `@mapbox/fontnik` (or the newer `@mapbox/mbgl-glyphs`). Example: <br>```bash\nnpm i -g @mapbox/mbgl-glyphs\nmbgl-glyphs NotoSansSC-Regular.otf ./glyphs\n``` | The command creates a folder structure `./glyphs/<font-stack>/<range>.pbf`. |
+| **c. Host the folder** | Put the whole `glyphs/` folder on a static web server (e.g. S3, Cloudflare R2, your own Apache/Nginx). The URL pattern must match the `{fontstack}` placeholder. | MapLibre will request e.g. `…/Noto%20Sans%20SC%20Regular/0-255.pbf`. |
+| **d. Add the new base URL to your style** | In the style JSON (or via `map.setStyle`), replace the existing `glyphs` URL with the one that points to your host. | Now MapLibre can fetch *both* Roboto and Noto Sans SC glyphs. |
+
+> **Tip:** If you already have a glyph service for Roboto (the default MapLibre CDN), you can simply **merge** the Noto Sans SC folder into that same directory tree. The `glyphs` URL stays the same, but the server now serves two font-stacks.
+
+---
+
+## 2.  Tell MapLibre *when* to use Noto Sans SC
+
+The `text-font` layout property can be **data-driven**, i.e. an expression that decides which font-stack to use for each feature.  
+We’ll use the language tag that is already present in most vector-tile sources (`text_language` or the language-specific name fields). If your source does not have a language tag, you can fall back to a simple regex that detects Chinese characters.
+
+### 2.1  The simplest “fallback stack”
+
+If you are OK with *any* Latin glyphs that happen to exist in Noto Sans SC being used (they look almost identical to Roboto), you can just give a **two-item stack**:
+
+```json
+""text-font"": [""Noto Sans SC Regular"", ""Roboto Regular""]
+```
+
+MapLibre will try the first font; if the glyph is missing it falls back to the second.  
+Because the Chinese glyphs are *only* in the first font, the Latin text will automatically be drawn with Roboto.
+
+> **Result:** Works for most cases, but you lose the guarantee that Latin stays *exactly* Roboto.
+
+### 2.2  Explicit language-based expression (recommended)
+
+If you want to be 100 % sure that Latin stays Roboto, use an expression that checks the language of the label.
+
+#### a) When the source already provides a language property
+
+Many OSM-derived tiles (e.g. OpenMapTiles) expose a `text_language` property on label features. Then you can write:
+
+```json
+""text-font"": [
+  ""case"",
+  [""=="", [""get"", ""text_language""], ""zh""],   // Chinese (both zh-CN and zh-TW are “zh”)
+  [""Noto Sans SC Regular""],                // → use Noto for Chinese
+  [""Roboto Regular""]                       // → otherwise use Roboto
+]
+```
+
+#### b) When you only have the name field
+
+If your tiles only have a `name` (or `name_zh`) field, you can detect Chinese characters with a regular-expression match:
+
+```json
+""text-font"": [
+  ""case"",
+  [
+    ""any"",
+    [""match"", [""get"", ""name""], [""zh""], true, false],               // explicit zh name field
+    [""regexp_match"", [""get"", ""name""], ""[\\u4e00-\\u9fff]""]        // any CJK ideograph
+  ],
+  [""Noto Sans SC Regular""],
+  [""Roboto Regular""]
+]
+```
+
+> `\\u4e00-\\u9fff` covers the “CJK Unified Ideographs” block, which contains virtually all common Chinese characters.
+
+#### c) Put the expression into every label layer
+
+You only need to edit the **layout** of the layers that draw place/road/poi labels (usually `symbol` layers). Example for a typical `place-label` layer:
+
+```json
+{
+  ""id"": ""place-label"",
+  ""type"": ""symbol"",
+  ""source"": ""openmaptiles"",
+  ""source-layer"": ""place"",
+  ""layout"": {
+    ""text-field"": [""coalesce"", [""get"", ""name_zh""], [""get"", ""name""]],
+    ""text-font"": [
+      ""case"",
+      [""any"",
+        [""has"", ""name_zh""],
+        [""regexp_match"", [""get"", ""name""], ""[\\u4e00-\\u9fff]""]
+      ],
+      [""Noto Sans SC Regular""],
+      [""Roboto Regular""]
+    ],
+    ""text-size"": 12,
+    ""text-anchor"": ""center""
+  },
+  ""paint"": {
+    ""text-color"": ""#222""
+  }
+}
+```
+
+Do the same for any other `symbol` layers that you want to affect (road-labels, poi-labels, etc.).
+
+---
+
+## 3.  Verify everything works
+
+1. **Open the map** in a browser with the developer console.
+2. Look at the network tab – you should see requests like  
+
+   ```
+   https://my-fonts.example.com/Noto%20Sans%20SC%20Regular/0-255.pbf
+   https://my-fonts.example.com/Roboto%20Regular/0-255.pbf
+   ```
+3. If a request returns **404**, double-check the folder name (it must be URL-encoded exactly as the font-stack string, spaces become `%20`).
+4. Zoom to an area with Chinese place names. They should now be rendered with the Noto Sans SC glyphs (you can inspect the canvas with the “Inspect” tool of MapLibre-GL-JS to see the `text-font` value per feature).
+
+---
+
+## 4.  Full minimal style snippet
+
+Below is a **complete minimal style** that demonstrates the whole flow. Replace the URLs and source IDs with your own.
+
+```json
+{
+  ""version"": 8,
+  ""glyphs"": ""https://my-fonts.example.com/{fontstack}/{range}.pbf"",
+  ""sources"": {
+    ""osm"": {
+      ""type"": ""vector"",
+      ""url"": ""https://tiles.example.com/tiles.json""
+",FAIL,0.00,,"The output describes a workflow using a glyph-pbf service (the standard MapLibre/Mapbox GL approach), whereas the rubric describes an approach specific to the newer `font-faces` API or client-side font loading, which the output does not mention or implement.",
