@@ -53,18 +53,20 @@ Noto ("no tofu") is Google's open-source family built for near-universal Unicode
 
 **CJK (Chinese, Japanese, Korean) — rendered locally by default; do not serve CJK glyph PBFs.** GL JS's `localIdeographFontFamily` map option defaults to `'sans-serif'`, so CJK characters are generated on-device (TinySDF). This exists because CJK text has poor locality across Unicode ranges: a single tile can otherwise trigger dozens of large glyph requests.[2] Leave it on. Setting `localIdeographFontFamily: false` restores served glyphs for CJK, which is much slower — only do it if you specifically need the served font's shapes.
 
-**Choosing the CJK font.** Since GL JS 5.11.0, `localIdeographFontFamily` reaches only layers that keep the default `text-font`; every other layer draws CJK with its own `text-font` names as CSS font families, falling back to `sans-serif` (tracked as a regression: [maplibre-gl-js#8951](https://github.com/maplibre/maplibre-gl-js/issues/8951)). To choose the font in every layer, declare the file in `font-faces` under each `text-font` name the layers use, with a `unicode-range` that limits it to CJK so Latin text keeps its font. A file declared there wins over both:
+**Choosing the CJK font.** Since GL JS 5.11.0, `localIdeographFontFamily` reaches only layers that keep the default `text-font`; every other layer draws CJK with its own `text-font` names as CSS font families, falling back to `sans-serif` (tracked as a regression: [maplibre-gl-js#8951](https://github.com/maplibre/maplibre-gl-js/issues/8951)). To choose the font in every layer, declare the file in `font-faces` (GL JS 6.7.0 and later) under each `text-font` name the layers use, with a `unicode-range` that limits it to CJK so Latin text keeps its font. A file declared there wins over both:
 
 ```json
 "font-faces": {
   "Noto Sans Regular": [
     {
       "url": "https://example.com/fonts/NotoSansCJKsc-Regular.otf",
-      "unicode-range": ["U+3000-30FF", "U+4E00-9FFF", "U+AC00-D7AF", "U+FF00-FFEF"]
+      "unicode-range": ["U+3000-30FF", "U+3400-4DBF", "U+4E00-9FFF", "U+AC00-D7AF", "U+FF00-FFEF"]
     }
   ]
 }
 ```
+
+At runtime, `map.setFontFaces()` takes the same object with the same keys, the quoted `'unicode-range'` included.
 
 In layers that keep the default `text-font`, the map option can name an on-device CJK font instead:
 

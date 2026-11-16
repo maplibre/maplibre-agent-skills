@@ -10,7 +10,7 @@ Run: 2026-10-26, on the final text with the judge `google:gemini-3.1-flash-lite`
 
 Run: 2026-11-11, test 1 with its `@font-face` check and new rubric, judge `google:gemini-3.1-flash-lite` · baseline [three runs](latest/maplibre-fonts-glyphs-baseline-test1_2026-11-11.csv), with skill [six runs](latest/maplibre-fonts-glyphs-with-skill-test1_2026-11-11.csv) and [the full config](latest/maplibre-fonts-glyphs-with-skill_2026-11-11.csv), which passes.
 
-Run: 2026-11-15 and 16, after the CJK paragraph split in two and test 7 was added, judge `google:gemini-3.1-flash-lite` · test 7 five times each way ([baseline](latest/maplibre-fonts-glyphs-baseline-test7_2026-11-15.csv), [with skill](latest/maplibre-fonts-glyphs-with-skill-test7_2026-11-15.csv)), and tests 1 and 6 once each with the skill ([test 1](latest/maplibre-fonts-glyphs-with-skill-test1_2026-11-16.csv), [test 6](latest/maplibre-fonts-glyphs-with-skill-test6_2026-11-16.csv)), which pass. Tests 2 to 5 were not re-run.
+Run: 2026-11-15 and 16, after the CJK paragraph split in two and test 7 was added, judge `google:gemini-3.1-flash-lite` · test 7 five times each way ([baseline](latest/maplibre-fonts-glyphs-baseline-test7_2026-11-15.csv), [with skill](latest/maplibre-fonts-glyphs-with-skill-test7_2026-11-16.csv)), and tests 1 and 6 once each with the skill ([test 1](latest/maplibre-fonts-glyphs-with-skill-test1_2026-11-16.csv), [test 6](latest/maplibre-fonts-glyphs-with-skill-test6_2026-11-16.csv)), which pass. Tests 2 to 5 were not re-run.
 
 Test 1's check now also accepts `document.fonts` or `FontFace`. Re-checked against the saved 2026-11-11 outputs rather than re-run, every verdict stands: no baseline answer names any of the three, and every with-skill answer names `@font-face`.
 
@@ -29,5 +29,3 @@ Test 6's check changed on 2026-11-15 from any mention of `glyphs` to a `glyphs` 
 **Result: every targeting test fails at baseline and passes with the skill, and the negative holds. `status: verified`.**
 
 One test 6 answer carries a code comment saying a raster-dem source "can contain multiple font stacks"; no assertion catches it.
-
-Three test 7 answers, all the same text, also show `map.setFontFaces()` with a camelCase `unicodeRange` key, which GL JS ignores, so that file would draw the Latin labels too; no assertion catches it.
