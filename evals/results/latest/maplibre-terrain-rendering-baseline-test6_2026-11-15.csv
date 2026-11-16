@@ -1,0 +1,251 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — Mapbox setFog call fails after migrating,skills/maplibre-terrain-rendering/SKILL.md,false,"I moved a Mapbox GL JS v2 app to MapLibre GL JS. The haze at the horizon was set with a map.setFog call, and after the move the map has no haze. How do I get it back?
+","## TL;DR  
+MapLibre GL JS does not have the `map.setFog()` helper that exists in Mapbox GL JS v2.  
+To get the same “haze-at-the-horizon” effect you have to **add a `sky` layer** (type `sky`) to your style and configure its paint properties.  
+Below is a drop-in replacement for the typical `map.setFog()` call, plus a few notes on versions, terrain, and how to keep the code tidy.
+
+---
+
+## 1. Why `setFog()` no longer works
+
+| Library | Fog / Horizon API |
+|---------|-------------------|
+| **Mapbox GL JS v2** | `map.setFog({color, range, ""horizon-blend"": …})` – a convenience method that automatically inserts a *sky* layer behind the map. |
+| **MapLibre GL JS** | No `setFog()` helper (as of v2.x). The underlying *sky* layer exists, but you have to add it yourself. |
+
+So the map isn’t “missing” anything – you just need to create the sky layer manually.
+
+---
+
+## 2. The equivalent `sky` layer
+
+A `sky` layer is a special layer type that renders a procedural atmosphere (or a gradient) behind the map. Its paint properties map almost 1-to-1 to the options you used with `setFog()`.
+
+| `setFog()` option | `sky` paint property | Meaning |
+|-------------------|----------------------|---------|
+| `color` (string or array) | `sky-atmosphere-color` | Base colour of the atmosphere (usually a light blue/white). |
+| `range` (array) | `sky-atmosphere-horizon-blend` (0-1) + `sky-atmosphere-sun` (optional) | Controls how quickly the colour fades toward the horizon. |
+| `horizon-blend` (0-1) | `sky-atmosphere-horizon-blend` | Directly the same. |
+| `high-color` (optional) | `sky-atmosphere-high-color` | Colour of the sky at the zenith. |
+| `space-color` (optional) | `sky-space-color` | Colour of the “space” (used when `sky-type: atmosphere` is set to `gradient`). |
+
+The most common use-case (the one `setFog()` implements) is:
+
+```json
+{
+  ""type"": ""sky"",
+  ""paint"": {
+    ""sky-type"": ""atmosphere"",
+    ""sky-atmosphere-sun"": [0.0, 0.0],
+    ""sky-atmosphere-color"": ""#f8f8ff"",
+    ""sky-atmosphere-horizon-blend"": 0.2
+  }
+}
+```
+
+---
+
+## 3. Minimal code to replace `map.setFog()`
+
+```js
+// 1️⃣  Make sure you are using a recent MapLibre version (>= 2.0.0)
+//    Fog support landed in v2.0.0; earlier versions simply ignore the layer type.
+
+// 2️⃣  If you are using terrain, enable it first (the sky works best with 3-D terrain)
+map.addSource('terrain', {
+  type: 'raster-dem',
+  url: 'mapbox://mapbox.terrain-rgb',
+  tileSize: 512,
+  maxzoom: 14
+});
+map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
+
+// 3️⃣  Add the sky layer (this is the “setFog” replacement)
+function addAtmosphericFog(options = {}) {
+  const {
+    color = '#f8f8ff',          // default light-blue/white
+    horizonBlend = 0.2,         // default from Mapbox docs
+    highColor = undefined,      // optional
+    spaceColor = undefined,     // optional
+    sun = [0.0, 0.0]             // azimuth, altitude (radians)
+  } = options;
+
+  // If a sky layer already exists, just update its paint instead of adding a duplicate.
+  const existing = map.getLayer('sky');
+  if (existing) {
+    const paint = {
+      'sky-atmosphere-color': color,
+      'sky-atmosphere-horizon-blend': horizonBlend,
+      'sky-atmosphere-sun': sun
+    };
+    if (highColor) paint['sky-atmosphere-high-color'] = highColor;
+    if (spaceColor) paint['sky-space-color'] = spaceColor;
+    map.setPaintProperty('sky', paint);
+    return;
+  }
+
+  // Otherwise, insert a new sky layer *below* any label layers.
+  const skyLayer = {
+    id: 'sky',
+    type: 'sky',
+    paint: {
+      'sky-type': 'atmosphere',
+      'sky-atmosphere-sun': sun,
+      'sky-atmosphere-color': color,
+      'sky-atmosphere-horizon-blend': horizonBlend
+    }
+  };
+  if (highColor) skyLayer.paint['sky-atmosphere-high-color'] = highColor;
+  if (spaceColor) skyLayer.paint['sky-space-color'] = spaceColor;
+
+  // Insert it just before the first symbol layer (labels) so it stays in the background.
+  const firstSymbolId = map.getStyle().layers.find(l => l.type === 'symbol')?.id;
+  map.addLayer(skyLayer, firstSymbolId);
+}
+
+// Example – replicate the default Mapbox fog
+addAtmosphericFog({
+  color: '#f8f8ff',
+  horizonBlend: 0.2,
+  sun: [0.0, 0.0]   // sun directly overhead; change to get a sunset-like hue
+});
+```
+
+**What this does**
+
+* Creates (or updates) a layer called `""sky""` of type `""sky""`.
+* Sets the same colour/horizon-blend values you would have passed to `setFog()`.
+* Places the layer behind all symbol (label) layers so it truly looks like a background haze.
+
+---
+
+## 4. Mapping the old `setFog` signature to the new helper
+
+If you previously had something like:
+
+```js
+map.setFog({
+  color: 'rgba(255,255,255,0.8)',
+  ""high-color"": '#ffffff',
+  ""space-color"": '#000000',
+  ""horizon-blend"": 0.3,
+  ""range"": [0.5, 12]
+});
+```
+
+You can translate it to:
+
+```js
+addAtmosphericFog({
+  color: 'rgba(255,255,255,0.8)',          // sky-atmosphere-color
+  highColor: '#ffffff',                   // sky-atmosphere-high-color (optional)
+  spaceColor: '#000000',                  // sky-space-color (optional)
+  horizonBlend: 0.3,                      // sky-atmosphere-horizon-blend
+  // `range` is not a direct sky property; it was used internally by Mapbox to
+  // compute the horizon blend. You can approximate it by tweaking `horizonBlend`.
+});
+```
+
+> **Tip:** The `range` option in Mapbox’s `setFog` is only a convenience for calculating the blend factor. In MapLibre you control the blend directly via `sky-atmosphere-horizon-blend` (0 = no haze, 1 = full haze).
+
+---
+
+## 5. Full-screen example (run it in a sandbox)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre + Atmospheric Fog</title>
+  <meta name=""viewport"" content=""initial-scale=1,maximum-scale=1,user-scalable=no"" />
+  <script src=""https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js""></script>
+  <link href=""https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    body { margin:0; padding:0; }
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+<script>
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://demotiles.maplibre.org/style.json', // any style you like
+    center: [-122.447303, 37.753574],
+    zoom: 12,
+    pitch: 60,
+    bearing: -17
+  });
+
+  map.on('load', () => {
+    // Optional: add terrain (requires a DEM source)
+    // map.addSource('terrain', { type: 'raster-dem', url: 'https://.../terrain.tif', tileSize: 512 });
+    // map.setTerrain({ source: 'terrain', exaggeration: 1 });
+
+    // Add the fog / sky
+    addAtmosphericFog({
+      color: '#f8f8ff',
+      horizonBlend: 0.25,
+      sun: [0.0, 0.0]   // overhead sun – change to [0.5, 0.5] for a sunset feel
+    });
+  });
+
+  // ---- helper from the previous section ----
+  function addAtmosphericFog(opts = {}) {
+    const {
+      color = '#f8f8ff',
+      horizonBlend = 0.2,
+      highColor,
+      spaceColor,
+      sun = [0.0, 0.0]
+    } = opts;
+
+    const existing = map.getLayer('sky');
+    if (existing) {
+      const paint = {
+        'sky-atmosphere-color': color,
+        'sky-atmosphere-horizon-blend': horizonBlend,
+        'sky-atmosphere-sun': sun
+      };
+      if (highColor) paint['sky-atmosphere-high-color'] = highColor;
+      if (spaceColor) paint['sky-space-color'] = spaceColor;
+      map.setPaintProperty('sky', paint);
+      return;
+    }
+
+    const skyLayer = {
+      id: 'sky',
+      type: 'sky',
+      paint: {
+        'sky-type': 'atmosphere',
+        'sky-atmosphere-sun': sun,
+        'sky-atmosphere-color': color,
+        'sky-atmosphere-horizon-blend': horizonBlend
+      }
+    };
+    if (highColor) skyLayer.paint['sky-atmosphere-high-color'] = highColor;
+    if (spaceColor) skyLayer.paint['sky-space-color'] = spaceColor;
+
+    const firstSymbol = map.getStyle().layers.find(l => l.type === 'symbol')?.id;
+    map.addLayer(skyLayer, firstSymbol);
+  }
+</script>
+</body>
+</html>
+```
+
+Open the file in a browser and you’ll see the same soft haze that `setFog()` gave you in Mapbox GL JS.
+
+---
+
+## 6. Gotchas & FAQ
+
+| Issue | Explanation / Fix |
+|-------|-------------------|
+| **`map.addLayer` throws “layer type sky is not supported”** | You are on a MapLibre version **older than 2.0**. Upgrade to at least `2.0.0` (current stable is `2.4.x` at the time of writing). |
+| **Fog disappears after changing the style** | When you call `map.setStyle(...)` the whole layer stack is replaced. Re-run `addAtmosphericFog()` after the `styledata`/`style.load` event. |
+| **I want a gradient sky instead of atmosphere** | Change `'sky-type'` to `'gradient'` and use `sky-gradient` and `sky-gradient-center` paint properties. |
+| **Can I animate the sun position?** | Yes – just call `map.setPaintProperty('sky', 'sky-atmosphere-sun', [azimuth, altitude])` on each frame. |
+| **Does the sky layer work on low-end devices",FAIL,0.00,,"The output fails to follow the instructions. It explicitly instructs the user to add a layer of type 'sky', uses 'sky-atmosphere-*' properties, and fails to mention the 'fog-*' keys required by the rubric. It ignores the constraint to use 'map.setSky' and the specific fog-related keys.",

@@ -1,0 +1,209 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+anti-pattern — assuming Mapbox v2 features work in MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I was using Mapbox GL JS v2 in my app, including placing the camera at a given longitude, latitude and altitude. After migrating to MapLibre, that code is broken. Did I do something wrong in the migration?
+","### TL;DR  
+Mapbox GL JS v2’s **free-camera API** (`setFreeCameraOptions`, `getFreeCameraOptions`) does not exist in MapLibre GL JS.  
+Instead you have to **convert the lng/lat/altitude (and optional bearing/pitch/roll) into a normal `CameraOptions` object** and then move the map with `jumpTo`, `easeTo` or `flyTo`.
+
+Below is a complete “migration checklist” for that specific feature, plus the surrounding steps you probably already did (package swap, token removal, style URL, etc.). Follow the checklist, copy the example code, and you’ll have the same camera positioning working again.
+
+---
+
+## 1. Quick sanity-check of the rest of the migration  
+
+| ✅ Done? | What to verify |
+|---------|----------------|
+| **Package & import** | `npm uninstall mapbox-gl && npm install maplibre-gl`  <br>Import: `import * as maplibregl from 'maplibre-gl';` |
+| **Namespace** | All `mapboxgl` → `maplibregl` (including CSS class prefixes). |
+| **Access token** | Remove any `mapboxgl.accessToken = …` line. |
+| **Style URL** | No `mapbox://…` URLs. Use an open style (e.g. `https://tiles.openfreemap.org/styles/liberty`) or your own exported style JSON that points to non-Mapbox sources. |
+| **Plugins** | Replace Mapbox-only plugins (geocoder, directions, compare) with their MapLibre equivalents (see the “Plugins” section at the end). |
+| **Callback → Promise** | If you still have `map.loadImage(url, cb)` or `source.getClusterLeaves(..., cb)`, change them to the promise form (`await map.loadImage(url)`). |
+
+If any of the above is still using Mapbox-specific values you’ll see errors *before* you even get to the camera code.
+
+---
+
+## 2. Why the free-camera code breaks
+
+```js
+// Mapbox GL JS v2 (does NOT exist in MapLibre)
+map.setFreeCameraOptions({
+  position: [lng, lat, altitude],
+  bearing: 45,
+  pitch: 60,
+  roll: 0
+});
+```
+
+*MapLibre* never implemented `FreeCameraOptions`, `setFreeCameraOptions`, or `getFreeCameraOptions`.  
+The fork point (Mapbox GL JS v1.13) predates those v2 methods, so they are simply missing.
+
+---
+
+## 3. The MapLibre replacement
+
+MapLibre provides **utility methods** that calculate a regular `CameraOptions` object from a 3-D camera description. You then feed that object to any of the standard camera-movement methods:
+
+| Utility (v5.0.0+) | What it does | Typical follow-up |
+|-------------------|--------------|------------------|
+| `map.calculateCameraOptionsFromCameraLngLatAltRotation(lngLat, altitude, bearing, pitch, roll)` | Returns `{center, zoom, bearing, pitch, elevation, roll}` (the `CameraOptions` MapLibre understands). | `map.jumpTo(opts)` / `map.easeTo(opts)` / `map.flyTo(opts)` |
+| `map.calculateCameraOptionsFromTo(from, altitudeFrom, to, altitudeTo, bearing?, pitch?, roll?)` | Calculates a “look-at” camera that points from `from` to `to`. | Same as above |
+
+> **Note:** `elevation` (the altitude above the ground) is a *new* property introduced in MapLibre v5.0.0. It replaces the old `altitude` field that Mapbox used.
+
+### 3-step pattern
+
+```js
+// 1️⃣  Build the 3-D camera description
+const lngLat   = [ -122.42, 37.78 ];   // longitude, latitude
+const altitude = 500;                 // metres above ground
+const bearing  = 45;                  // degrees clockwise from north
+const pitch    = 60;                  // degrees from horizontal
+const roll     = 0;                   // degrees (rarely used)
+
+// 2️⃣  Convert to MapLibre CameraOptions
+const cameraOpts = map.calculateCameraOptionsFromCameraLngLatAltRotation(
+  lngLat,
+  altitude,
+  bearing,
+  pitch,
+  roll
+);
+
+// 3️⃣  Move the map – choose the animation you prefer
+map.jumpTo(cameraOpts);               // instant
+// or
+map.easeTo(cameraOpts, {duration: 2000}); // smooth
+// or
+map.flyTo(cameraOpts, {speed: 1.2});        // “fly” animation
+```
+
+That single block replaces any `setFreeCameraOptions` call.
+
+---
+
+## 4. Full example – from Mapbox to MapLibre
+
+Below is a **minimal, copy-and-paste-ready** example that shows the whole map creation plus the camera positioning. Replace the style URL with whatever you need.
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – free-camera migration</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    // 👉 any non-Mapbox style works; this one is public and free
+    style: 'https://tiles.openfreemap.org/styles/liberty',
+    center: [-122.42, 37.78],   // fallback centre while the style loads
+    zoom: 12
+  });
+
+  // Wait until the style (and sources) are ready before moving the camera
+  map.once('load', () => {
+    // ---- FREE-CAMERA REPLACEMENT ----
+    const lngLat   = [-122.42, 37.78];
+    const altitude = 500;          // metres above ground
+    const bearing  = 45;
+    const pitch    = 60;
+    const roll     = 0;
+
+    const camOpts = map.calculateCameraOptionsFromCameraLngLatAltRotation(
+      lngLat,
+      altitude,
+      bearing,
+      pitch,
+      roll
+    );
+
+    // Choose the animation you like
+    map.jumpTo(camOpts);               // instant
+    // map.easeTo({ ...camOpts, duration: 1500 });
+    // map.flyTo({ ...camOpts, speed: 1.2 });
+  });
+</script>
+</body>
+</html>
+```
+
+**What changed compared to the original Mapbox code?**
+
+| Mapbox GL JS v2 | MapLibre GL JS |
+|-----------------|----------------|
+| `mapboxgl.accessToken = 'pk.…'` | **Removed** |
+| `new mapboxgl.Map({ style: 'mapbox://styles/…' })` | `new maplibregl.Map({ style: 'https://tiles.openfreemap.org/styles/liberty' })` |
+| `map.setFreeCameraOptions({position: [lng, lat, alt], bearing, pitch, roll})` | `const opts = map.calculateCameraOptionsFromCameraLngLatAltRotation([lng, lat], alt, bearing, pitch, roll); map.jumpTo(opts);` |
+
+---
+
+## 5. Common pitfalls & how to debug them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `map.calculateCameraOptionsFromCameraLngLatAltRotation is not a function` | Using a MapLibre version **< 5.0.0**. The utility was added in v5. | Upgrade to at least **v5.0.0** (`npm install maplibre-gl@^5`). |
+| Map jumps to the right lat/lng but stays at ground level (no altitude) | You passed `altitude` but didn’t spread the returned object correctly, or you used `jumpTo` with only `{center, zoom}`. | Ensure you pass the **full object** returned by the utility (`camOpts`). |
+| The map “tilts” but the view looks flat, or the pitch is ignored | `pitch` > 60° may be clamped by the style’s `sky`/`terrain` settings, or you are using a raster style that doesn’t support 3-D. | Use a **vector style with terrain** (`setTerrain`) and a `sky` layer, or lower the pitch. |
+| `map.setSky` throws “method not found” | Using a MapLibre version **< 4.5.0** (sky was added in v4.5). | Upgrade to v4.5+ (or v6, the current stable). |
+| `map.jumpTo` works but the map still looks 2-D | No terrain source (`setTerrain`) and no `sky` layer → altitude has no visual effect. | Add a terrain source (`map.setTerrain({source: 'terrain-source', exaggeration: 1})`) and a `sky` layer (see the **Terrain & Sky** skill). |
+
+---
+
+## 6. Optional: Adding terrain & sky (so altitude really shows)
+
+If you want the altitude to affect the view (e.g., a “fly-over” of hills), you need a **terrain source** and a **sky** layer. Here’s a quick add-on to the example above:
+
+```js
+// After map.load (or inside the same load handler)
+map.addSource('terrain', {
+  type: 'raster-dem',
+  url: 'https://tiles.openfreemap.org/terrain/{z}/{x}/{y}.png', // example DEM source
+  tileSize: 256,
+  maxzoom: 14
+});
+
+map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
+
+map.addLayer({
+  id: 'sky',
+  type: 'sky',
+  paint: {
+    'sky-type': 'atmosphere',
+    'sky-atmosphere-sun': [0.0, 0.0],
+    'sky-atmosphere-sun-intensity': 15
+  }
+});
+```
+
+Now the `altitude` you pass to `calculateCameraOptionsFromCameraLngLatAltRotation` will lift the camera above the terrain, and the `sky` layer will give a proper horizon.
+
+---
+
+## 7. Plugins you might have used for the free-camera UI
+
+| Mapbox plugin | MapLibre equivalent / notes |
+|---------------|-----------------------------|
+| `@mapbox/mapbox-gl-draw` | Works unchanged **if you only need drawing**. You may need to adjust CSS class prefixes (`.mapboxgl-ctrl-draw`) to `.maplibregl-ctrl-draw`. |
+| `mapbox-gl-compare` | Replace with `@maplibre/maplibre-gl-compare`. |
+| `@mapbox/mapbox-gl-geocoder` | Use `@maplibre/maplibre-gl-geocoder` (pair it with Nominatim, Photon, or MapTiler Geocoding). |
+| `@mapbox/mapbox-gl-directions` | Use `@maplibre/maplibre-gl-directions` (works with any OSRM-compatible routing service). |
+| Any plugin that internally calls `setFreeCameraOptions` | **None** of the official Mapbox plugins use the free-camera API, but a custom UI could. Replace the call with the utility pattern shown above. |
+
+If you have a plugin that you’re not sure about, let me know its name and I can give a definitive “works / needs change / replace” verdict.
+
+---
+
+## 8. Checklist – “Did I do something wrong?”  
+
+1. **Package & import** – ✅ `maplib",PASS,1.00,,All assertions passed,

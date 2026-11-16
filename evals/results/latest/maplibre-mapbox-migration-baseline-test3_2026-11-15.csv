@@ -1,0 +1,172 @@
+Description,skillFile,injectSkill,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+anti-pattern — assuming Mapbox v2 features work in MapLibre,skills/maplibre-mapbox-migration/SKILL.md,false,"I was using Mapbox GL JS v2 in my app, including placing the camera at a given longitude, latitude and altitude. After migrating to MapLibre, that code is broken. Did I do something wrong in the migration?
+","## TL;DR  
+MapLibre is a **v1-branch** of Mapbox GL JS.  
+The “camera” API that lets you pass an **`altitude`** (meters above the ground) was added in Mapbox GL JS v2 and has **never been implemented in MapLibre**.  
+So after the migration the property is simply ignored, which is why the map “breaks” (or just stays at the default zoom).
+
+To get the same visual result you have to:
+
+1. **Drop the `altitude` field** – MapLibre only understands `center`, `zoom`, `pitch`, `bearing`, and `padding`.
+2. **Convert the altitude you used in v2 to a zoom level** (or vice-versa) using the Mercator-scale formula.
+3. Use the standard view-setting methods (`new maplibregl.Map({center, zoom, …})`, `map.flyTo()`, `map.jumpTo()`, …).
+
+Below is a complete guide, including the math, a ready-to-copy migration snippet, and a few gotchas you might run into.
+
+---
+
+## 1. What changed between the two libraries?
+
+| Feature | Mapbox GL JS v2 | MapLibre (v1-branch) |
+|---------|----------------|----------------------|
+| **Free-camera API (`setFreeCameraOptions`, `camera` option)** | ✅ Supports `position: {center, altitude, bearing, pitch}` | ❌ Not implemented |
+| **`altitude` (meters above ground)** | ✅ Part of the free-camera model | ❌ Ignored – only `zoom` is used |
+| **Terrain & 3-D** | ✅ Works with `terrain` source + free-camera | ✅ Works with `terrain` source **but** you still control the view with `zoom` (no true altitude) |
+| **Map options** | `camera` can be passed at construction | Only `center`, `zoom`, `pitch`, `bearing`, `padding` are accepted |
+
+> **Bottom line:** MapLibre can display 3-D terrain, but you control *how far* you are from the ground with **zoom**, not with an explicit altitude value.
+
+---
+
+## 2. Converting altitude ↔️ zoom
+
+The relationship between altitude (in metres) and zoom level is derived from the Web-Mercator projection:
+
+\[
+\text{scale} = \frac{2^{\text{zoom}}}{\text{world\_size\_in\_pixels}} = \frac{2^{\text{zoom}}}{256}
+\]
+
+\[
+\text{groundResolution} = \frac{\cos(\phi) \times 2\pi R}{256 \times 2^{\text{zoom}}}
+\]
+
+where  
+
+* \(\phi\) = latitude (radians)  
+* \(R = 6 378 137\) m (Earth’s radius)  
+
+Altitude is essentially the distance from the camera to the ground measured **along the line of sight**. For a nadir view (pitch = 0) the simple approximation used by Mapbox is:
+
+\[
+\text{altitude} \approx \frac{\cos(\phi) \times 2\pi R}{256 \times 2^{\text{zoom}}}
+\]
+
+Re-arranged to solve for **zoom**:
+
+\[
+\boxed{\text{zoom} = \log_2\!\Bigl(\frac{\cos(\phi) \times 2\pi R}{256 \times \text{altitude}}\Bigr)}
+\]
+
+> **Note:** This formula assumes a *straight-down* view (pitch = 0). If you tilt the camera (pitch > 0) the apparent altitude changes, but MapLibre still only uses `zoom`. In practice you’ll usually keep the same pitch you had in the v2 code and just recompute the zoom.
+
+### Helper functions (plain JavaScript)
+
+```js
+// Earth radius in metres (WGS-84)
+const EARTH_RADIUS = 6378137;
+
+// Convert altitude (m) → zoom (number)
+function altitudeToZoom(altitude, latitude) {
+  const phi = latitude * Math.PI / 180; // rad
+  const numerator = Math.cos(phi) * 2 * Math.PI * EARTH_RADIUS;
+  const zoom = Math.log2(numerator / (256 * altitude));
+  return zoom;
+}
+
+// Convert zoom → altitude (m) – handy for debugging
+function zoomToAltitude(zoom, latitude) {
+  const phi = latitude * Math.PI / 180;
+  const altitude = Math.cos(phi) * 2 * Math.PI * EARTH_RADIUS / (256 * Math.pow(2, zoom));
+  return altitude;
+}
+```
+
+---
+
+## 3. Migration recipe
+
+### 3.1. Original Mapbox GL JS v2 snippet (simplified)
+
+```js
+const map = new mapboxgl.Map({
+  container: 'map',
+  style: 'mapbox://styles/your/style',
+  camera: {
+    center: [12.4924, 41.8902],   // lon, lat (Rome)
+    altitude: 500,                // metres above ground
+    bearing: 30,
+    pitch: 45
+  }
+});
+```
+
+### 3.2. Equivalent MapLibre code
+
+```js
+// 1️⃣ Compute the zoom that corresponds to the old altitude
+const latitude  = 41.8902;
+const altitude  = 500;               // metres (same value you used before)
+const zoomLevel = altitudeToZoom(altitude, latitude);
+
+// 2️⃣ Build the MapLibre map – note the *absence* of `camera`
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://demotiles.maplibre.org/style.json', // or your own style URL
+  center: [12.4924, latitude],
+  zoom: zoomLevel,
+  bearing: 30,
+  pitch: 45,
+  // optional: preserve the same padding you had before
+  // padding: {top: 0, bottom: 0, left: 0, right: 0}
+});
+
+// 3️⃣ If you need to change the view later, use the same conversion:
+function setView({center, altitude, bearing, pitch}) {
+  const newZoom = altitudeToZoom(altitude, center[1]);
+  map.easeTo({
+    center,
+    zoom: newZoom,
+    bearing,
+    pitch
+  });
+}
+```
+
+That’s it – the map will appear at roughly the same “height” you had in the v2 version.
+
+---
+
+## 4. Common pitfalls & how to avoid them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **Map stays at world-zoom (z ≈ 0)** | You passed `camera: { … }` to the MapLibre constructor. MapLibre silently drops the whole object because it’s not a recognized option. | Remove `camera` from the constructor; use `center` + `zoom` (or `flyTo`/`jumpTo`). |
+| **Pitch or bearing ignored** | You set them inside `camera` instead of top-level options. | Move `pitch` and `bearing` to the root of the options object (or call `map.easeTo({pitch, bearing})`). |
+| **Altitude changes after a `flyTo`** | You called `map.flyTo({center, altitude, …})`. MapLibre’s `flyTo` does **not** accept `altitude`. | Replace `altitude` with a pre-computed `zoom`. |
+| **Terrain looks “flat” after migration** | You kept the old `terrain` source but forgot to add the `terrain` property to the style, or you’re using a style that disables the `terrain` layer. | Ensure your style JSON contains a `terrain` source and that the `terrain` property is set (`map.setTerrain({source: 'mapbox-dem', exaggeration: 1})`). |
+| **Zoom jumps unexpectedly when you tilt the map** | You’re using a *fixed* zoom derived from altitude at pitch = 0, but then you change the pitch. The visual distance to the ground changes, making the view feel “closer” or “farther”. | Either keep the pitch constant, or recompute the zoom each time you change the pitch (use the same formula, but multiply the altitude by `1 / Math.cos(pitchRad)`). |
+
+---
+
+## 5. Optional: Emulating a true free-camera (if you really need altitude)
+
+If your app truly needs a **free-camera** that can move up/down while keeping the same pitch (e.g., a flight simulator), you have two practical options:
+
+1. **Wrap MapLibre in a three-js scene** – render the map as a texture on a plane and let three-js handle the camera. This gives you full 3-D freedom but adds a lot of complexity.
+2. **Patch MapLibre** – the upstream MapLibre repo has an open issue *“Add free-camera support”* (see https://github.com/maplibre/maplibre-gl-js/issues/1234). You can fork the library and implement `setFreeCameraOptions` yourself, but that’s a non-trivial engineering effort.
+
+For most apps that only needed altitude to *position* the map initially, the **zoom-conversion** approach above is sufficient and far simpler.
+
+---
+
+## 6. Quick checklist for a smooth migration
+
+| ✅ | Item |
+|---|------|
+| **✔️** | Remove any `camera` objects from `new maplibregl.Map({ … })`. |
+| **✔️** | Convert every `altitude` → `zoom` using `altitudeToZoom`. |
+| **✔️** | Pass `center`, `zoom`, `bearing`, `pitch` as **top-level** options. |
+| **✔️** | Replace `map.flyTo({…, altitude})`, `map.jumpTo({…, altitude})`, `map.easeTo({…, altitude})` with the same calls **without** `altitude` (use `zoom`). |
+| **✔️** | Verify that any terrain source is still referenced in your style JSON (`terrain: {source: 'dem', exaggeration: 1}`) |
+| **✔️** | Test on a few different latitudes – the altitude-to-zoom conversion depends on latitude, so a single hard-coded zoom may look right at one place and too close/far at another. |
+| **✔️** | If you used `setFreeCameraOptions` anywhere, replace",FAIL,0.10,,"The output fails to meet several criteria: 1) It fails to explicitly mention that 'getFreeCameraOptions' is absent. 2) It incorrectly identifies MapLibre as a 'v1-branch' of Mapbox GL JS (it is a fork of v1.13, not a branch). 3) It suggests that the lack of the API is due to it 'never being implemented' rather than the historical context of the fork. 4) It fails to suggest the requested MapLibre alternatives for camera control (like calculateCameraOptionsFromCameraLngLatAltRotation). 5) It suggests patching the library or wrapping it in three.js instead of identifying the native MapLibre CameraOptions/flyTo/easeTo methods that provide the standard replacement for those tasks.",
