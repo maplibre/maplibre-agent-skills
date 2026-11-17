@@ -2,7 +2,7 @@
 name: maplibre-tile-sources
 description: Choosing what form your data needs for MapLibre GL JS — GeoJSON read straight from a file versus vector or raster tiles, the feature-count and file-size thresholds where each stops working, how a basemap and your own data combine as separate sources, and what a Leaflet app needs to draw vector tiles. Use when deciding which source type a dataset needs, not when hosting or configuring one.
 metadata:
-  status: verified
+  status: provisional
 ---
 
 # MapLibre Tile Sources
