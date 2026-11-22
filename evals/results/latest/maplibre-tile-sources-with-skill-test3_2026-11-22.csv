@@ -1,0 +1,896 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","**Short answer – you don’t need a “single-source” tileset to get good performance.**  
+MapLibre can request any number of sources in parallel, and a style that mixes a hosted basemap (roads, water, labels) with your own delivery-zone polygons is the standard, simplest, and most maintainable approach.
+
+Below is the recommended workflow, followed by the tools you would use **only if you really have a narrow offline-only use-case** that forces you to ship one combined tileset.
+
+---
+
+## 1️⃣ Why the “one source” idea isn’t a performance win
+
+| Myth | Reality |
+|------|----------|
+| Fewer HTTP requests → faster map | MapLibre opens **all declared sources concurrently**. The overhead of an extra request is negligible compared with the cost of downloading the tile data itself. |
+| One source = simpler style | Styles already support multiple sources; you can control draw order, label placement, and layer visibility per-source without any penalty. |
+| One source = easier caching | Each source can be cached independently (CDN, HTTP 2/3 multiplexing, Service Workers). Merging them forces you to rebuild the whole thing whenever *any* piece changes. |
+| One source = less code | Adding a second source is just a few lines of JSON; the maintenance cost is far lower than maintaining a custom combined tileset pipeline. |
+
+**The industry pattern** – a *basemap* source (usually a vector tile service such as OpenStreetMap-derived tiles from MapTiler, OpenFreeMap, or your own Planetiler build) **plus** a separate source for your own data (GeoJSON or a small vector-tile layer) – works for everything from a handful of delivery zones to a global fleet-tracking app.
+
+---
+
+## 2️⃣ Recommended “two-source” architecture
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://example.com/tiles/basemap.json""   // TileJSON for OSM roads, water, labels
+    },
+    ""delivery-zones"": {
+      ""type"": ""geojson"",
+      ""data"": ""https://example.com/data/delivery-zones.geojson""
+    }
+  },
+  ""layers"": [
+    // 1️⃣ Insert your delivery-zone layer *before* the first symbol layer
+    //    so your polygons appear under road/label symbols.
+    {
+      ""id"": ""delivery-zones-fill"",
+      ""type"": ""fill"",
+      ""source"": ""delivery-zones"",
+      ""paint"": { ""fill-color"": ""#ff8800"", ""fill-opacity"": 0.3 }
+    },
+    {
+      ""id"": ""delivery-zones-outline"",
+      ""type"": ""line"",
+      ""source"": ""delivery-zones"",
+      ""paint"": { ""line-color"": ""#ff4400"", ""line-width"": 2 }
+    },
+
+    // 2️⃣ All basemap layers come from the vector source.
+    //    You can keep the original style’s layer order or copy only the layers you need.
+    //    Example (simplified):
+    { ""id"": ""water"", ""type"": ""fill"", ""source"": ""basemap"", ""source-layer"": ""water"", ""paint"": { ""fill-color"": ""#a0c8f0"" } },
+    { ""id"": ""road-primary"", ""type"": ""line"", ""source"": ""basemap"", ""source-layer"": ""road"", ""paint"": { ""line-color"": ""#ffffff"", ""line-width"": 2 } },
+    { ""id"": ""place-labels"", ""type"": ""symbol"", ""source"": ""basemap"", ""source-layer"": ""place"", ""layout"": { ""text-field"": ""{name}"" } }
+    // …etc.
+  ]
+}
+```
+
+**Key points**
+
+* **Layer order** – Insert your delivery-zone layers *before* the first symbol layer (or wherever you want them in the stack). This keeps road and place labels readable.
+* **Separate source URLs** – The basemap can be a public TileJSON (or a PMTiles URL via the `maplibre-pmtiles-patterns` skill). Your polygons stay in a lightweight GeoJSON file; MapLibre will automatically convert them to a temporary in-memory vector layer.
+* **No tile server needed for the polygons** – As long as they stay under the GeoJSON thresholds (≈ 2 MB / 5 k features for instant load, up to ~20 MB if you accept a few seconds of parsing), you can serve them directly from a static web host or CDN.
+
+---
+
+## 3️⃣ When a *single combined tileset* *is* justified
+
+Only consider merging OSM data with your polygons into one vector-tile source if you have a **hard offline / air-gapped requirement** where the client cannot make any network request after the initial bundle is delivered (e.g., a field-device app shipped on a USB stick).
+
+If you fall into that narrow scenario, the pipeline looks roughly like this:
+
+| Step | Tool | What it does | Docs |
+|------|------|--------------|------|
+| **Extract OSM** | **`osmconvert` / `osmium-tool`** | Pull the region you need (e.g., a country or state) from a planet file. | <https://osmcode.org/osmium-tool/> |
+| **Add your polygons** | **`ogr2ogr`** (or any GDAL tool) | Convert your delivery-zone GeoJSON/FlatGeobuf into an OSM-compatible `.osm.pbf` (or keep as separate GeoJSON that tippecanoe can read). | <https://gdal.org/programs/ogr2ogr.html> |
+| **Merge** | **`osmconvert`** (or `osmium merge`) | Combine the OSM extract and your custom data into a single `.osm.pbf`. | <https://wiki.openstreetmap.org/wiki/Osmconvert> |
+| **Tile generation** | **`tippecanoe`** (for small-to-medium datasets) **or** **`Planetiler`** (for larger, more complex pipelines) | Convert the merged OSM + custom data into vector tiles (MBTiles or PMTiles). Tippecanoe is great for < 10 M features; Planetiler scales to the whole planet and lets you write custom attribute logic. | tippecanoe: <https://github.com/felt/tippecanoe>  <br> Planetiler: <https://github.com/onthegomap/planetiler> |
+| **Package** | **`mbutil`** or **`pmtiles`** CLI | Export the tiles to a single archive (MBTiles for offline use, PMTiles for streaming from a static file). | <https://github.com/mapbox/mbutil>  <br> <https://github.com/protomaps/PMTiles> |
+| **Serve (if needed)** | **`pmtiles-server`** (static file) or **`tileserver-gl`** (if you later want HTTP) | Provide the tiles to MapLibre via a `url` like `pmtiles://path/to/combined.pmtiles`. | <https://github.com/protomaps/PMTiles/tree/main/server> |
+
+**Important caveats**
+
+* **Re-building cost** – Any change to your delivery-zone polygons forces a full re-run of the whole pipeline (OSM extract → merge → tile generation). For a dynamic dataset this is impractical.
+* **Attribution & licensing** – By redistributing OSM data you inherit its **ODbL** attribution requirements. You must include the appropriate OSM credit and make the source data available under the same license.
+* **Loss of style flexibility** – Once the data is baked into tiles, you cannot change the basemap’s visual design without regenerating the tiles. With a two-source style you can swap the basemap provider or theme instantly.
+
+---
+
+## 4️⃣ TL;DR – What you should do today
+
+1. **Pick a ready-made OSM vector basemap** (MapTiler, OpenFreeMap, Planetiler-generated, etc.) and use its TileJSON URL as the `basemap` source.
+2. **Serve your delivery-zone polygons as GeoJSON** (or, if they exceed the GeoJSON thresholds, generate a tiny vector-tile source just for them with `tippecanoe`).
+3. Add both sources to a single style JSON, ordering the layers so your polygons sit under the basemap’s label layers.
+4. Deploy the style (static JSON) and the two source URLs to your CDN or static host. No custom tile-generation pipeline is required.
+
+Only if you truly need an offline-only, single-file bundle should you invest the effort described in section 3, and even then you’ll still use the same tools (osmconvert/osmium → tippecanoe/Planetiler → MBTiles/PMTiles).
+
+---
+
+### Quick “starter” code snippet (GeoJSON overlay)
+
+```javascript
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      basemap: {
+        type: 'vector',
+        url: 'https://tiles.example.com/basemap.json'   // OSM vector tiles
+      },
+      deliveryZones: {
+        type: 'geojson',
+        data: '/data/delivery-zones.geojson'            // your polygons
+      }
+    },
+    layers: [
+      // Insert before first symbol layer (you can programmatically find it)
+      {
+        id: 'zones-fill',
+        type: 'fill',
+        source: 'deliveryZones',
+        paint: { 'fill-color': '#ff8800', 'fill-opacity': 0.4 }
+      },
+      {
+        id: 'zones-outline',
+        type: 'line',
+        source: 'deliveryZones',
+        paint: { 'line-color': '#ff4400', 'line-width': 2 }
+      },
+      // ... copy the rest of the basemap layers from the original style
+    ]
+  },
+  center: [-122.4, 37.8],
+  zoom: 10
+});
+```
+
+That’s all you need for a production-ready map that hits **two** sources, stays fast, and remains easy to update.
+
+---
+
+**References**
+
+* MapLibre Style Specification – sources & layers: <https://maplibre.org/maplibre-style-spec/sources/>
+* tippecanoe docs: <https://github.com/felt/tippecanoe>
+* Planetiler docs: <https://github.com/onthegomap/planetiler>
+* OSM data extraction tools: osmconvert, osmium-tool
+* PMTiles format & server: <https://github.com/protomaps/PMTiles>
+* “One source vs. two source” discussion – see the **maplibre-tile-sources** skill (this document) for the reasoning behind the two-source pattern.",PASS,1.00,,All assertions passed,
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","**Short answer**
+
+> You don’t need a single tileset to get good performance.  
+> The usual, and far-simpler, pattern is **one vector-tile source for the basemap (roads, water, labels, etc.)** plus **a second source for your delivery-zone polygons** (GeoJSON or your own vector tiles).  
+> MapLibre will request both sources in parallel, and there is no rendering penalty for having two sources.
+
+Below is a complete answer that
+
+1. **Explains why the “one source” idea is usually the wrong choice** (licensing, rebuild cost, loss of flexibility, no performance gain).  
+2. **Shows the recommended two-source pattern** and how to wire it in a style.  
+3. **Provides a concise “if you really must ship a single offline tileset” pipeline** (OSM extract → merge → tile generation) with the right tools, but without a step-by-step build script (the skill’s scope is source-type selection, not full tile-pipeline code).  
+4. **Points you at the relevant tools and docs** for both approaches.
+
+---
+
+## 1️⃣ Why “one source = faster” is a misconception
+
+| Reason | What it means for you |
+|--------|-----------------------|
+| **No per-source rendering cost** – MapLibre draws layers in the order you specify, but the cost is dominated by the number of tiles fetched and the amount of geometry in those tiles, not by how many *different* sources those tiles come from. | Adding a second source (e.g., a basemap + your polygons) does **not** double the CPU or GPU load; each source only sends the tiles that intersect the current viewport. |
+| **Regeneration overhead** – If you bake your own polygons into the same tileset that contains the whole OSM basemap, every time a polygon changes you must rebuild the entire basemap tileset (often millions of tiles). | With a separate source you only rebuild the tiny tile set that contains your delivery zones. |
+| **Loss of basemap flexibility** – A combined tileset locks you into a single style and prevents you from swapping to a newer basemap (e.g., a newer OpenStreetMap extract, a different provider, or a different visual theme). | Keeping the basemap separate lets you switch providers or styles without touching your own data. |
+| **Attribution & licensing** – OSM data carries a CC-BY-SA license. If you redistribute a derived tileset that mixes OSM with your own data, you become a *redistributor* and must carry the OSM attribution on every tile and obey share-alike requirements. | Using a hosted OSM basemap (e.g., from OpenFreeMap, MapTiler, or a public TileJSON) means the provider already handles attribution for you. |
+| **Network-parallelism** – Browsers open several HTTP connections in parallel, so fetching two small tile sources is usually faster than fetching one huge monolithic source. | Two well-served CDNs (one for the basemap, one for your tiles) will often be faster than a single, larger CDN endpoint. |
+
+**Bottom line:** The “single source” idea does not give you any measurable performance benefit, but it adds operational and legal complexity. The industry-standard pattern is **basemap + overlay**.
+
+---
+
+## 2️⃣ Recommended pattern: two sources in one style
+
+### 2.1 Basemap source (vector)
+
+```json
+{
+  ""id"": ""osm-basemap"",
+  ""type"": ""vector"",
+  ""url"": ""https://tiles.openfreemap.org/tiles.json""   // any TileJSON that serves OSM vector tiles
+}
+```
+
+*You can also self-host an OSM extract with Planetiler, TileServer-GL, or any TileJSON-compatible service if you need a private basemap.*
+
+### 2.2 Delivery-zone source (GeoJSON or vector)
+
+**Option A – Small-to-medium polygon set (< 5 000 features, < 2 MB)**  
+```js
+map.addSource('delivery-zones', {
+  type: 'geojson',
+  data: '/data/delivery-zones.geojson'   // static file or dynamic endpoint
+});
+```
+
+**Option B – Larger polygon set (tens of thousands of polygons)**  
+Generate a tiny vector-tile set just for your zones (see §3). Then add it as a vector source:
+
+```json
+{
+  ""id"": ""delivery-zones"",
+  ""type"": ""vector"",
+  ""url"": ""https://my.cdn.com/delivery-zones/tiles.json""
+}
+```
+
+### 2.3 Layer ordering
+
+```json
+{
+  ""layers"": [
+    // 1️⃣ Basemap background (land, water)
+    { ""id"": ""land"", ""type"": ""fill"", ""source"": ""osm-basemap"", ""source-layer"": ""landcover"", ... },
+
+    // 2️⃣ Basemap roads, water, etc.
+    { ""id"": ""roads"", ""type"": ""line"", ""source"": ""osm-basemap"", ""source-layer"": ""transportation"", ... },
+
+    // 3️⃣ **Insert your polygons *before* the first symbol layer** so labels stay on top
+    { ""id"": ""delivery-zones"", ""type"": ""fill"", ""source"": ""delivery-zones"", ""source-layer"": ""zones"", ""paint"": { ""fill-color"": ""#ff8800"", ""fill-opacity"": 0.4 } },
+
+    // 4️⃣ Basemap labels (place names, road shields)
+    { ""id"": ""place-labels"", ""type"": ""symbol"", ""source"": ""osm-basemap"", ""source-layer"": ""place"", ... }
+  ]
+}
+```
+
+*Tip:* Use the **`maplibre-source-wiring`** skill to find the first symbol layer (`map.getStyle().layers.find(l => l.type === 'symbol')`) and insert your overlay just before it.
+
+### 2.4 What you get
+
+| Feature | Source | Benefits |
+|---------|--------|----------|
+| Roads, water, land, labels | `osm-basemap` (vector) | Crisp, zoom-dependent styling; easy to swap provider |
+| Delivery-zone polygons | `delivery-zones` (GeoJSON or vector) | Full client-side interactivity; rebuild only when zones change |
+| Network traffic | Two parallel tile streams | Small, cache-friendly requests; no extra latency |
+| Attribution | Basemap provider handles OSM attribution; you add your own | No share-alike complications for your data |
+
+---
+
+## 3️⃣ If you truly need a **single offline tileset** (e.g., an air-gapped device)
+
+> *Only use this when you cannot guarantee any network connectivity at runtime.*  
+> The steps below give you the **pipeline** and the **tools** you should use, but they stop short of a full command-by-command script (that belongs to a “tile-pipeline” skill).
+
+### 3.1 Data preparation
+
+| Step | Tool | What it does |
+|------|------|--------------|
+| **Extract OSM** for your region (or the whole planet) | `osmconvert` / `osmium` / `planetiler` | Produces an `.osm.pbf` limited to the area you need (e.g., a country or state). |
+| **Clip to your area of interest** (optional) | `osmium extract` or `planetiler --bbox` | Reduces the size of the OSM source you’ll tile. |
+| **Convert your delivery-zone polygons to GeoJSON** (if not already) | any GIS tool (QGIS, GDAL `ogr2ogr`) | Ensure they are in WGS-84 (EPSG:4326). |
+| **Merge OSM and your polygons** | `ogr2ogr` (GeoJSON → GeoPackage) + `tippecanoe` **or** `planetiler` with a custom data source plugin | The merge is performed *before* tiling, not after. Tippecanoe can read multiple GeoJSON/GeoPackage inputs and treat them as separate layers. Planetiler can ingest OSM + a custom GeoJSON layer via its `FeatureProcessor`. |
+
+### 3.2 Tile generation
+
+| Size of final dataset | Recommended generator |
+|-----------------------|-----------------------|
+| **< 5 000 km², < 10 M features** | **tippecanoe** – fast, simple CLI. |
+| **Regional to global, > 10 M features** | **Planetiler** – Java/Kotlin, scalable, supports custom attribute processing. |
+
+#### tippecanoe example (small-to-medium)
+
+```bash
+# 1️⃣ Merge OSM (already in GeoJSON) + delivery zones into one GeoJSON
+ogr2ogr -f GeoJSON merged.geojson osm.geojson delivery-zones.geojson
+
+# 2️⃣ Generate vector tiles (MBTiles)
+tippecanoe \
+  --output=combined.mbtiles \
+  --layer=osm --layer=delivery_zones \
+  --drop-densest-as-needed \
+  --maximum-zoom=14 \
+  --minimum-zoom=5 \
+  merged.geojson
+```
+
+*Key flags*  
+- `--layer=` lets you give each input its own layer name (so you can style them separately).  
+- `--drop-densest-as-needed` keeps the MBTiles under a target size by dropping detail where it would be too dense.  
+- Adjust `--maximum-zoom` to the highest zoom you need for your app.
+
+#### Planetiler example (large / global)
+
+```bash
+# Clone and build Planetiler
+git clone https://github.com/onthegomap/planetiler.git
+cd planetiler
+./gradlew shadowJar   # produces build/libs/planetiler.jar
+
+# Run with OSM PBF + your GeoJSON
+java -jar build/libs/planetiler.jar \
+  --osm-pbf=/data/region.osm.pbf \
+  --geojson=/data/delivery-zones.geojson \
+  --output=/tiles/combined.mbtiles \
+  --max-zoom=14 \
+  --min-zoom=5 \
+  --layer=osm \
+  --layer=delivery_zones
+```
+
+Planetiler lets you write a small **FeatureProcessor** (Kotlin/Java) if you need to rename properties, filter features, or compute extra attributes before tiling.
+
+### 3.3 Hosting the single MBTiles file
+
+| Option | When to use |
+|--------|-------------|
+| **PMTiles** (single-file HTTP range requests) | Offline or low-resource servers; works with MapLibre via `map.addSource({type:'vector', url:'pmtiles://...'});` |
+| **TileServer-GL** (or `tileserver-gl-light`) | Simple HTTP server that serves the MBTiles as a TileJSON endpoint. |
+| **Static file + `Range` support** (e.g., Nginx `ngx_http_slice_module`) | If you already have a CDN that can serve range requests. |
+
+**Example with PMTiles**
+
+```js
+import { PMTiles } from ""pmtiles"";
+const protocol = new PMTiles(""https://my.cdn.com/combined.pmtiles"");
+map.addSource(""combined"", {
+  type: ""vector"",
+  url: ""pmtiles://combined.pmtiles""
+});
+```
+
+### 3.4 Styling the combined tileset
+
+Because you gave each input its own layer name (`osm`, `delivery_zones`), you can style them independently in the same style JSON:
+
+```json
+{
+  ""id"": ""roads"",
+  ""type"": ""line"",
+  ""source"": ""combined"",
+  ""source-layer"": ""osm"",
+  ""filter"": [""=="", ""$type"", ""LineString""],
+  ""paint"": { ""line-color"": ""#777"", ""line-width"": 1 }
+},
+{
+  ""id"": ""delivery-zones"",
+  ""type"": ""fill"",
+  ""source"": ""combined"",
+  ""source-layer"": ""delivery_zones"",
+  ""paint"": { ""fill-color"": ""#ff8800"", ""fill-opacity"": 0.4 }
+}
+```
+
+### 3.5 Caveats for the single-tileset approach
+
+| Issue | Impact |
+|-------|--------|
+| **Re-building** – Any change to your polygons forces a full rebuild of the whole MBTiles (potentially millions of tiles). | Use a separate source unless you truly need offline-only delivery. |
+| **Attribution** – You must embed OSM attribution *inside* the tileset (e.g., a `metadata` field) and display it in your UI. | Failure to do so violates the OSM license. |
+| **File size** – A global OSM + custom data MBTiles can be several gigabytes; loading it over a slow network is impractical. | PMTiles mitigates this by allowing range requests, but the initial download is still large. |
+| **Style inflexibility** – Changing the basemap style (e.g., road colors) requires a new tile build. | Separate sources let you swap styles instantly. |
+
+---
+
+## 4️⃣ TL;DR – What you should do right now
+
+1. **Pick a hosted OSM vector basemap** (OpenFreeMap, MapTiler, or your own Planetiler instance). Add it as a `vector` source.  
+2. **Add your delivery-zone polygons** as a `geojson` source if they are < 5 000 features / < 2 MB, otherwise generate a tiny vector-tile set for them (tippecanoe → MBTiles → PMTiles).  
+3. Insert your polygon layer **before the first symbol layer**",PASS,1.00,,All assertions passed,
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","**Short answer – you don’t need a “single-source” tileset.**  
+MapLibre can request any number of sources in parallel, and there is no rendering penalty for having a basemap source plus a separate source for your delivery-zone polygons. The usual, recommended pattern is:
+
+1. **Use a hosted (or self-hosted) vector-tile basemap** that already contains roads, water, land, and labels.  
+2. **Add your own delivery-zone data as a second source** – either a small GeoJSON (if it stays under the GeoJSON thresholds) or, for larger or frequently-updated data, a dedicated vector-tile source that you generate yourself.
+
+That approach gives you:
+
+* **Zero extra build work** when you add, edit, or delete a polygon – you only need to update the delivery-zone source.  
+* **Full control over styling** of your polygons without touching the basemap.  
+* **Correct attribution** – you keep the basemap provider’s attribution separate from yours, which is required by most OSM-derived tile services.  
+* **Future-proofness** – you can swap the basemap for a newer style or a different provider without rebuilding anything.
+
+---
+
+## When a single combined tileset *is* truly required  
+
+The only realistic case for merging everything into one tileset is an **offline/air-gapped deployment** where the client can download a single archive and never make another network request. If you are in that situation, the pipeline looks like this:
+
+| Step | What you do | Typical tool(s) |
+|------|--------------|-----------------|
+| **1. Get an OSM extract** | Download the region you need (e.g. a country, state, or custom bounding box). | `osmconvert`, `osmfilter`, or the Geofabrik/BBBike download pages |
+| **2. Convert OSM to GeoJSON (or Parquet/FlatGeobuf)** | Keep only the layers you actually want (roads, water, land, place labels). | `osmtogeojson`, `osm2pgsql` → `ogr2ogr`, or `osmium tags-filter` |
+| **3. Merge your delivery-zone polygons** | Union your own polygon file with the OSM GeoJSON. | `ogr2ogr -append`, `geopandas` (`gdf = gdf_osm.append(gdf_zones)`), or `tippecanoe`’s `--merge` option |
+| **4. Simplify / clip** | Reduce geometry detail for higher zoom levels and optionally clip to the same bounding box. | `mapshaper -simplify`, `tippecanoe --simplify-only`, `ogr2ogr -simplify` |
+| **5. Generate vector tiles** | Turn the merged feature collection into a tiled MVT/MLT archive. | **Tippecanoe** (for GeoJSON → .mbtiles) or **Planetiler** (for OSM PBF → .mbtiles). |
+| **6. (Optional) Convert to PMTiles** | If you want a single-file, HTTP-range-request-friendly archive. | `pmtiles convert <input.mbtiles> <output.pmtiles>` |
+| **7. Host the tiles** | Serve the .mbtiles via a tile server (tileserver-gl, TileServer-PHP, or a static-file CDN that supports range requests). | `tileserver-gl`, `tileserver-php`, Cloudflare Workers, or a simple S3 bucket with CORS enabled. |
+| **8. Create a TileJSON / style** | Point MapLibre to the tile URL and expose the source-layer names you need. | Write a minimal TileJSON manually or let the tile server emit it; then reference it in your MapLibre style. |
+
+### Example tippecanoe command (GeoJSON → MBTiles)
+
+```bash
+tippecanoe \
+  --output combined.mbtiles \
+  --layer roads   --minimum-zoom=5  --maximum-zoom=14 \
+  --layer water   --minimum-zoom=5  --maximum-zoom=14 \
+  --layer landuse --minimum-zoom=5  --maximum-zoom=14 \
+  --layer labels  --minimum-zoom=5  --maximum-zoom=14 \
+  --layer delivery_zones --minimum-zoom=8 --maximum-zoom=14 \
+  --drop-densest-as-needed \
+  --simplify-only 10% \
+  merged.geojson
+```
+
+*Replace the `--layer` flags with the actual layer names you created in step 3.*
+
+### Caveats you must accept if you go this route
+
+| Issue | Why it matters |
+|-------|----------------|
+| **Regeneration cost** | Any change to your delivery-zone polygons forces a full rebuild of the entire combined tileset (including the basemap portion). |
+| **Loss of basemap flexibility** | You can’t swap to a newer basemap style or update OSM data without rebuilding the whole archive. |
+| **Attribution & licensing** | By redistributing OSM-derived tiles you become a *derivative* of OSM data and must carry the OSM attribution (and any additional provider’s attribution) in the tile metadata and on the map UI. |
+| **File size** | A combined MBTiles/PMTiles file that includes a full basemap plus your polygons will be larger than a basemap-only file plus a tiny overlay. For offline use this may be acceptable, but for online apps it wastes bandwidth. |
+| **Zoom-level tuning** | Basemap layers often have different simplification strategies than your custom polygons. Merging them forces a single simplification pipeline, which can lead to over-simplified roads or under-simplified polygons unless you carefully tune per-layer `--minimum-zoom`/`--maximum-zoom` and `--simplify` options. |
+
+---
+
+## Recommended “two-source” production workflow
+
+If you are **not** building an offline-only app (the vast majority of web maps), follow this lighter pattern:
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://{your-basemap-provider}/tiles.json""
+    },
+    ""delivery-zones"": {
+      ""type"": ""geojson"",          // or ""vector"" if you exceed ~5 000 features / 2 MB
+      ""data"": ""/data/delivery-zones.geojson""
+    }
+  },
+  ""layers"": [
+    // basemap layers (usually you just reference the provider’s style)
+    // …
+    // your overlay layer – insert before the first symbol layer to keep labels on top
+    {
+      ""id"": ""delivery-zones-fill"",
+      ""type"": ""fill"",
+      ""source"": ""delivery-zones"",
+      ""paint"": {
+        ""fill-color"": ""#ff6600"",
+        ""fill-opacity"": 0.3
+      }
+    },
+    {
+      ""id"": ""delivery-zones-outline"",
+      ""type"": ""line"",
+      ""source"": ""delivery-zones"",
+      ""paint"": {
+        ""line-color"": ""#ff6600"",
+        ""line-width"": 2
+      }
+    }
+  ]
+}
+```
+
+*If your delivery-zone data grows beyond the GeoJSON sweet spot (≈ 5 000 features or 2 MB), generate a tiny vector-tile source just for those polygons using tippecanoe (or Planetiler) and reference it with `""type"": ""vector""` and a `url`/`tiles` array. The rest of the style stays unchanged.*
+
+---
+
+## TL;DR checklist
+
+- **Do not merge basemap + your data unless you need a single offline archive.**  
+- **Use a hosted vector-tile basemap** (OpenStreetMap-derived, MapTiler, OpenFreeMap, etc.).  
+- **Add your delivery-zone polygons as a second source** – GeoJSON for small, static sets; a dedicated vector-tile source for larger or frequently-updated data.  
+- **If you must combine them:**  
+  1. Extract OSM data for the area you need.  
+  2. Convert to GeoJSON (or another supported format).  
+  3. Append your polygons.  
+  4. Simplify/clip as appropriate.  
+  5. Run `tippecanoe` (or Planetiler) to produce an MBTiles/PMTiles archive.  
+  6. Serve the tiles and reference them in a TileJSON source.  
+- **Remember the trade-offs:** rebuild cost, loss of basemap flexibility, larger file size, and attribution responsibilities.
+
+---
+
+### Further reading & tools
+
+* **Tippecanoe** – `tippecanoe` CLI, docs: <https://github.com/felt/tippecanoe>  
+* **Planetiler** – Java-based OSM → vector-tile pipeline: <https://github.com/onthegomap/planetiler>  
+* **PMTiles** – single-file, range-request-friendly format: <https://github.com/protomaps/PMTiles>  
+* **MapLibre GL JS style spec** – source & layer definitions: <https://maplibre.org/maplibre-style-spec/>  
+* **Attribution guidance** – OSM license & best-practice: <https://www.openstreetmap.org/copyright>  
+
+If you decide later that an offline single-file archive is the right fit, come back and we can dive deeper into the exact `tippecanoe`/`pmtiles` command line options for your zoom-level and layer-specific needs. Otherwise, stick with the two-source pattern – it’s simpler, cheaper to maintain, and works perfectly with MapLibre.",PASS,1.00,,All assertions passed,
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","**Short answer – you don’t need a “single-source” tileset to get good performance.**  
+MapLibre can request any number of sources in parallel, and a style that mixes a hosted basemap (roads, water, labels) with your own delivery-zone polygons is the standard, simplest, and most maintainable approach.
+
+Below is the recommended workflow, followed by the tools you would use **only if you really have a narrow offline-only use-case** that forces you to ship one combined tileset.
+
+---
+
+## 1️⃣ Why the “one source” idea isn’t a performance win
+
+| Myth | Reality |
+|------|----------|
+| Fewer HTTP requests → faster map | MapLibre opens **all declared sources concurrently**. The overhead of an extra request is negligible compared with the cost of downloading the tile data itself. |
+| One source = simpler style | Styles already support multiple sources; you can control draw order, label placement, and layer visibility per-source without any penalty. |
+| One source = easier caching | Each source can be cached independently (CDN, HTTP 2/3 multiplexing, Service Workers). Merging them forces you to rebuild the whole thing whenever *any* piece changes. |
+| One source = less code | Adding a second source is just a few lines of JSON; the maintenance cost is far lower than maintaining a custom combined tileset pipeline. |
+
+**The industry pattern** – a *basemap* source (usually a vector tile service such as OpenStreetMap-derived tiles from MapTiler, OpenFreeMap, or your own Planetiler build) **plus** a separate source for your own data (GeoJSON or a small vector-tile layer) – works for everything from a handful of delivery zones to a global fleet-tracking app.
+
+---
+
+## 2️⃣ Recommended “two-source” architecture
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://example.com/tiles/basemap.json""   // TileJSON for OSM roads, water, labels
+    },
+    ""delivery-zones"": {
+      ""type"": ""geojson"",
+      ""data"": ""https://example.com/data/delivery-zones.geojson""
+    }
+  },
+  ""layers"": [
+    // 1️⃣ Insert your delivery-zone layer *before* the first symbol layer
+    //    so your polygons appear under road/label symbols.
+    {
+      ""id"": ""delivery-zones-fill"",
+      ""type"": ""fill"",
+      ""source"": ""delivery-zones"",
+      ""paint"": { ""fill-color"": ""#ff8800"", ""fill-opacity"": 0.3 }
+    },
+    {
+      ""id"": ""delivery-zones-outline"",
+      ""type"": ""line"",
+      ""source"": ""delivery-zones"",
+      ""paint"": { ""line-color"": ""#ff4400"", ""line-width"": 2 }
+    },
+
+    // 2️⃣ All basemap layers come from the vector source.
+    //    You can keep the original style’s layer order or copy only the layers you need.
+    //    Example (simplified):
+    { ""id"": ""water"", ""type"": ""fill"", ""source"": ""basemap"", ""source-layer"": ""water"", ""paint"": { ""fill-color"": ""#a0c8f0"" } },
+    { ""id"": ""road-primary"", ""type"": ""line"", ""source"": ""basemap"", ""source-layer"": ""road"", ""paint"": { ""line-color"": ""#ffffff"", ""line-width"": 2 } },
+    { ""id"": ""place-labels"", ""type"": ""symbol"", ""source"": ""basemap"", ""source-layer"": ""place"", ""layout"": { ""text-field"": ""{name}"" } }
+    // …etc.
+  ]
+}
+```
+
+**Key points**
+
+* **Layer order** – Insert your delivery-zone layers *before* the first symbol layer (or wherever you want them in the stack). This keeps road and place labels readable.
+* **Separate source URLs** – The basemap can be a public TileJSON (or a PMTiles URL via the `maplibre-pmtiles-patterns` skill). Your polygons stay in a lightweight GeoJSON file; MapLibre will automatically convert them to a temporary in-memory vector layer.
+* **No tile server needed for the polygons** – As long as they stay under the GeoJSON thresholds (≈ 2 MB / 5 k features for instant load, up to ~20 MB if you accept a few seconds of parsing), you can serve them directly from a static web host or CDN.
+
+---
+
+## 3️⃣ When a *single combined tileset* *is* justified
+
+Only consider merging OSM data with your polygons into one vector-tile source if you have a **hard offline / air-gapped requirement** where the client cannot make any network request after the initial bundle is delivered (e.g., a field-device app shipped on a USB stick).
+
+If you fall into that narrow scenario, the pipeline looks roughly like this:
+
+| Step | Tool | What it does | Docs |
+|------|------|--------------|------|
+| **Extract OSM** | **`osmconvert` / `osmium-tool`** | Pull the region you need (e.g., a country or state) from a planet file. | <https://osmcode.org/osmium-tool/> |
+| **Add your polygons** | **`ogr2ogr`** (or any GDAL tool) | Convert your delivery-zone GeoJSON/FlatGeobuf into an OSM-compatible `.osm.pbf` (or keep as separate GeoJSON that tippecanoe can read). | <https://gdal.org/programs/ogr2ogr.html> |
+| **Merge** | **`osmconvert`** (or `osmium merge`) | Combine the OSM extract and your custom data into a single `.osm.pbf`. | <https://wiki.openstreetmap.org/wiki/Osmconvert> |
+| **Tile generation** | **`tippecanoe`** (for small-to-medium datasets) **or** **`Planetiler`** (for larger, more complex pipelines) | Convert the merged OSM + custom data into vector tiles (MBTiles or PMTiles). Tippecanoe is great for < 10 M features; Planetiler scales to the whole planet and lets you write custom attribute logic. | tippecanoe: <https://github.com/felt/tippecanoe>  <br> Planetiler: <https://github.com/onthegomap/planetiler> |
+| **Package** | **`mbutil`** or **`pmtiles`** CLI | Export the tiles to a single archive (MBTiles for offline use, PMTiles for streaming from a static file). | <https://github.com/mapbox/mbutil>  <br> <https://github.com/protomaps/PMTiles> |
+| **Serve (if needed)** | **`pmtiles-server`** (static file) or **`tileserver-gl`** (if you later want HTTP) | Provide the tiles to MapLibre via a `url` like `pmtiles://path/to/combined.pmtiles`. | <https://github.com/protomaps/PMTiles/tree/main/server> |
+
+**Important caveats**
+
+* **Re-building cost** – Any change to your delivery-zone polygons forces a full re-run of the whole pipeline (OSM extract → merge → tile generation). For a dynamic dataset this is impractical.
+* **Attribution & licensing** – By redistributing OSM data you inherit its **ODbL** attribution requirements. You must include the appropriate OSM credit and make the source data available under the same license.
+* **Loss of style flexibility** – Once the data is baked into tiles, you cannot change the basemap’s visual design without regenerating the tiles. With a two-source style you can swap the basemap provider or theme instantly.
+
+---
+
+## 4️⃣ TL;DR – What you should do today
+
+1. **Pick a ready-made OSM vector basemap** (MapTiler, OpenFreeMap, Planetiler-generated, etc.) and use its TileJSON URL as the `basemap` source.
+2. **Serve your delivery-zone polygons as GeoJSON** (or, if they exceed the GeoJSON thresholds, generate a tiny vector-tile source just for them with `tippecanoe`).
+3. Add both sources to a single style JSON, ordering the layers so your polygons sit under the basemap’s label layers.
+4. Deploy the style (static JSON) and the two source URLs to your CDN or static host. No custom tile-generation pipeline is required.
+
+Only if you truly need an offline-only, single-file bundle should you invest the effort described in section 3, and even then you’ll still use the same tools (osmconvert/osmium → tippecanoe/Planetiler → MBTiles/PMTiles).
+
+---
+
+### Quick “starter” code snippet (GeoJSON overlay)
+
+```javascript
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      basemap: {
+        type: 'vector',
+        url: 'https://tiles.example.com/basemap.json'   // OSM vector tiles
+      },
+      deliveryZones: {
+        type: 'geojson',
+        data: '/data/delivery-zones.geojson'            // your polygons
+      }
+    },
+    layers: [
+      // Insert before first symbol layer (you can programmatically find it)
+      {
+        id: 'zones-fill',
+        type: 'fill',
+        source: 'deliveryZones',
+        paint: { 'fill-color': '#ff8800', 'fill-opacity': 0.4 }
+      },
+      {
+        id: 'zones-outline',
+        type: 'line',
+        source: 'deliveryZones',
+        paint: { 'line-color': '#ff4400', 'line-width': 2 }
+      },
+      // ... copy the rest of the basemap layers from the original style
+    ]
+  },
+  center: [-122.4, 37.8],
+  zoom: 10
+});
+```
+
+That’s all you need for a production-ready map that hits **two** sources, stays fast, and remains easy to update.
+
+---
+
+**References**
+
+* MapLibre Style Specification – sources & layers: <https://maplibre.org/maplibre-style-spec/sources/>
+* tippecanoe docs: <https://github.com/felt/tippecanoe>
+* Planetiler docs: <https://github.com/onthegomap/planetiler>
+* OSM data extraction tools: osmconvert, osmium-tool
+* PMTiles format & server: <https://github.com/protomaps/PMTiles>
+* “Two-source pattern” discussion – see the *Combining source types* section of the **maplibre-tile-sources** skill you’re reading now.",PASS,1.00,,All assertions passed,
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","**Short answer – don’t merge everything into one tileset unless you have a very special offline-only requirement.**  
+For virtually every web-map you’ll get a better, more maintainable, and cheaper solution by keeping the basemap (roads, water, labels, etc.) as its own vector-tile source and adding your delivery-zone polygons as a second source (GeoJSON or a tiny vector-tile layer).  
+
+Below is a two-part response:
+
+1. **Why the “single source” idea is usually the wrong one**  
+2. **If you really must create a combined tileset, the high-level pipeline and the tools you’d use (no step-by-step code).**  
+
+---
+
+## 1️⃣ Why a single combined tileset is rarely the right choice
+
+| Reason | What it means for you |
+|--------|-----------------------|
+| **Basemap updates** | OSM-derived basemaps are refreshed weekly (or even daily) by most providers. If you bake your own polygons into the same tileset you have to rebuild the whole thing every time the basemap changes – a costly, error-prone process. |
+| **Licensing & attribution** | The OSM licence (ODbL) requires you to keep the attribution with the data you redistribute. When you re-tile OSM together with your own data you become a redistributor and must carry the full OSM attribution in every tile, which is easy to forget. |
+| **Performance is not a penalty** | MapLibre requests all declared sources in parallel. Having two sources (basemap + your overlay) does **not** double the rendering cost; the browser only draws what each source provides. |
+| **Styling flexibility** | With separate sources you can turn the basemap on/off, swap it for another provider, or change its style without touching your delivery-zone data. |
+| **Offline edge-case only** | The only realistic scenario for a single-source archive is a completely offline deployment (e.g., a field-device that never talks to the internet). Even then you can still keep the basemap and your data in separate layers inside the same MBTiles/PMTiles file – you’re not forced to merge them into one logical source. |
+
+**Best-practice pattern (the one most production apps use)**  
+
+```text
+style.json
+ ├─ sources
+ │   ├─ ""osm-basemap""   → vector tiles (e.g. from MapTiler, OpenFreeMap, or your own Planetiler output)
+ │   └─ ""delivery-zones"" → geojson URL or a tiny vector-tile source you host yourself
+ └─ layers
+     ├─ basemap layers (roads, water, labels …) referencing ""osm-basemap""
+     └─ your polygon layer referencing ""delivery-zones""
+```
+
+Insert your polygon layer **before** the first symbol layer if you want your polygons to appear under the basemap labels (or after if you want them on top). See the *maplibre-source-wiring* skill for the exact ordering tricks.
+
+---
+
+## 2️⃣ If you really need a **single combined vector-tile set**, here’s the high-level pipeline
+
+> **Important:** I’m only naming the tools and the logical steps. I’m not writing a full build script, because that belongs in the *maplibre-source-wiring* or *maplibre-pmtiles-patterns* skills. Use the references at the end for the official docs.
+
+### Step-by-step overview
+
+| Step | What you do | Typical tool(s) |
+|------|-------------|-----------------|
+| **A. Get an OSM extract** | Download the region you need (country, state, or custom polygon) in PBF format. | `osmconvert`, `osmfilter`, or directly from Geofabrik/BBBike. |
+| **B. Prepare your delivery-zone polygons** | Export them as a clean GeoJSON (or FlatGeobuf/GeoParquet if you prefer a columnar format). Simplify geometries to an appropriate level for the zoom range you’ll serve. | `ogr2ogr` (with `-simplify`), `mapshaper`, or `geopandas`. |
+| **C. Clip / merge the two datasets** | • If you want a *single* vector-tile source, you must combine the OSM data and your polygons into one feature collection. <br>• Keep the OSM layers separate (e.g., `roads`, `water`, `landuse`, `place`) and add a new layer name for your polygons (e.g., `delivery_zones`). | `ogr2ogr` to merge, or a small Python script using `fiona`/`shapely`. |
+| **D. Convert to a tiled format** | Run a tile-generation engine that reads the combined source and writes vector tiles (MVT or the newer MLT). | **Tippecanoe** (for GeoJSON → MVT) <br>**Planetiler** (for OSM PBF → MVT/MLT) <br>**tilemaker** (OSM → MVT) |
+| **E. Choose a tile container** | • **MBTiles** (SQLite) – easy to serve with `tileserver-gl`, `tileserver-php`, or `pmtiles`.<br>• **PMTiles** – single-file, HTTP-range-request friendly, great for CDN edge caching. | `mbutil`, `pmtiles` CLI, or the built-in export of Planetiler. |
+| **F. Host the tiles** | Deploy the file to a static-file host (S3, Cloudflare R2, GitHub Pages) or run a lightweight tile server. | `tileserver-gl`, `tileserver-php`, `pmtiles` serverless handler, or a CDN that supports range requests. |
+| **G. Wire the style** | Create a style JSON that points to the single source (e.g., `""type"":""vector"", ""url"":""https://example.com/combined.pmtiles""`). Use the correct `source-layer` names you defined in step C. | Any style editor (MapLibre Studio, Maputnik) or hand-written JSON. |
+| **H. Test & iterate** | Load the map, check that: <br>• All basemap layers render correctly.<br>• Your polygons appear with the right styling and are queryable (`map.queryRenderedFeatures`).<br>• Attribution for OSM is still displayed. | Browser devtools, `maplibre-gl` debug mode. |
+
+### Key points while you’re building
+
+| Concern | How to address it |
+|---------|-------------------|
+| **Feature-property collisions** | Prefix your custom properties (e.g., `delivery_`), or put your polygons in a dedicated layer name (`delivery_zones`). Tippecanoe’s `--layer` flag makes this easy. |
+| **Zoom-dependent detail** | Use Tippecanoe’s `--maximum-zoom` / `--minimum-zoom` and `--drop-densest-as-needed` to thin out OSM data at low zooms while keeping full detail for your polygons at the zooms you need. |
+| **Tile size limits** | Aim for ≤ 500 KB per tile (compressed). If you exceed it, increase the `--drop-rate` or simplify your polygons further. |
+| **Attribution** | Add an `attribution` field to the source in your style JSON (or a separate UI element) that includes the OSM credit and any credit for your own data. |
+| **Licensing** | OSM data is ODbL-licensed; you must keep the attribution and make any derived data (your combined tileset) available under the same licence if you redistribute it. |
+| **Performance testing** | Load the map on a low-end mobile device; watch the network tab for tile size and request count. If you see many large tiles, go back to step D/E and increase simplification. |
+
+### Example of the **Tippecanoe** command you might end up using (illustrative only)
+
+```bash
+# 1️⃣ Merge OSM (converted to GeoJSON) + your polygons into one GeoJSON file
+ogr2ogr -f GeoJSON merged.geojson osm.geojson
+ogr2ogr -f GeoJSON -append merged.geojson delivery_zones.geojson
+
+# 2️⃣ Generate vector tiles, putting OSM data in its own layers and your polygons in a layer called ""delivery_zones""
+tippecanoe \
+  --output=combined.pmtiles \
+  --layer=roads --layer=water --layer=landuse \
+  --layer=delivery_zones \
+  --drop-densest-as-needed \
+  --maximum-zoom=14 \
+  --minimum-zoom=5 \
+  merged.geojson
+```
+
+> **Do not copy-paste this as a full pipeline** – you’ll need to adapt layer names, zoom ranges, and simplification parameters to your data and target device. The command shows the *options* you’ll typically tweak.
+
+### Alternatives to a full rebuild
+
+| Situation | Simpler approach |
+|-----------|-----------------|
+| You only need a few custom polygons over a global basemap | Keep the basemap as a hosted vector source (e.g., `https://api.maptiler.com/maps/streets/style.json`) and add your polygons as a **GeoJSON source**. |
+| You need offline use but still want separate layers | Put both the basemap tiles and your polygons into the **same MBTiles/PMTiles file** but keep them as distinct `source-layer`s. MapLibre will treat them as one source object, yet you still have the logical separation. |
+| You already have a tile server for OSM | Use **TileJSON** to point to that server, and add a second source for your polygons. No need to touch the OSM pipeline at all. |
+
+---
+
+## 📚 References & Further Reading
+
+| Topic | Link |
+|-------|------|
+| MapLibre Style Specification – sources & layers | <https://maplibre.org/maplibre-style-spec/> |
+| Tippecanoe – generate vector tiles from GeoJSON | <https://github.com/felt/tippecanoe> |
+| Planetiler – fast OSM → vector-tile pipeline | <https://github.com/onthegomap/planetiler> |
+| Tilemaker – OSM → MVT | <https://github.com/systemed/tilemaker> |
+| PMTiles format & serverless hosting | <https://github.com/protomaps/PMTiles> |
+| OSM licensing (ODbL) | <https://www.openstreetmap.org/copyright> |
+| MapLibre GL Leaflet plugin (if you ever need a Leaflet wrapper) | <https://github.com/maplibre/maplibre-gl-leaflet> |
+| “Two-source pattern” discussion (the skill you’re reading) | <https://github.com/maplibre/maplibre-agent-skills/blob/main/maplibre-tile-sources/SKILL.md> |
+
+---
+
+### TL;DR
+
+* **Use two sources** – a hosted OSM vector basemap + a separate GeoJSON (or tiny vector) source for your delivery-zone polygons. This is the simplest, most maintainable, and cost-effective setup.  
+* **If you truly need a single combined tileset** (e.g., for a completely offline device), the pipeline is: OSM extract → merge with your polygons → tile with Tippecanoe or Planetiler → package as MBTiles/PMTiles → serve and reference as one vector source. Remember the licensing, attribution, and rebuild-cost implications.  
+
+Feel free to ask for more detail on any of the steps (e.g., “how do I simplify my polygons for tippecanoe?” or “how do I host a PMTiles file on Cloudflare?”). Happy mapping!",PASS,1.00,,All assertions passed,
+anti-pattern — merging basemap and application data into one tileset,skills/maplibre-tile-sources/SKILL.md,"I want my roads, water, labels, and my own delivery-zone polygons all in a single vector tileset so the map only hits one source. What's the best pipeline to merge OpenStreetMap data with my polygons and build that combined tileset?
+","**Short answer – you don’t need a “single-source” tileset to get good performance.**  
+MapLibre can request any number of sources in parallel, and a style that mixes a hosted basemap (roads, water, labels) with your own delivery-zone polygons is the standard, simplest, and most maintainable approach.
+
+Below is the recommended workflow, followed by the tools you would use **only if you really have a narrow offline-only use-case** that forces you to ship one combined tileset.
+
+---
+
+## 1️⃣ Why the “one source” idea isn’t a performance win
+
+| Myth | Reality |
+|------|----------|
+| Fewer HTTP requests → faster map | MapLibre opens **all declared sources concurrently**. The overhead of an extra request is negligible compared with the cost of downloading the tile data itself. |
+| One source = simpler style | Styles already support multiple sources; you can control draw order, label placement, and layer visibility per-source without any penalty. |
+| One source = easier caching | Each source can be cached independently (CDN, HTTP 2/3 multiplexing, Service Workers). Merging them forces you to rebuild the whole thing whenever *any* piece changes. |
+| One source = less code | Adding a second source is just a few lines of JSON; the maintenance cost is far lower than maintaining a custom combined tileset pipeline. |
+
+**The industry pattern** – a *basemap* source (usually a vector tile service such as OpenStreetMap-derived tiles from MapTiler, OpenFreeMap, or your own Planetiler build) **plus** a separate source for your own data (GeoJSON or a small vector-tile layer) – works for everything from a handful of delivery zones to a global fleet-tracking app.
+
+---
+
+## 2️⃣ Recommended “two-source” architecture
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""basemap"": {
+      ""type"": ""vector"",
+      ""url"": ""https://example.com/tiles/basemap.json""   // TileJSON for OSM roads, water, labels
+    },
+    ""delivery-zones"": {
+      ""type"": ""geojson"",
+      ""data"": ""https://example.com/data/delivery-zones.geojson""
+    }
+  },
+  ""layers"": [
+    // 1️⃣ Insert your delivery-zone layer *before* the first symbol layer
+    //    so your polygons appear under road/label symbols.
+    {
+      ""id"": ""delivery-zones-fill"",
+      ""type"": ""fill"",
+      ""source"": ""delivery-zones"",
+      ""paint"": { ""fill-color"": ""#ff8800"", ""fill-opacity"": 0.3 }
+    },
+    {
+      ""id"": ""delivery-zones-outline"",
+      ""type"": ""line"",
+      ""source"": ""delivery-zones"",
+      ""paint"": { ""line-color"": ""#ff4400"", ""line-width"": 2 }
+    },
+
+    // 2️⃣ All basemap layers come from the vector source.
+    //    You can keep the original style’s layer order or copy only the layers you need.
+    //    Example (simplified):
+    { ""id"": ""water"", ""type"": ""fill"", ""source"": ""basemap"", ""source-layer"": ""water"", ""paint"": { ""fill-color"": ""#a0c8f0"" } },
+    { ""id"": ""road-primary"", ""type"": ""line"", ""source"": ""basemap"", ""source-layer"": ""road"", ""paint"": { ""line-color"": ""#ffffff"", ""line-width"": 2 } },
+    { ""id"": ""place-labels"", ""type"": ""symbol"", ""source"": ""basemap"", ""source-layer"": ""place"", ""layout"": { ""text-field"": ""{name}"" } }
+    // …etc.
+  ]
+}
+```
+
+*Key points*
+
+* **Keep the basemap source untouched** – you can upgrade it, change providers, or switch to a different style without touching your delivery-zone data.
+* **Insert your polygon layers before the first symbol layer** (or wherever you need them in the draw order) so that road and place labels stay on top.
+* **If you need zoom-dependent styling** (e.g., hide tiny zones at low zoom), you can add `minzoom`/`maxzoom` or `filter` expressions on the delivery-zone layers – no need to rebuild tiles.
+
+---
+
+## 3️⃣ When a *single combined* tileset *is* justified
+
+Only a very specific scenario truly benefits from merging everything into one vector-tile source:
+
+* **Offline / air-gapped deployments** where the client cannot make any network requests after the initial bundle is delivered (e.g., a field-device app on a ship, a kiosk with no internet, or a secure-facility intranet).  
+* The combined tileset must be **self-contained** (one archive, one URL) and you are willing to rebuild it for every data change.
+
+If you fall into that niche, the pipeline looks roughly like this:
+
+| Step | Tool | What it does | Docs |
+|------|------|--------------|------|
+| **a. Gather OSM data** | `osmconvert` / `osmium` | Extract the region you need (roads, water, places) from a planet or regional .pbf. | <https://osmcode.org/osmium-tool/> |
+| **b. Add your polygons** | `ogr2ogr` (GeoJSON → FlatGeobuf) or simple `cat` + `jq` | Merge your delivery-zone GeoJSON into the OSM extract as a new layer (e.g., `delivery_zones`). | <https://gdal.org/programs/ogr2ogr.html> |
+| **c. Convert to vector tiles** | **tippecanoe** (for small-to-medium datasets) **or** **Planetiler** (for large/planet-scale) | Generates an MBTiles (or PMTiles) archive with multiple layers (`water`, `road`, `place`, `delivery_zones`). | tippecanoe: <https://github.com/felt/tippecanoe>  <br>Planetiler: <https://github.com/onthegomap/planetiler> |
+| **d. (Optional) Re-package** | `pmtiles` CLI or `mbutil` | If you prefer the PMTiles format (single-file, HTTP-range-request friendly) for serverless hosting, convert the MBTiles. | <https://github.com/protomaps/PMTiles> |
+| **e. Serve** | Any static file server (nginx, Cloudflare Workers, S3 + CloudFront) | Expose the TileJSON (`{ ""tiles"": [""https://…/tiles/{z}/{x}/{y}.pbf""] }`) that MapLibre will consume. | MapLibre source-wiring skill for TileJSON details |
+
+**Important caveats**
+
+* **Every change to your delivery-zone polygons forces a full rebuild** of the entire MBTiles/PMTiles file, because the tile index is static. For a dynamic dataset this is impractical.
+* **Attribution & licensing** – By redistributing OSM data you must retain the OSM attribution and any other layer attributions (e.g., Natural Earth). When you bake them into a single tileset you become the *distributor* of that data, so you must ensure you can meet the license terms.
+* **Loss of flexibility** – You can no longer swap the basemap style or add new overlay layers without rebuilding the whole archive.
+
+---
+
+## 4️⃣ TL;DR – What you should do today
+
+1. **Pick a ready-made vector basemap** (MapTiler, OpenFreeMap, your own Planetiler build, etc.).  
+2. **Host your delivery-zone polygons as GeoJSON** (or, if they grow beyond ~5 k features, generate a tiny vector-tile source just for that layer with tippecanoe).  
+3. **Add both sources to a single style** and control layer order as shown above.  
+4. **Deploy** – no custom tile pipeline, no extra build steps, and you keep the ability to update either source independently.
+
+If later you truly need an offline-only bundle, follow the “single combined tileset” pipeline, but treat it as a *special-case* rather than the default architecture.
+
+---
+
+### Quick links for the tools mentioned
+
+* **tippecanoe** – `tippecanoe -o delivery_zones.mbtiles --layer=delivery_zones --drop-densest-as-needed your_polygons.geojson`
+* **Planetiler** – see the “Custom layers” section of the README for adding a non-OSM layer.
+* **PMTiles CLI** – `pmtiles convert delivery_zones.mbtiles delivery_zones.pmtiles`
+* **MapLibre source-wiring** – <https://github.com/maplibre/maplibre-agent-skills/blob/main/maplibre-source-wiring/SKILL.md>
+
+---
+
+**Bottom line:** Use two sources (basemap + your polygons). It’s simpler, cheaper, and far more future-proof. Only build a single combined tileset if you have a strict offline requirement, and then follow the tippecanoe/Planetiler → MBTiles/PMTiles → TileJSON pipeline. Happy mapping!",PASS,1.00,,All assertions passed,

@@ -152,7 +152,7 @@ This request arrives in a recognizable form: _"I want roads, water, labels, and 
 
 **Answer with the two-source pattern instead:** a hosted basemap style URL or vector source, plus the delivery zones (or whatever the user's data is) as a separate `geojson` or `vector` source in the same style. That is the standard arrangement, and it is what the user actually wants.
 
-A single combined tileset is defensible in one narrow case: a self-contained artifact that must render with no network and no second file — an offline or air-gapped deployment shipped as one archive. Nothing else qualifies. "I self-host my own tiles," bundle size on a kiosk, a demo, and a proof-of-concept are all cases where two sources are still the right answer and cost less to build.
+A single combined tileset is defensible in one narrow case: a self-contained artifact that must render with no network and no second file — an offline or air-gapped deployment shipped as one archive. Nothing else qualifies.
 
 ## Related Skills
 
