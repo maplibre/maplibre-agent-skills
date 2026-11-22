@@ -25,6 +25,8 @@ The 2026-11-07 scheduled run failed test 7 on its first two attempts: the answer
 
 The 2026-11-10 scheduled run failed test 7 once, on an answer that gave the default, the fix and the wrong zoom but did not say that nothing warns. Only 1 of 21 answers since 2026-11-08 says it, so the rubric no longer requires it. Graded again, that answer passes and the two recorded answers without the consequence still fail ([CSV](latest/maplibre-source-wiring-test7-graded-again_2026-11-11.csv)). On 2026-11-11 test 7 passed 6 of 6 with the skill and failed 3 of 3 at baseline ([with-skill](latest/maplibre-source-wiring-with-skill-test7_2026-11-11.csv), [baseline](latest/maplibre-source-wiring-baseline-test7_2026-11-11.csv)).
 
+The 2026-11-19 scheduled run failed test 3 once: a 1,483-character answer recommended `url` and listed what the TileJSON supplies, but never said what a hand-wired `tiles` array costs. Every recorded answer that states that cost passed, and every one that leaves it out failed. The cost now comes right after the recommendation, before what `url` reads. On 2026-11-22 test 3 passed 10 of 10 with the skill, two distinct answers, each stating the cost within its first 260 characters ([CSV](latest/maplibre-source-wiring-with-skill-test3_2026-11-22.csv)), and the full config passed 12 of 12 ([CSV](latest/maplibre-source-wiring-with-skill_2026-11-22.csv)). The baseline was not re-run, since the assertions are unchanged.
+
 ## Candidates rejected at baseline
 
 Drafted, baselined before any skill content was written, and dropped because the model already
