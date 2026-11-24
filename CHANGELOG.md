@@ -18,6 +18,9 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Fixed
 
+- `maplibre-mapbox-migration`: no longer recommends installing `maplibre-gl@1`, which answers offered as a way to keep callback code working ([#216](https://github.com/maplibre/maplibre-agent-skills/pull/216))
+- `maplibre-source-wiring`: says what a hand-wired `tiles` array costs right after recommending `url` ([#213](https://github.com/maplibre/maplibre-agent-skills/pull/213))
+- `maplibre-tile-sources`: no longer lists the cases that do not justify merging data into the basemap tileset, which answers were offering as reasons to merge ([#212](https://github.com/maplibre/maplibre-agent-skills/pull/212))
 - `maplibre-fonts-glyphs`: says which layers `localIdeographFontFamily` reaches since GL JS 5.11.0, and picks the CJK font in every layer with `font-faces` and a `unicode-range` ([#202](https://github.com/maplibre/maplibre-agent-skills/pull/202))
 - `maplibre-terrain-rendering`: says that a Mapbox-only property fails style validation, so the call that sets it changes nothing and a style that holds it does not load ([#201](https://github.com/maplibre/maplibre-agent-skills/pull/201))
 - `maplibre-mapbox-migration`: rewrites and streamlines instructions, gives a verdict for each plugin the user names instead of sending them to awesome-maplibre, reorders the steps (token and style before API changes), and covers callbacks that became promises in v4 and behavior that changed in later MapLibre versions ([#186](https://github.com/maplibre/maplibre-agent-skills/pull/186))
