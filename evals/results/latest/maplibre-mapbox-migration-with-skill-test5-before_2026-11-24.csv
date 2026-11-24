@@ -1,0 +1,1491 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","### What’s happening?
+
+1. **`map.loadImage` no longer accepts a callback** –  
+   Starting with **MapLibre GL v4.0.0** the method was changed to **return a `Promise`** instead of taking a `(err, image)` callback. Because the callback is ignored, the promise is never resolved and the image never gets added, so your custom marker icons disappear.
+
+2. **Marker icons are missing** because the image you tried to load never made it into the style’s sprite (`map.addImage('pin', …)`). Once the image is added correctly, the markers will appear again.
+
+---
+
+## Fix it – two ways
+
+### A. Modern, promise-based code (recommended)
+
+```javascript
+// Make sure the map is fully loaded before you call loadImage / addImage
+map.once('load', async () => {
+  try {
+    // loadImage now returns a promise that resolves to { data: ImageBitmap }
+    const { data: img } = await map.loadImage('https://example.com/pin.png');
+
+    // addImage can be called directly; the second argument is the ImageBitmap
+    map.addImage('pin', img);
+
+    // Now you can use the image in a layer or a SymbolLayer
+    map.addLayer({
+      id: 'my-pins',
+      type: 'symbol',
+      source: 'my-geojson',
+      layout: {
+        'icon-image': 'pin',
+        'icon-size': 0.8
+      }
+    });
+  } catch (err) {
+    console.error('Failed to load marker image:', err);
+  }
+});
+```
+
+**Key points**
+
+| What changed? | How to write it now |
+|---------------|---------------------|
+| `map.loadImage(url, cb)` | `const { data } = await map.loadImage(url)` **or** `map.loadImage(url).then(({data}) => …)` |
+| Returned value | An object `{ data: ImageBitmap }` (the image bitmap). |
+| Error handling | Use `try / catch` (async/await) or `.catch(err => …)` on the promise. |
+| Timing | Call after the map’s `load` event (or after any style change that could reset the sprite). |
+
+### B. Back-compatible shim (if you must keep the old callback style)
+
+If you are still on a MapLibre version **< 4.0.0** (unlikely if you installed the latest) you can keep the callback, but for the *latest* version you can write a tiny wrapper:
+
+```javascript
+function loadImageCallback(map, url, cb) {
+  map.loadImage(url)
+    .then(({ data }) => cb(null, data))
+    .catch(cb);
+}
+
+// usage
+loadImageCallback(map, url, (err, img) => {
+  if (err) throw err;
+  map.addImage('pin', img);
+});
+```
+
+> **Tip:** Once you have the wrapper you can keep the rest of your old code unchanged, but it’s better to migrate to the promise style so you can use `await` and avoid “callback-not-called” warnings.
+
+---
+
+## Why the marker icons disappeared
+
+* The image never got added → the style’s sprite has no entry called `'pin'`.  
+* Any layer that references `'pin'` (`'icon-image': 'pin'`) therefore falls back to the default marker (or shows nothing if the layer is `symbol`-only).
+
+After fixing `loadImage`, the `addImage` call will succeed and the symbols will render.
+
+---
+
+## Quick checklist after fixing `loadImage`
+
+1. **Map is loaded** – `map.on('load', …)` or `map.once('load', …)` before calling `loadImage`.  
+2. **Image URL is reachable** – no CORS issues; the server must send `Access-Control-Allow-Origin:*` (or your domain).  
+3. **`addImage` is called only once per name** – if you call it again with the same name you’ll get `Error: Image with id ""pin"" already exists`. Use `map.hasImage('pin')` to guard against duplicates.  
+4. **Layer uses the correct `icon-image` name** – double-check spelling (`'pin'` vs `'pin-2'`).  
+5. **If you use a style that already defines a sprite**, adding images at runtime works fine; they are stored in the map’s internal sprite cache.
+
+---
+
+## Full minimal example (ES-module build)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – custom marker</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty', // any non-Mapbox style
+    center: [-122.42, 37.78],
+    zoom: 12
+  });
+
+  map.once('load', async () => {
+    try {
+      const { data: img } = await map.loadImage(
+        'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/marker.png'
+      );
+      map.addImage('pin', img);
+
+      // Example GeoJSON source
+      map.addSource('points', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [-122.42, 37.78] },
+              properties: {}
+            }
+          ]
+        }
+      });
+
+      map.addLayer({
+        id: 'points-layer',
+        type: 'symbol',
+        source: 'points',
+        layout: {
+          'icon-image': 'pin',
+          'icon-size': 0.7
+        }
+      });
+    } catch (e) {
+      console.error('❌ loadImage failed', e);
+    }
+  });
+</script>
+</body>
+</html>
+```
+
+Run this in a browser; you should see a custom pin instead of the default marker.
+
+---
+
+## TL;DR
+
+* **`map.loadImage` → returns a Promise**. Use `await` / `.then` instead of a callback.  
+* Call it **after the map’s `load` event**.  
+* Add the image with `map.addImage('pin', img)`.  
+* Once the image is in the sprite, any layer that references `'pin'` will render again.
+
+If you still see errors after applying the fix, double-check:
+
+* CORS headers on the image URL.  
+* That you’re not accidentally still using a `mapbox://` sprite or glyph URL in your style.  
+* That the style you’re loading (e.g., OpenFreeMap, MapTiler, your own) does not already define a sprite named `'pin'` that conflicts.
+
+Feel free to paste the exact console error (or a minimal reproducible snippet) if something else is still not working!",PASS,1.00,,All assertions passed,
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","### What’s happening
+
+In MapLibre GL JS v4 and later **`map.loadImage()` no longer accepts a callback** – it returns a `Promise`.  
+Because the callback you passed is ignored, the image never gets added to the style, so any layer that references the image (`icon-image: 'pin'`) ends up with a missing-icon and you see the “callback not being called” message in the console.
+
+The missing marker icons are therefore a direct consequence of the API change, not a sprite-URL problem (your style is already loading, otherwise the map wouldn’t appear at all).
+
+---
+
+## 1️⃣ Convert the `loadImage` call to the Promise form
+
+#### Option A – `async/await` (most readable)
+
+```javascript
+async function addPinIcon(url) {
+  try {
+    const { data: img } = await map.loadImage(url);   // ← returns a Promise
+    // `img` is an ImageBitmap (or HTMLImageElement in older browsers)
+    map.addImage('pin', img);
+  } catch (err) {
+    console.error('Failed to load pin image:', err);
+    // handle the error the way you need – e.g. fall back to a default icon
+  }
+}
+
+// Call it after the map is ready (e.g. in the 'load' event)
+map.on('load', () => {
+  addPinIcon('https://example.com/pin.png');
+});
+```
+
+#### Option B – `.then()` chain
+
+```javascript
+map.on('load', () => {
+  map.loadImage('https://example.com/pin.png')
+    .then(({ data: img }) => map.addImage('pin', img))
+    .catch(err => {
+      console.error('Failed to load pin image:', err);
+    });
+});
+```
+
+> **Why the destructuring?**  
+> `loadImage()` resolves to an object `{ data, cacheKey }`. The image bitmap you need is in `data`.
+
+---
+
+## 2️⃣ Verify the layer that uses the icon
+
+Make sure the layer’s `icon-image` property matches the name you gave to `addImage`:
+
+```javascript
+map.addLayer({
+  id: 'my-pins',
+  type: 'symbol',
+  source: 'my-points',          // a GeoJSON source you added earlier
+  layout: {
+    'icon-image': 'pin',        // <-- must be exactly the same string
+    'icon-size': 1
+  }
+});
+```
+
+If you still see a blank icon after the `loadImage` fix, double-check:
+
+| Symptom | Likely cause |
+|--------|--------------|
+| **Icon still missing** | The image failed to load (CORS, 404, or wrong MIME). Open the URL directly in the browser to confirm it returns an image and that the server sends `Access-Control-Allow-Origin:*` (or your domain). |
+| **Console shows “Failed to load image …”** | Same as above – fix the URL or enable CORS. |
+| **Icon appears but is the wrong size/color** | Adjust `icon-size`, `icon-color`, or the source image itself. |
+
+---
+
+## 3️⃣ (Optional) Pre-load images before the map’s `load` event
+
+If you want the icons to be available **immediately** when the style loads (so they can be used in the style JSON itself), you can add them **before** creating the `Map` instance:
+
+```javascript
+import * as maplibregl from 'maplibre-gl';
+
+// Create a temporary map just to get a WebGL context for loading images
+const dummy = new maplibregl.Map({ container: document.createElement('div'), style: {} });
+
+await dummy.loadImage('https://example.com/pin.png')
+      .then(({ data }) => dummy.addImage('pin', data));
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/liberty',
+  center: [-122.42, 37.78],
+  zoom: 12
+});
+
+// Transfer the image to the real map once it’s ready
+map.on('load', () => {
+  const img = dummy.getImage('pin');
+  if (img) map.addImage('pin', img);
+});
+```
+
+> This pattern is only needed when you want to reference the image **inside the style JSON** (e.g., `icon-image: 'pin'` in a layer defined in the style file). For most apps that add the layer programmatically, loading the image after `map.on('load')` as shown in step 1 is sufficient.
+
+---
+
+## 4️⃣ Quick checklist for a clean migration of icons
+
+| ✅ Checklist | What to verify |
+|--------------|----------------|
+| **Namespace** | All `mapboxgl` → `maplibregl` (including any plugin CSS class changes). |
+| **CSS** | If you styled the marker with `.mapboxgl-marker` or `.mapboxgl-ctrl`, rename to `.maplibregl-marker` / `.maplibregl-ctrl`. |
+| **`loadImage` usage** | Use the Promise API (`await` or `.then`). |
+| **`addImage` call** | Happens **after** the image is successfully loaded and **after** the map is in the `load` state (or after you’ve created a dummy map). |
+| **Layer `icon-image` name** | Exactly matches the name you passed to `addImage`. |
+| **CORS / URL** | Image URL is reachable, returns a proper image MIME type, and allows cross-origin requests. |
+| **Sprite fallback** | If you still want a sprite-based approach, provide a `sprite` URL in the style JSON that points to a sprite sheet you host yourself (MapLibre does not fetch Mapbox sprites). |
+
+---
+
+## 5️⃣ TL;DR code snippet you can drop in
+
+```javascript
+import * as maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/liberty',
+  center: [-122.42, 37.78],
+  zoom: 12
+});
+
+map.on('load', async () => {
+  try {
+    const { data: pinImg } = await map.loadImage(
+      'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/pin.png'
+    );
+    map.addImage('pin', pinImg);
+
+    // Example source + layer that uses the icon
+    map.addSource('points', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [-122.42, 37.78] },
+            properties: {}
+          }
+        ]
+      }
+    });
+
+    map.addLayer({
+      id: 'points-layer',
+      type: 'symbol',
+      source: 'points',
+      layout: {
+        'icon-image': 'pin',
+        'icon-size': 1
+      }
+    });
+  } catch (e) {
+    console.error('Could not load pin image:', e);
+  }
+});
+```
+
+Copy-paste this into a fresh page (or your app) and you should see the pin icon appear. If it does, the problem was solely the callback-based `loadImage` call.
+
+---
+
+### Need more help?
+
+* If you still get a **CORS** error, check the server that hosts the PNG and add the appropriate `Access-Control-Allow-Origin` header.
+* If you’re using a **custom style JSON** that already references `'pin'` in its `layout.icon-image`, load the image **before** you instantiate the map (see the “pre-load” pattern in step 3) or add the image in the map’s `styledata` event after the style has been parsed.
+* For **multiple icons**, you can wrap the loading logic in a helper:
+
+```javascript
+async function addIcon(name, url) {
+  const { data } = await map.loadImage(url);
+  map.addImage(name, data);
+}
+```
+
+Then call `await Promise.all([addIcon('pin', pinUrl), addIcon('star', starUrl)])`.
+
+Feel free to paste any additional error messages or the exact part of your code that creates the marker – I can help fine-tune the fix!",PASS,1.00,,All assertions passed,
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","### What’s happening?
+
+1. **`map.loadImage` no longer accepts a callback** –  
+   Starting with **MapLibre GL v4.0.0** the method was changed to **return a `Promise`** instead of taking a `(err, image)` callback. Because the callback is ignored, the image never gets added, so any symbols that rely on the image (`icon-image: 'pin'`) disappear.
+
+2. **Your marker icons are missing** because the image you tried to load never made it into the style’s image registry (`map.addImage('pin', …)`).
+
+So the fix is simply to use the promise-based API (or, if you must stay on an older MapLibre v1-v3 branch, keep the old callback style). Below is a quick “cook-book” for both approaches, plus a few extra tips that often cause the same symptom.
+
+---
+
+## 1️⃣ Convert `loadImage` to the promise form
+
+```javascript
+// ✅ Modern MapLibre (v4+)
+async function addPinIcon(url) {
+  try {
+    // loadImage resolves with an object { data: ImageBitmap }
+    const { data: img } = await map.loadImage(url);
+    // addImage expects an ImageBitmap (or HTMLImageElement, Canvas, etc.)
+    map.addImage('pin', img);
+  } catch (err) {
+    console.error('Failed to load pin image:', err);
+    // you can still throw if you want the app to stop
+    throw err;
+  }
+}
+
+// Call it after the map is ready (e.g. in the 'load' event)
+map.on('load', () => {
+  addPinIcon('https://example.com/pin.png');
+});
+```
+
+**Or, using `.then()` if you prefer not to make the surrounding function `async`:**
+
+```javascript
+map.on('load', () => {
+  map.loadImage('https://example.com/pin.png')
+    .then(({ data }) => map.addImage('pin', data))
+    .catch(err => {
+      console.error('loadImage error:', err);
+      throw err;
+    });
+});
+```
+
+### Why the `data` property?
+
+`loadImage` resolves to an object `{ data: ImageBitmap }`. The older callback gave you the raw `ImageBitmap` directly, but the promise wrapper adds that tiny envelope. Pull the `data` field (or rename it with destructuring) before passing it to `addImage`.
+
+---
+
+## 2️⃣ If you’re stuck on an older MapLibre version (v1-v3)
+
+The callback signature **still works** on those branches. In that case you can keep your original code, but you’ll have to **pin the package** to a pre-v4 version:
+
+```bash
+npm install maplibre-gl@^3   # or 2.x / 1.x as your project requires
+```
+
+> **Tip:** The `1.x` compatibility branch is a *drop-in* for Mapbox GL JS v1, but it will not receive new features or bug-fixes. Upgrading to the current v6 (or at least v4+) is strongly recommended for security and performance.
+
+---
+
+## 3️⃣ Common follow-up pitfalls that also hide icons
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **Icon shows as a blank square** (or “missing image” in the console) | `map.addImage` was called **before** the map’s `style` was fully loaded, or the image name does not match the `icon-image` value in the layer. | Call `addImage` **after** the `load` event (or after `styledata` if you replace the style later). Ensure the layer’s `layout: { ""icon-image"": ""pin"" }` matches the exact name you passed to `addImage`. |
+| **CORS error when loading the PNG** | The image URL is on a different origin without proper `Access-Control-Allow-Origin` headers. | Host the PNG on the same domain, enable CORS on the server, or use a data-URI / base64-encoded image. |
+| **Sprite-based icons disappear** | You still have a `sprite` URL that points to a Mapbox-hosted sprite (`mapbox://sprites/...`). | Replace the sprite with a self-hosted one (or use the OpenFreeMap style that already bundles a sprite). See the **“Replace the style URL”** section of the migration guide. |
+| **`map.addImage` throws “Image already exists”** | You’re adding the same image multiple times (e.g., on every `load` after a style change). | Guard with `if (!map.hasImage('pin')) { map.addImage('pin', img); }` or remove the old image with `map.removeImage('pin')` before re-adding. |
+
+---
+
+## 4️⃣ Full minimal example (ES-module build)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – custom marker icon</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position: absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty', // any non-Mapbox style
+    center: [-122.42, 37.78],
+    zoom: 12
+  });
+
+  // Wait for the style to be ready
+  map.on('load', async () => {
+    try {
+      const { data: img } = await map.loadImage(
+        'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/pin.png'
+      );
+      // Register the image under the name ""pin""
+      map.addImage('pin', img);
+
+      // Add a layer that uses the image
+      map.addLayer({
+        id: 'my-pin',
+        type: 'symbol',
+        source: {
+          type: 'geojson',
+          data: {
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [-122.42, 37.78] }
+            }]
+          }
+        },
+        layout: {
+          'icon-image': 'pin',
+          'icon-size': 0.5,
+          'icon-allow-overlap': true
+        }
+      });
+    } catch (e) {
+      console.error('Could not load custom pin image', e);
+    }
+  });
+</script>
+</body>
+</html>
+```
+
+*Run this snippet (or copy-paste into a local file) and you’ll see a custom pin icon on the map.*  
+
+If you replace the `style` URL with your own style, just make sure the style’s `sprite` and `glyphs` URLs are also non-Mapbox (see the migration guide’s **Step 3**).
+
+---
+
+## 5️⃣ Quick checklist for “icons are gone” after a Mapbox→MapLibre swap
+
+1. **`map.loadImage` → promise** (as shown above).  
+2. **`addImage` is called after `map.on('load')`.**  
+3. **Image name matches `icon-image`** in the layer definition.  
+4. **No lingering `mapbox://` URLs** in the style (sprite, glyphs, source URLs).  
+5. **CORS is allowed** for the PNG/PNG-sprite you load.  
+6. **If you use a custom style JSON**, run it through the **MapLibre style validator** (`npx gl-style-validate style.json`) to catch stray `mapbox://` references.  
+
+---
+
+## 6️⃣ TL;DR – One-liner fix
+
+```javascript
+// Replace this (old callback style)
+map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); });
+
+// With this (promise style)
+map.loadImage(url).then(({ data }) => map.addImage('pin', data));
+```
+
+Add the call inside a `map.on('load', …)` handler (or after any style change) and you’ll see your markers again.
+
+---
+
+### Need more help?
+
+* If you still get a **401/403** error, double-check that **no** `mapbox://` URLs remain in the style (including `sprite` and `glyphs`).  
+* If you’re using **Mapbox-specific plugins** (e.g., `@mapbox/mapbox-gl-draw`), they usually work unchanged, but you may need to adjust their CSS class prefixes (`mapboxgl-` → `maplibregl-`).  
+* For a deeper dive on the API changes (callbacks → promises, removed v2 methods, etc.) see the **“Translate Mapbox APIs That MapLibre Does Not Share”** section of the migration guide.
+
+Happy mapping! 🚀",FAIL,0.75,,"The output explains that MapLibre GL v4.0.0 changed map.loadImage to return a promise and no longer accepts a callback, and it provides the correct promise-based code examples. However, it fails the negative constraint because it includes a section titled '2️⃣ If you’re stuck on an older MapLibre version (v1-v3)' which explicitly states 'The callback signature still works on those branches' and suggests pinning the package to older versions, which violates the instruction to not suggest downgrading or that the callback form still works.",
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","### What’s happening?
+
+1. **`map.loadImage` no longer accepts a callback** –  
+   Starting with **MapLibre GL v4.0.0** the method was changed to **return a Promise** instead of taking a `(err, image)` callback. Because the callback is ignored, the image never gets added, so any symbols that rely on the image (`icon-image: 'pin'`) disappear.
+
+2. **Your marker icons are missing** because the image you tried to load never made it into the style’s image registry (`map.addImage('pin', …)`).
+
+Both problems are solved by converting the callback-style code to the new promise-style API (or by using an older 1.x compatibility branch, but the recommended path is to update the code).
+
+---
+
+## 1️⃣ Fix the `loadImage` call
+
+### Modern (recommended) – async/await
+
+```javascript
+// Make sure the map is fully loaded before you add images
+map.on('load', async () => {
+  try {
+    // loadImage now returns a promise that resolves to { data: ImageBitmap }
+    const { data: img } = await map.loadImage('https://example.com/pin.png');
+
+    // addImage also accepts an ImageBitmap (or HTMLImageElement, Canvas, etc.)
+    map.addImage('pin', img);
+
+    // Now you can add a layer that uses the image
+    map.addLayer({
+      id: 'my-pins',
+      type: 'symbol',
+      source: 'my-geojson',
+      layout: {
+        'icon-image': 'pin',
+        'icon-size': 0.8
+      }
+    });
+  } catch (err) {
+    console.error('Failed to load marker image:', err);
+  }
+});
+```
+
+### Promise-chain version (if you can’t use `async/await`)
+
+```javascript
+map.on('load', () => {
+  map.loadImage('https://example.com/pin.png')
+    .then(({ data: img }) => {
+      map.addImage('pin', img);
+      // add your layer here …
+    })
+    .catch(err => {
+      console.error('Failed to load marker image:', err);
+    });
+});
+```
+
+### If you *must* keep the old callback style (not recommended)
+
+You can stay on the **`maplibre-gl@1` compatibility branch** (the 1.x line that mirrors Mapbox GL v1). Install it instead:
+
+```bash
+npm install maplibre-gl@1   # or yarn add maplibre-gl@1
+```
+
+Then the old callback signature works again.  
+*But*: you’ll miss out on bug-fixes, new features (e.g., `setSky`, `calculateCameraOptions…`), and the ESM-only build that the current 6.x line provides. Upgrading the code is the future-proof solution.
+
+---
+
+## 2️⃣ Why the icons disappear – a quick checklist
+
+| ✅ What to verify | 🔍 How to check / fix |
+|-------------------|-----------------------|
+| **Image is added before the layer that uses it** | Call `addImage` **before** you add the layer (or before you set `icon-image` on an existing layer). The `load` event is a safe place. |
+| **Correct image name** | The string you pass to `addImage` (`'pin'` above) must match the `icon-image` value in the layer’s layout. |
+| **Image format is supported** | PNG, JPEG, SVG (as data-URL) and WebP are fine. If you use a remote URL, make sure CORS headers allow the request (or host the image on the same origin). |
+| **Sprite vs. runtime image** | If you were previously relying on a **sprite** (`style.sprite`), you can keep that and *also* add runtime images. No conflict, but make sure you’re not accidentally overriding the same name. |
+| **Map style does not reference a Mapbox sprite/glyphs** | After migration, any `sprite` or `glyphs` URL that still points to `mapbox://` will cause 401/404 errors and can prevent symbols from rendering. Replace them with a self-hosted sprite (e.g., `https://my.cdn.com/sprite.json`) or use the default empty sprite. |
+| **Map is not in an error state** | Listen for `error` events: `map.on('error', e => console.error(e.error))`. A failed style load can stop image registration. |
+
+---
+
+## 3️⃣ Full minimal example (ES-module build)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – custom marker</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty', // any non-Mapbox style
+    center: [-122.42, 37.78],
+    zoom: 12
+  });
+
+  map.on('load', async () => {
+    try {
+      const { data: img } = await map.loadImage(
+        'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/pin.png'
+      );
+      map.addImage('pin', img);
+
+      // Example GeoJSON source
+      map.addSource('points', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [-122.42, 37.78] },
+              properties: {}
+            }
+          ]
+        }
+      });
+
+      // Symbol layer that uses the runtime image
+      map.addLayer({
+        id: 'points-layer',
+        type: 'symbol',
+        source: 'points',
+        layout: {
+          'icon-image': 'pin',
+          'icon-size': 0.8,
+          'icon-allow-overlap': true
+        }
+      });
+    } catch (e) {
+      console.error('❌ loadImage failed', e);
+    }
+  });
+</script>
+</body>
+</html>
+```
+
+Run this in a browser (or your dev server). You should see a pin icon at the map centre. If it works here but not in your app, compare the two:
+
+* Same MapLibre version?  
+* Same `map.on('load')` timing?  
+* Same image URL (CORS, 404, etc.)?  
+
+---
+
+## 4️⃣ Quick “cheat-sheet” for the most common Mapbox-to-MapLibre API changes that affect markers
+
+| Mapbox GL JS | MapLibre GL JS (v4+) | What you need to change |
+|--------------|----------------------|--------------------------|
+| `map.loadImage(url, cb)` | `await map.loadImage(url)` → `{ data: ImageBitmap }` | Replace callback with `await`/`.then`. |
+| `map.addImage(name, image, { sdf: true })` | Same signature, but `image` is now an `ImageBitmap` (returned from `loadImage`). | No change other than getting the `ImageBitmap` from the promise. |
+| `map.addLayer({ layout: { 'icon-image': 'my-icon' } })` | Same. | Ensure the image name matches the one you added via `addImage`. |
+| `style.sprite` pointing to `mapbox://sprites/...` | Must point to a **self-hosted** sprite JSON + PNG (or omit the sprite entirely). | Update the style JSON or use a style that already has a non-Mapbox sprite (e.g., OpenFreeMap, MapTiler, your own). |
+| `mapboxgl.accessToken = 'pk.xxx'` | **Removed** – MapLibre does not need a token. | Delete any `accessToken` line. |
+| CSS classes `mapboxgl-…` | `maplibregl-…` | Update any custom CSS that targets the old class names. |
+
+---
+
+## 5️⃣ Next steps / debugging tips
+
+1. **Open the browser console → Network tab**  
+   * Look for the request to your image URL.  
+   * If it’s 404 or blocked by CORS, the promise will reject and you’ll see the error you printed in the `catch`.  
+
+2. **Check the MapLibre error event**  
+   ```js
+   map.on('error', e => console.error('MapLibre error:', e.error));
+   ```
+   Errors like “Failed to load sprite” or “Failed to load glyphs” will appear here.
+
+3. **Validate your style** (if you’re using a custom style JSON)  
+   ```bash
+   npx gl-style-validate my-style.json
+   ```
+   The validator will flag any lingering `mapbox://` URLs.
+
+4. **If you still need the old callback API** – lock to the 1.x compatibility branch **only as a temporary measure** while you finish the migration.  
+   ```bash
+   npm install maplibre-gl@1   # or yarn add maplibre-gl@1
+   ```
+
+5. **Upgrade other Mapbox-only APIs** (e.g., `setFog`, `getFreeCameraOptions`) if you use them – see the migration guide’s table for the MapLibre equivalents (`setSky`, `calculateCameraOptionsFromCameraLngLatAltRotation`, etc.).
+
+---
+
+## TL;DR
+
+* `map.loadImage` now returns a **Promise** – use `await` or `.then` and grab `data` from the resolved object.  
+* Add the image **before** you add any layer that references it.  
+* Ensure the style you’re using does **not** reference Mapbox sprite/glyph URLs.  
+* Update any CSS class prefixes (`mapboxgl-` → `maplibregl-`).  
+
+Once you make those changes, your custom marker icons will appear again and the “callback not being called” warning will disappear. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","### What’s happening?
+
+1. **`map.loadImage` no longer accepts a callback** –  
+   Starting with **MapLibre GL v4.0.0** the method was changed to **return a Promise** instead of taking a `(err, image)` callback. Because the callback is ignored, the image never gets added, so any symbols that rely on the image (`icon-image: 'pin'`) disappear.
+
+2. **Your marker icons are missing** because the image you tried to load never made it into the style’s image registry (`map.addImage('pin', …)`).
+
+Both problems are solved by converting the callback-style code to the new promise-style API (or by using an older 1.x compatibility branch, but the recommended path is to update the code).
+
+---
+
+## 1️⃣ Fix the `loadImage` call
+
+### Modern (recommended) – async/await
+
+```javascript
+// Make sure the map is fully loaded before you add images
+map.on('load', async () => {
+  try {
+    // loadImage now returns a promise that resolves to { data: ImageBitmap }
+    const { data: img } = await map.loadImage('https://example.com/pin.png');
+
+    // addImage also accepts an ImageBitmap (or HTMLImageElement, Canvas, etc.)
+    map.addImage('pin', img);
+
+    // Now you can add a layer that uses the image
+    map.addLayer({
+      id: 'my-pins',
+      type: 'symbol',
+      source: 'my-geojson',
+      layout: {
+        'icon-image': 'pin',
+        'icon-size': 0.8
+      }
+    });
+  } catch (err) {
+    console.error('Failed to load marker image:', err);
+  }
+});
+```
+
+### Promise-chain version (if you can’t use `async/await`)
+
+```javascript
+map.on('load', () => {
+  map.loadImage('https://example.com/pin.png')
+    .then(({ data: img }) => {
+      map.addImage('pin', img);
+      // add your layer here …
+    })
+    .catch(err => {
+      console.error('Failed to load marker image:', err);
+    });
+});
+```
+
+### If you *must* keep the old callback style (not recommended)
+
+You can stay on the **`maplibre-gl@1` compatibility branch** (the 1.x line that mirrors Mapbox GL v1). Install it instead:
+
+```bash
+npm install maplibre-gl@1   # or yarn add maplibre-gl@1
+```
+
+Then the old callback signature works again.  
+*But*: you’ll miss out on bug-fixes, new features (e.g., `setSky`, `calculateCameraOptions…`), and the ESM-only build that the current 6.x line provides. Upgrading the code is the future-proof solution.
+
+---
+
+## 2️⃣ Why the icons disappear – a quick checklist
+
+| ✅ What to verify | 🔍 How to check / fix |
+|-------------------|-----------------------|
+| **Image is added before the layer that uses it** | Call `addImage` **before** you add the layer (or before you set `icon-image` on an existing layer). The `load` event is a safe place. |
+| **Correct image name** | The string you pass to `addImage` (`'pin'` above) must match the `icon-image` value in the layer’s layout. |
+| **Image format is supported** | PNG, JPEG, SVG (as data-URL) and WebP are fine. If you use a remote URL, make sure CORS headers allow the request (or host the image on the same origin). |
+| **Sprite vs. runtime image** | If you were previously relying on a **sprite** (`style.sprite`), you can keep that and *also* add runtime images. No conflict, but make sure you’re not accidentally overriding the same name. |
+| **Map style does not reference a Mapbox sprite/glyphs** | After migration, any `sprite` or `glyphs` URL that still points to `mapbox://` will cause 401/404 errors and can prevent symbols from rendering. Replace them with a self-hosted sprite (e.g., `https://my.cdn.com/sprite.json`) or use the default empty sprite. |
+| **Map is not in an error state** | Listen for `error` events: `map.on('error', e => console.error(e.error))`. A failed style load can stop image registration. |
+
+---
+
+## 3️⃣ Full minimal example (ES-module build)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – custom marker</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty', // any non-Mapbox style
+    center: [-122.42, 37.78],
+    zoom: 12
+  });
+
+  map.on('load', async () => {
+    try {
+      const { data: img } = await map.loadImage(
+        'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/pin.png'
+      );
+      map.addImage('pin', img);
+
+      // Example GeoJSON source
+      map.addSource('points', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [-122.42, 37.78] },
+              properties: {}
+            }
+          ]
+        }
+      });
+
+      // Symbol layer that uses the runtime image
+      map.addLayer({
+        id: 'points-layer',
+        type: 'symbol',
+        source: 'points',
+        layout: {
+          'icon-image': 'pin',
+          'icon-size': 0.8,
+          'icon-allow-overlap': true
+        }
+      });
+    } catch (e) {
+      console.error('❌ loadImage failed', e);
+    }
+  });
+</script>
+</body>
+</html>
+```
+
+Run this in a browser (or your dev server). You should see a pin icon at the map centre. If it works here but not in your app, compare the two:
+
+* Same MapLibre version?  
+* Same `map.on('load')` timing?  
+* Same image URL (CORS, 404, etc.)?  
+
+---
+
+## 4️⃣ Quick “cheat-sheet” for the most common Mapbox-to-MapLibre API changes that affect markers
+
+| Mapbox GL JS | MapLibre GL JS (v4+) | What you need to change |
+|--------------|----------------------|--------------------------|
+| `map.loadImage(url, cb)` | `await map.loadImage(url)` → `{ data: ImageBitmap }` | Replace callback with `await`/`.then`. |
+| `map.addImage(name, image, { sdf: true })` | Same signature, but `image` is now an `ImageBitmap` (returned from `loadImage`). | No change other than getting the `ImageBitmap` from the promise. |
+| `map.addLayer({ layout: { 'icon-image': 'my-icon' } })` | Same. | Ensure the image name matches the one you added via `addImage`. |
+| `style.sprite` pointing to `mapbox://sprites/...` | Must point to a **self-hosted** sprite JSON + PNG (or omit the sprite entirely). | Update the style JSON or use a style that already has a non-Mapbox sprite (e.g., OpenFreeMap, MapTiler, your own). |
+| `mapboxgl.accessToken = 'pk.xxx'` | **Removed** – MapLibre does not need a token. | Delete any `accessToken` line. |
+| CSS classes `mapboxgl-…` | `maplibregl-…` | Update any custom CSS that targets the old class names. |
+
+---
+
+## 5️⃣ Next steps / debugging tips
+
+1. **Open the browser console → Network tab**  
+   * Look for the request to your image URL.  
+   * If it’s 404 or blocked by CORS, the promise will reject and you’ll see the error you printed in the `catch`.  
+
+2. **Check the MapLibre error event**  
+   ```js
+   map.on('error', e => console.error('MapLibre error:', e.error));
+   ```
+   Errors like “Failed to load sprite” or “Failed to load glyphs” will appear here.
+
+3. **Validate your style** (if you’re using a custom style JSON)  
+   ```bash
+   npx gl-style-validate my-style.json
+   ```
+   The validator will flag any lingering `mapbox://` URLs.
+
+4. **If you still need the old callback API** – lock to the 1.x compatibility branch **only as a temporary measure** while you finish the migration.  
+   ```bash
+   npm install maplibre-gl@1   # or yarn add maplibre-gl@1
+   ```
+
+5. **Upgrade other Mapbox-only APIs** (e.g., `setFog`, `getFreeCameraOptions`) if you use them – see the migration guide’s table for the MapLibre equivalents (`setSky`, `calculateCameraOptionsFromCameraLngLatAltRotation`, etc.).
+
+---
+
+## TL;DR
+
+* `map.loadImage` now returns a **Promise** – use `await` or `.then` and grab `data` from the resolved object.  
+* Add the image **before** you add any layer that references it.  
+* Ensure the style you’re using does **not** reference Mapbox sprite/glyph URLs.  
+* Update any CSS class prefixes (`mapboxgl-` → `maplibregl-`).  
+
+Once you make those changes, your custom marker icons will appear again and the “callback not being called” warning will disappear. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","### What’s happening
+
+1. **`map.loadImage` no longer accepts a callback** –  
+   Starting with **MapLibre GL v4.0.0** the method was changed to **return a `Promise`** instead of taking a `(err, image)` callback. Because the callback is ignored, the image never gets added, so any symbols that rely on `map.addImage('pin', …)` disappear from the map.
+
+2. **Marker icons are missing** –  
+   The missing icons are a direct consequence of the failed `loadImage` call. (If you were also using a style sprite, make sure the sprite URL is not a `mapbox://` URL; otherwise the same “blank-icon” symptom appears.)
+
+---
+
+## Fix #1 – Use the promise-based API
+
+```javascript
+// Old Mapbox-style code (does nothing in MapLibre ≥ v4)
+map.loadImage(url, (err, img) => {
+  if (err) throw err;
+  map.addImage('pin', img);
+});
+```
+
+### Option A – `async/await`
+
+```javascript
+async function addPinImage(url) {
+  try {
+    const { data: img } = await map.loadImage(url);   // ← returns a Promise
+    map.addImage('pin', img);
+  } catch (err) {
+    console.error('Failed to load pin image:', err);
+    // handle the error (fallback image, etc.)
+  }
+}
+
+// Call it after the style is ready
+map.on('style.load', () => addPinImage('https://example.com/pin.png'));
+```
+
+### Option B – `.then()/.catch()`
+
+```javascript
+map.on('style.load', () => {
+  map.loadImage('https://example.com/pin.png')
+    .then(({ data: img }) => map.addImage('pin', img))
+    .catch(err => console.error('loadImage error:', err));
+});
+```
+
+> **Why wait for `style.load`?**  
+> `map.addImage` can only be called **after the style (and its sprite) has been loaded**. If you call it earlier you’ll get the same “callback not called” warning because the internal worker isn’t ready yet.
+
+---
+
+## Fix #2 – Verify the image URL and CORS
+
+* The URL must be reachable from the browser and must allow **CORS** (`Access-Control-Allow-Origin:*` or your domain).  
+* If you’re loading a local file (`/assets/pin.png`) make sure it’s served with the correct MIME type (`image/png`).
+
+If the request fails, the promise will reject and you’ll see the error in the console (the `catch` block above).
+
+---
+
+## Fix #3 – Check your style’s sprite (optional but common)
+
+If you were relying on the default Mapbox sprite (e.g. `mapbox://sprites/...`) the style will still try to fetch that sprite and you’ll get a 401/404, which also results in missing icons. After swapping to MapLibre you need a **non-Mapbox sprite** (or no sprite at all if you add all images manually).
+
+```javascript
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/liberty', // <-- a style that uses its own sprite
+  center: [-122.42, 37.78],
+  zoom: 12
+});
+```
+
+If you keep a custom style JSON, open it and replace any `sprite: ""mapbox://sprites/…""` entry with a URL that points to a sprite you host (e.g. `sprite: ""https://my.cdn.com/sprites/sprite""`). The same applies to `glyphs` URLs.
+
+---
+
+## Full minimal example
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – custom pin image</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty',
+    center: [-122.42, 37.78],
+    zoom: 12
+  });
+
+  // Wait until the style (and its sprite) is ready
+  map.on('style.load', async () => {
+    try {
+      const { data: img } = await map.loadImage(
+        'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/marker.png'
+      );
+      map.addImage('pin', img);
+
+      // Add a layer that uses the image
+      map.addLayer({
+        id: 'my-pin',
+        type: 'symbol',
+        source: {
+          type: 'geojson',
+          data: {
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [-122.42, 37.78] }
+            }]
+          }
+        },
+        layout: {
+          'icon-image': 'pin',
+          'icon-size': 1
+        }
+      });
+    } catch (e) {
+      console.error('Could not load pin image', e);
+    }
+  });
+</script>
+</body>
+</html>
+```
+
+---
+
+## Quick checklist after the fix
+
+| ✅ | Item |
+|---|------|
+| **✔** Replace `map.loadImage(url, cb)` with the promise version (`await` or `.then`). |
+| **✔** Call the image-loading code **after** `style.load` (or `map.on('load')` if you never change the style). |
+| **✔** Verify the image URL is reachable and CORS-enabled. |
+| **✔** Ensure your style does **not** contain any `mapbox://` sprite or glyph URLs. |
+| **✔** If you still see missing icons, open the browser dev-tools → Network tab and look for 404/401 on `sprite` or `glyphs` requests. Replace them with URLs you control. |
+
+Once those steps are in place, the marker icons will appear and the console warning about the callback will disappear. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","**What’s happening**
+
+`map.loadImage` changed in **MapLibre GL v4.0.0** (and later).  
+- In Mapbox GL JS the method accepted a *callback* (`(err, image) => …`).  
+- In MapLibre GL JS the callback signature was **removed** – the method now **returns a Promise** that resolves with an object `{data: ImageBitmap}` (or rejects with an error).
+
+Because you are still passing a callback, the promise is created but never resolved, so the callback is never invoked. Consequently the image never gets added to the style, and any markers that rely on that image (`'pin'`) appear as missing icons.
+
+---
+
+## Fix #1 – Use the Promise API (recommended)
+
+```javascript
+// Make sure the map is fully loaded before you try to add images
+map.on('load', async () => {
+  try {
+    // loadImage now returns a promise
+    const { data: img } = await map.loadImage('https://example.com/pin.png');
+
+    // addImage can be called directly with the ImageBitmap
+    map.addImage('pin', img);
+
+    // now you can add a marker that uses the image
+    new maplibregl.Marker({ element: createMarkerElement('pin') })
+      .setLngLat([lon, lat])
+      .addTo(map);
+  } catch (err) {
+    console.error('Failed to load marker image:', err);
+  }
+});
+```
+
+**If you prefer `.then()` syntax**
+
+```javascript
+map.on('load', () => {
+  map.loadImage('https://example.com/pin.png')
+    .then(({ data: img }) => {
+      map.addImage('pin', img);
+      // …add your marker here
+    })
+    .catch(err => console.error('loadImage error:', err));
+});
+```
+
+### Why the `await`/`.then()` is needed
+
+- The promise resolves **after** the image has been fetched and decoded.
+- Only then can `map.addImage` register the image with the style.
+- If you call `addImage` before the map is ready, you’ll get the same “missing icon” symptom.
+
+---
+
+## Fix #2 – (Legacy) Keep the old callback style **only if you pin to the 1.x compatibility branch**
+
+MapLibre provides a **compatibility branch** (`maplibre-gl@1`) that mimics the old Mapbox GL v1 API, including the callback form of `loadImage`. This is useful only as a temporary stop-gap while you finish the migration.
+
+```bash
+npm install maplibre-gl@1   # or yarn add maplibre-gl@1
+```
+
+Then you can keep your original code unchanged. **But**:
+
+- The 1.x branch will not receive new features or bug-fixes.
+- It will eventually be deprecated, so you should still migrate to the promise API.
+
+---
+
+## Why the markers disappear (beyond the callback)
+
+Even after fixing `loadImage`, you may still see missing icons if any of the following is true:
+
+| Symptom | Likely cause | Quick check / fix |
+|---------|--------------|-------------------|
+| **Blank icons** after `addImage` succeeds | The style you are using does **not** reference the image name you added (`'pin'`). | Verify that the layer’s `layout.icon-image` (or `symbol` style) is exactly `'pin'`. |
+| **CORS error** in the console (`Cross-origin request blocked`) | The image URL is on a different origin without proper CORS headers. | Host the PNG on the same domain, or serve it with `Access-Control-Allow-Origin: *` (or your domain). |
+| **`map.addImage` throws “Image already exists”** | You are calling `addImage` multiple times (e.g., on every `load` event). | Guard against duplicate calls: `if (!map.hasImage('pin')) { map.addImage('pin', img); }` |
+| **Sprite / glyphs missing** (labels, icons from the style) | The style still points to a Mapbox `sprite` or `glyphs` URL (`mapbox://…`). | Replace those URLs with a self-hosted sprite sheet or a free alternative (e.g., OpenFreeMap). See the **“Replace the style URL”** section of the migration guide. |
+
+---
+
+## Full Minimal Example (ES-module build)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – custom marker image</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position: absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty', // any non-Mapbox style
+    center: [-122.42, 37.78],
+    zoom: 12
+  });
+
+  map.on('load', async () => {
+    try {
+      const { data: img } = await map.loadImage(
+        // replace with your own PNG URL (must be CORS-enabled)
+        'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/custom-marker.png'
+      );
+
+      // Register the image under the name ""pin""
+      map.addImage('pin', img);
+
+      // Add a marker that uses the newly-added image
+      new maplibregl.Marker({ element: createImgElement('pin') })
+        .setLngLat([-122.42, 37.78])
+        .addTo(map);
+    } catch (e) {
+      console.error('Could not load marker image:', e);
+    }
+  });
+
+  // Helper: create a DOM element that uses the style-image we just added
+  function createImgElement(imageName) {
+    const el = document.createElement('div');
+    el.style.backgroundImage = `url(${map.getStyle().sprite}/${imageName}.png)`;
+    el.style.width = '32px';
+    el.style.height = '32px';
+    el.style.backgroundSize = 'contain';
+    return el;
+  }
+</script>
+</body>
+</html>
+```
+
+> **Tip:** If you don’t need a custom DOM element and just want the style-image to appear in a *symbol layer*, you can skip the `Marker` entirely and add a layer like:
+
+```javascript
+map.addLayer({
+  id: 'my-pins',
+  type: 'symbol',
+  source: {
+    type: 'geojson',
+    data: {
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [-122.42, 37.78] } }]
+    }
+  },
+  layout: {
+    'icon-image': 'pin',
+    'icon-size': 1
+  }
+});
+```
+
+---
+
+## TL;DR Checklist for Your Situation
+
+1. **Replace the callback with a promise** (`await map.loadImage(...)` or `.then(...)`).  
+2. **Make sure the code runs after `map.on('load')`.**  
+3. **Confirm the image URL is CORS-friendly** (or host it locally).  
+4. **Verify the style you’re using does not still reference any `mapbox://` sprite or glyph URLs.**  
+5. **If you’re on the 1.x compatibility branch, consider upgrading** to the current `maplibre-gl@^6` and refactor to the promise API – the old callback will disappear in future releases.
+
+Once those steps are applied, your custom marker icons will appear again and the console error about the missing callback will disappear. Happy mapping! 🚀",PASS,1.00,,All assertions passed,
+implicit — Mapbox callback code after migrating to latest MapLibre,skills/maplibre-mapbox-migration/SKILL.md,"I swapped mapbox-gl for the latest maplibre-gl in my app. Everything loads, but my marker icons are gone and the console says the callback passed to map.loadImage is not being called. My code is map.loadImage(url, (err, img) => { if (err) throw err; map.addImage('pin', img); }). What's wrong?
+","### What’s happening?
+
+1. **`map.loadImage` no longer accepts a callback** –  
+   Starting with **MapLibre GL v4.0.0** the method was changed to **return a Promise** instead of taking a `(err, image)` callback. Because the callback is ignored, the image never gets added, so any symbols that rely on the image (`icon-image: 'pin'`) disappear.
+
+2. **Your marker icons are missing** because the image you tried to load never made it into the style’s image registry (`map.addImage('pin', …)`).
+
+Both problems are solved by converting the callback-style code to the new promise-style API (or by using an older 1.x compatibility branch, but the recommended path is to update the code).
+
+---
+
+## 1️⃣ Fix the `loadImage` call
+
+### Modern (recommended) – async/await
+
+```javascript
+// Make sure the map is fully loaded before you add images
+map.on('load', async () => {
+  try {
+    // loadImage now returns a promise that resolves to { data: ImageBitmap }
+    const { data: img } = await map.loadImage('https://example.com/pin.png');
+
+    // addImage also accepts an ImageBitmap (or HTMLImageElement, Canvas, etc.)
+    map.addImage('pin', img);
+
+    // Now you can add a layer that uses the image
+    map.addLayer({
+      id: 'my-pins',
+      type: 'symbol',
+      source: 'my-geojson',
+      layout: {
+        'icon-image': 'pin',
+        'icon-size': 0.8
+      }
+    });
+  } catch (err) {
+    console.error('Failed to load marker image:', err);
+  }
+});
+```
+
+### Promise-chain version (if you can’t use `async/await`)
+
+```javascript
+map.on('load', () => {
+  map.loadImage('https://example.com/pin.png')
+    .then(({ data: img }) => {
+      map.addImage('pin', img);
+      // add your layer here …
+    })
+    .catch(err => {
+      console.error('Failed to load marker image:', err);
+    });
+});
+```
+
+### If you *must* keep the old callback style (not recommended)
+
+You can stay on the **`maplibre-gl@1` compatibility branch** (the 1.x line that mirrors Mapbox GL v1). Install it instead:
+
+```bash
+npm install maplibre-gl@1   # or yarn add maplibre-gl@1
+```
+
+Then the old callback signature works again.  
+*But*: you’ll miss out on bug-fixes, new features (e.g., `setSky`, `calculateCameraOptions…`), and the ESM-only build that the current 6.x line provides. Upgrading the code is the future-proof solution.
+
+---
+
+## 2️⃣ Why the icons disappear – a quick checklist
+
+| ✅ What to verify | 🔍 How to check / fix |
+|-------------------|-----------------------|
+| **Image is added before the layer that uses it** | Call `addImage` **before** you add the layer (or before you set `icon-image` on an existing layer). The `load` event is a safe place. |
+| **Correct image name** | The string you pass to `addImage` (`'pin'` above) must match the `icon-image` value in the layer’s layout. |
+| **Image format is supported** | PNG, JPEG, SVG (as data-URL) and WebP are fine. If you use a remote URL, make sure CORS headers allow the request (or host the image on the same origin). |
+| **Sprite vs. runtime image** | If you were previously relying on a **sprite** (`style.sprite`), you can keep that and *also* add runtime images. No conflict, but make sure you’re not accidentally overriding the same name. |
+| **Map style does not reference a Mapbox sprite/glyphs** | After migration, any `sprite` or `glyphs` URL that still points to `mapbox://` will cause 401/404 errors and can prevent symbols from rendering. Replace them with a self-hosted sprite (e.g., `https://my.cdn.com/sprite.json`) or use the default empty sprite. |
+| **Map is not in an error state** | Listen for `error` events: `map.on('error', e => console.error(e.error))`. A failed style load can stop image registration. |
+
+---
+
+## 3️⃣ Full minimal example (ES-module build)
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+  <title>MapLibre – custom marker</title>
+  <link href=""https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.css"" rel=""stylesheet"" />
+  <style>
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+  </style>
+</head>
+<body>
+<div id=""map""></div>
+
+<script type=""module"">
+  import * as maplibregl from 'https://unpkg.com/maplibre-gl@^6.0.0/dist/maplibre-gl.mjs';
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty', // any non-Mapbox style
+    center: [-122.42, 37.78],
+    zoom: 12
+  });
+
+  map.on('load', async () => {
+    try {
+      const { data: img } = await map.loadImage(
+        'https://raw.githubusercontent.com/maplibre/maplibre-gl-js/main/docs/assets/pin.png'
+      );
+      map.addImage('pin', img);
+
+      // Example GeoJSON source
+      map.addSource('points', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [-122.42, 37.78] },
+              properties: {}
+            }
+          ]
+        }
+      });
+
+      // Symbol layer that uses the runtime image
+      map.addLayer({
+        id: 'points-layer',
+        type: 'symbol',
+        source: 'points',
+        layout: {
+          'icon-image': 'pin',
+          'icon-size': 0.8,
+          'icon-allow-overlap': true
+        }
+      });
+    } catch (e) {
+      console.error('❌ loadImage failed', e);
+    }
+  });
+</script>
+</body>
+</html>
+```
+
+Run this in a browser (or your dev server). You should see a pin icon at the map centre. If it works here but not in your app, compare the two:
+
+* Same MapLibre version?  
+* Same `map.on('load')` timing?  
+* Same image URL (CORS, 404, etc.)?  
+
+---
+
+## 4️⃣ Quick “cheat-sheet” for the most common Mapbox-to-MapLibre API changes that affect markers
+
+| Mapbox GL JS | MapLibre GL JS (v4+) | What you need to change |
+|--------------|----------------------|--------------------------|
+| `map.loadImage(url, cb)` | `await map.loadImage(url)` → `{ data: ImageBitmap }` | Replace callback with `await`/`.then`. |
+| `map.addImage(name, image, { sdf: true })` | Same signature, but `image` is now an `ImageBitmap` (returned from `loadImage`). | No change other than getting the `ImageBitmap` from the promise. |
+| `map.addLayer({ layout: { 'icon-image': 'my-icon' } })` | Same. | Ensure the image name matches the one you added via `addImage`. |
+| `style.sprite` pointing to `mapbox://sprites/...` | Must point to a **self-hosted** sprite JSON + PNG (or omit the sprite entirely). | Update the style JSON or use a style that already has a non-Mapbox sprite (e.g., OpenFreeMap, MapTiler, your own). |
+| `mapboxgl.accessToken = 'pk.xxx'` | **Removed** – MapLibre does not need a token. | Delete any `accessToken` line. |
+| CSS classes `mapboxgl-…` | `maplibregl-…` | Update any custom CSS that targets the old class names. |
+
+---
+
+## 5️⃣ Next steps / debugging tips
+
+1. **Open the browser console → Network tab**  
+   * Look for the request to your image URL.  
+   * If it’s 404 or blocked by CORS, the promise will reject and you’ll see the error you printed in the `catch`.  
+
+2. **Check the MapLibre error event**  
+   ```js
+   map.on('error', e => console.error('MapLibre error:', e.error));
+   ```
+   Errors like “Failed to load sprite” or “Failed to load glyphs” will appear here.
+
+3. **Validate your style** (if you’re using a custom style JSON)  
+   ```bash
+   npx gl-style-validate my-style.json
+   ```
+   The validator will flag any lingering `mapbox://` URLs.
+
+4. **If you still need the old callback API** – lock to the 1.x compatibility branch **only as a temporary measure** while you finish the migration.  
+   ```bash
+   npm install maplibre-gl@1   # or yarn add maplibre-gl@1
+   ```
+
+5. **Upgrade other Mapbox-only APIs** (e.g., `setFog`, `getFreeCameraOptions`) if you use them – see the migration guide’s table for the MapLibre equivalents (`setSky`, `calculateCameraOptionsFromCameraLngLatAltRotation`, etc.).
+
+---
+
+## TL;DR
+
+* `map.loadImage` now returns a **Promise** – use `await` or `.then` and grab `data` from the resolved object.  
+* Add the image **before** you add any layer that references it.  
+* Ensure the style you’re using does **not** reference Mapbox sprite/glyph URLs.  
+* Update any CSS class prefixes (`mapboxgl-` → `maplibregl-`).  
+
+Once you make those changes, your custom marker icons will appear again and the “callback not being called” warning will disappear. Happy mapping! 🚀",PASS,1.00,,All assertions passed,

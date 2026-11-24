@@ -33,8 +33,6 @@ Work through these in order; each item has a numbered step below.
 npm install maplibre-gl
 ```
 
-Install the latest version unless the app is on Mapbox GL JS v1 and must keep working with no code changes. In that case only, `npm install maplibre-gl@1` is a drop-in swap (the `1.x` compatibility branch, backward compatible with Mapbox GL JS v1); plan to upgrade to the latest version afterwards, since later major versions change the API.
-
 ```javascript
 // Before (Mapbox)
 import mapboxgl from 'mapbox-gl';
