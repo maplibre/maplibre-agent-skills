@@ -26,6 +26,7 @@ import {
   planRun,
   rateLimitWaits,
   reserveAfter,
+  runBaselineRound,
   runEvals,
   shardOf,
   shouldRetry,
@@ -1666,6 +1667,111 @@ describe('costsOf', () => {
       () => costsOf(['evals/prompts/maplibre-unwritten.yaml'], { limits }),
       /ENOENT/
     );
+  });
+
+  it('sizes a baseline run with the skill withheld and the cap the skill leaves', () => {
+    const config = 'evals/prompts/maplibre-tile-sources.yaml';
+    const withSkill = costsOf([config], { limits }).get(config);
+    const withheld = costsOf([config], { limits, withheld: true }).get(config);
+    assert.equal(withheld.requests, withSkill.requests);
+    assert.ok(withheld.largest < withSkill.largest);
+    assert.ok(withheld.firstPass < withSkill.firstPass);
+  });
+});
+
+describe('runBaselineRound', () => {
+  const roundRow = (description, failureReason, testIdx) => ({
+    testCase: { description },
+    description,
+    failureReason,
+    success: failureReason === 0,
+    testIdx
+  });
+
+  it('runs each config with its skill withheld under the baseline name, and records its cut candidates', async () => {
+    const { resultsDir, workDir } = workspace();
+    const roundDir = join(workDir, 'baseline');
+    const ran = [];
+    const spawn = async (command, args) => {
+      ran.push(args);
+      const at = args.indexOf('--output');
+      writeFileSync(args[at + 1], 'Description,Status\n');
+      writeFileSync(
+        args[at + 2],
+        sidecar([
+          roundRow('explicit — one', 0, 0),
+          roundRow('implicit — two', 1, 1),
+          roundRow('negative — three', 0, 2)
+        ])
+      );
+      return { exitCode: 100, durationMs: 1000 };
+    };
+
+    const { summary, round } = await runBaselineRound({
+      configs: ['evals/prompts/maplibre-cartography.yaml'],
+      date: '2026-12-03',
+      workDir: roundDir,
+      generator: 'next-pinned-generator',
+      resultsDir,
+      budgetMinutes: 240,
+      spawn,
+      log: () => {}
+    });
+
+    assert.ok(ran[0].includes('injectSkill=false'));
+    assert.equal(summary.name, 'baseline-2026-12-03');
+    assert.deepEqual(round.configs, [
+      { skill: 'maplibre-cartography', candidates: ['explicit — one'] }
+    ]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(roundDir, 'candidates.json'), 'utf8')),
+      round
+    );
+    // The record names the generator, which the next run plans from.
+    assert.equal(
+      JSON.parse(
+        readFileSync(join(resultsDir, 'baseline-2026-12-03.json'), 'utf8')
+      ).generator,
+      'next-pinned-generator'
+    );
+    // Its verdicts stay in its own dir, away from the status sync.
+    assert.equal(
+      readFileSync(join(roundDir, 'verdicts.txt'), 'utf8'),
+      'maplibre-cartography:fail\n'
+    );
+  });
+
+  it('counts only the first pass against the day, since a baseline never re-runs', async () => {
+    const { resultsDir, workDir } = workspace();
+    const ran = [];
+    const spawn = async (command, args) => {
+      ran.push(args);
+      const at = args.indexOf('--output');
+      writeFileSync(args[at + 1], 'Description,Status\n');
+      writeFileSync(args[at + 2], sidecar([roundRow('explicit — one', 1, 0)]));
+      return { exitCode: 100, durationMs: 1000 };
+    };
+    const config = 'evals/prompts/maplibre-cartography.yaml';
+    // With its re-runs it could spend 1,000 + 2 x 2 x 500 = 3,000.
+    const costs = new Map([
+      [config, { firstPass: 1000, largest: 500, requests: 2 }]
+    ]);
+
+    const { summary } = await runBaselineRound({
+      configs: [config],
+      date: '2026-12-03',
+      workDir,
+      generator: 'next-pinned-generator',
+      resultsDir,
+      budgetMinutes: 240,
+      costs,
+      tokensPerDay: 2000,
+      spawn,
+      log: () => {}
+    });
+
+    assert.equal(ran.length, 1);
+    assert.deepEqual(summary.day.waiting, []);
   });
 });
 

@@ -6,7 +6,11 @@ name: Eval
 #       its last graded run, then each one last graded EVAL_REGRADE_DAYS or more
 #       ago, which is what shows a provider changing a model behind its pinned
 #       id. As many as one day of the Groq key's generator tokens holds; the
-#       rest are first the next day. A day with nothing due runs nothing.
+#       rest are first the next day. What the day has left then goes to the
+#       baseline round a generator pin change starts: each config whose
+#       baseline evidence came from another generator runs with the skill
+#       withheld, and its tests that pass are reported as cut candidates. A day
+#       with nothing due runs nothing.
 #   - workflow_dispatch: a maintainer validates a branch or PR, pre- or post-merge.
 #       ref      – branch, or refs/pull/<N>/head for a fork PR. Blank = default branch.
 #       configs  – space-separated evals/prompts/*.yaml. Blank = every config
@@ -108,6 +112,9 @@ jobs:
           # many days old, on scheduled runs only: theirs are the grades the
           # publish job commits, so a dispatch grades only what changed.
           EVAL_REGRADE_DAYS: ${{ github.event_name == 'schedule' && 7 || 0 }}
+          # The baseline round after a generator pin change, on scheduled runs
+          # only, for the same reason.
+          EVAL_BASELINES: ${{ github.event_name == 'schedule' }}
         run: node scripts/run-evals.js
 
       - name: Upload results
@@ -170,10 +177,11 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           # The run's dated CSVs, and its record of what each config was graded
-          # on, which the next run plans from. A config the day cut off left no
-          # CSV, so a run may have none.
+          # on, which the next run plans from, and the same for its baseline
+          # round, if it had one. A config the day cut off left no CSV, so a run
+          # may have none.
           shopt -s nullglob
-          git add evals/results/${{ env.name }}.json evals/results/${{ env.name }}-*.csv
+          git add evals/results/${{ env.name }}.json evals/results/${{ env.name }}-*.csv evals/results/baseline-${{ env.name }}*
           git diff --staged --quiet || git commit -m "chore: eval results ${{ env.name }}"
           git pull --rebase
           git push
@@ -209,6 +217,30 @@ jobs:
           STATUS_COMMIT_OUTCOME: ${{ steps.status_commit.outcome }}
           SYNC_PARTIAL: ${{ steps.sync.outputs.partial }}
         run: node scripts/eval-issue.js
+
+      # A baseline round's tests that pass without the skill are cut
+      # candidates, for a maintainer to read and decide on, whatever the run's
+      # own verdict was.
+      - name: Read the baseline round
+        id: baseline
+        if: always()
+        run: node scripts/baseline-issue.js
+
+      - name: Open issue on cut candidates
+        if: always() && steps.baseline.outputs.found == 'true'
+        uses: actions/github-script@v9
+        env:
+          TITLE: ${{ steps.baseline.outputs.title }}
+          BODY: ${{ steps.baseline.outputs.body }}
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: process.env.TITLE,
+              body: process.env.BODY,
+              labels: ['baseline-round']
+            })
 
       # A status flip is expected-by-design behavior, not a failure — this is a
       # "review this" notice, separate from the eval-drift issue below which
