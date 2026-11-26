@@ -174,9 +174,9 @@ Write prompts based on real developer or AI confusion: evidenced in GitHub issue
 
 ## Request size
 
-Groq counts each request as its prompt plus the answer cap it reserves, and refuses one over the generator's tokens per minute before the model reads it. So `lib/skill-prompt.mjs` gives every request the cap `providers.yaml` sets, or whatever the limit leaves after the prompt if that is less. No request is refused for its size, and a longer `SKILL.md` costs its answers room instead.
+Groq counts each request as its prompt plus the answer cap it reserves, and refuses one over the generator's tokens per minute before the model reads it. So `lib/skill-prompt.mjs` caps each answer at what that limit leaves after the test's prompt with the skill loaded, and a baseline run of the test gets the same cap, so the skill is the only difference between the two. The cap stays one token short of the minute: an answer that uses the minute's last token can come back with `x-ratelimit-remaining-tokens: 0`, which promptfoo treats as a rate limit even on a 200, so it discards the answer, waits for Groq's daily request window to reset, and sends the request again. `providers.yaml`'s `max_completion_tokens` is the most the model writes in one answer, far more than the free tier's minute leaves. No request is refused for its size, and a longer `SKILL.md` costs its answers room instead.
 
-`npm run lint:prompt-budget`, part of `npm run check` and `check.yml`, reports that room for every test: it warns when a prompt takes some of the answer budget and fails when it takes more than half, since most answers would then be cut off. Each eval run measures the per-minute limit and the chat template from Groq, so the caps follow any change Groq makes. A config whose `SKILL.md` is not written yet is sized with the skill withheld, as its baseline runs it.
+`npm run lint:prompt-budget`, part of `npm run check` and `check.yml`, reports that room for every test: it warns below 3,072 tokens, which about a third of answers outgrow, and fails below 1,536, since most answers would then be cut off. Each eval run measures the per-minute limit and the chat template from Groq, so the caps follow any change Groq makes. A config whose `SKILL.md` is not written yet is sized with the skill withheld, as its baseline runs it.
 
 ## Example results
 

@@ -50,8 +50,9 @@ describe('sizeTests', () => {
     assert.deepEqual(sizes, [
       // 10 template + 40 + 10 leaves 40 of the minute: the whole budget fits.
       { test: 1, description: 'short', prompt: 60, answer: 30, request: 90 },
-      // 10 + 45 + 30 leaves 15, so the answer gets 15 and the request fits.
-      { test: 2, description: 'test 2', prompt: 85, answer: 15, request: 100 }
+      // 10 + 45 + 30 leaves 15, and the minute keeps one unreserved token,
+      // so the answer gets 14 and the request fits.
+      { test: 2, description: 'test 2', prompt: 85, answer: 14, request: 99 }
     ]);
   });
 

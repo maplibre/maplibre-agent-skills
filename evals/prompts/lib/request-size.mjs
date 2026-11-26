@@ -23,9 +23,9 @@ export const DEFAULT_TEMPLATE_TOKENS = 74;
 const PROVIDERS = new URL('./providers.yaml', import.meta.url);
 
 /**
- * The answer budget providers.yaml sets for the pinned generator. Read from the
- * file because promptfoo hands a prompt function only the provider's id and
- * label, never its config.
+ * The answer budget providers.yaml sets for the pinned generator: the most it
+ * writes in one answer. Read from the file because promptfoo hands a prompt
+ * function only the provider's id and label, never its config.
  */
 export function answerBudget(text = readFileSync(PROVIDERS, 'utf8')) {
   const match = /^\s+max_completion_tokens:\s*(\d+)\s*$/m.exec(text);
@@ -71,10 +71,20 @@ export function promptTokens(
 }
 
 /**
+ * Tokens of the minute no request reserves. Groq reports what a request leaves
+ * of the minute in `x-ratelimit-remaining-tokens`, and promptfoo reads "0" there
+ * as a rate limit, even on a 200: it discards the answer, waits for Groq's
+ * daily request window to reset (86.4 s for every request made that day), and
+ * sends the request again. An answer that runs to a cap filling the minute can
+ * leave exactly that "0".
+ */
+export const UNRESERVED_TOKENS = 1;
+
+/**
  * The answer cap for a prompt of this size: the configured answer budget, or
- * whatever the per-minute limit leaves after the prompt, whichever is smaller.
- * Zero or less means the prompt alone fills the minute.
+ * whatever the per-minute limit leaves after the prompt and UNRESERVED_TOKENS,
+ * whichever is smaller. Zero or less means the prompt alone fills the minute.
  */
 export function answerCap(prompt, { answerTokens, tokensPerMinute }) {
-  return Math.min(answerTokens, tokensPerMinute - prompt);
+  return Math.min(answerTokens, tokensPerMinute - UNRESERVED_TOKENS - prompt);
 }
