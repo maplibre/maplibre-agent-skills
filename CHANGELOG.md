@@ -37,6 +37,7 @@ Notable changes to this repo's skills and tooling. Loosely follows [Keep a Chang
 
 ### Internal
 
+- `eval.yml` and hand runs: each answer's cap is what the generator's per-minute limit leaves after the test's prompt with the skill loaded, less one token, the same for both runs of a test, instead of a fixed 3,072 tokens ([#222](https://github.com/maplibre/maplibre-agent-skills/pull/222))
 - evals: `maplibre-v6-migration`'s PMTiles negative allows a note on why the answer's own code uses v6 imports or `setWorkerUrl()` ([#211](https://github.com/maplibre/maplibre-agent-skills/pull/211))
 - evals: `maplibre-fonts-glyphs` test 6 fails font configuration in the answer's code, not a passing mention of `glyphs` ([#200](https://github.com/maplibre/maplibre-agent-skills/pull/200))
 - evals: `maplibre-source-wiring` test 7 no longer fails an answer for leaving out that nothing warns ([#196](https://github.com/maplibre/maplibre-agent-skills/pull/196))
