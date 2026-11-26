@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_TEMPLATE_TOKENS,
   DEFAULT_TOKENS_PER_MINUTE,
+  UNRESERVED_TOKENS,
   answerBudget,
   answerCap,
   countTokens,
@@ -79,7 +80,7 @@ describe('answerBudget', () => {
 });
 
 describe('promptTokens and answerCap', () => {
-  it("size run 39585050825's refused request to fit the minute", () => {
+  it("size run 39585050825's refused request to fit the minute, one token short", () => {
     // That SKILL.md was 4,769 tokens and the test prompt 93; with no cap sent,
     // Groq reserved 3,072 and logged "Limit 8000, Requested 8008".
     const tokens = { skill: 4769, prompt: 93 };
@@ -88,13 +89,23 @@ describe('promptTokens and answerCap', () => {
       count: (text) => tokens[text]
     });
     assert.equal(prompt + 3072, 8008);
+    const cap = answerCap(prompt, {
+      answerTokens: answerBudget(),
+      tokensPerMinute: 8000
+    });
+    assert.equal(cap, 3063);
+    assert.equal(prompt + cap + UNRESERVED_TOKENS, 8000);
+  });
+
+  it('never reserves the whole minute, so a full answer leaves Groq some', () => {
+    assert.ok(UNRESERVED_TOKENS > 0);
     assert.equal(
-      answerCap(prompt, { answerTokens: 3072, tokensPerMinute: 8000 }),
-      3064
+      answerCap(4000, { answerTokens: 65536, tokensPerMinute: 8000 }),
+      8000 - UNRESERVED_TOKENS - 4000
     );
   });
 
-  it('keeps the whole budget while the prompt leaves room for it', () => {
+  it('keeps to the budget while the minute leaves more', () => {
     assert.equal(
       answerCap(3000, { answerTokens: 3072, tokensPerMinute: 8000 }),
       3072
@@ -108,18 +119,26 @@ describe('skill-prompt', () => {
     prompt: 'How do I add a map?'
   };
 
-  it('gives the answer the whole budget when the prompt leaves room', () => {
-    const { prompt, config } = render({ vars });
-    assert.equal(JSON.parse(prompt).length, 2);
-    assert.equal(config.max_completion_tokens, answerBudget());
+  it('gives the answer what the minute leaves after the prompt', () => {
+    withEnv({ EVAL_TOKENS_PER_MINUTE: '8000' }, () => {
+      const { prompt, config } = render({ vars });
+      const used = promptTokens(JSON.parse(prompt), limitsFrom());
+      assert.equal(JSON.parse(prompt).length, 2);
+      assert.equal(
+        config.max_completion_tokens,
+        8000 - UNRESERVED_TOKENS - used
+      );
+    });
   });
 
   it('lowers the cap to what a smaller minute leaves after the prompt', () => {
     withEnv({ EVAL_TOKENS_PER_MINUTE: '4000' }, () => {
       const { prompt, config } = render({ vars });
       const used = promptTokens(JSON.parse(prompt), limitsFrom());
-      assert.ok(4000 - used < answerBudget());
-      assert.equal(config.max_completion_tokens, 4000 - used);
+      assert.equal(
+        config.max_completion_tokens,
+        4000 - UNRESERVED_TOKENS - used
+      );
     });
   });
 
@@ -129,10 +148,35 @@ describe('skill-prompt', () => {
     });
   });
 
-  it('withholds the skill on a baseline run', () => {
-    const { prompt } = render({ vars: { ...vars, injectSkill: 'false' } });
-    assert.deepEqual(JSON.parse(prompt), [
+  it('withholds the skill on a baseline run and gives it the same cap', () => {
+    const withSkill = render({ vars });
+    const baseline = render({ vars: { ...vars, injectSkill: 'false' } });
+    assert.deepEqual(JSON.parse(baseline.prompt), [
       { role: 'user', content: vars.prompt }
     ]);
+    assert.equal(
+      baseline.config.max_completion_tokens,
+      withSkill.config.max_completion_tokens
+    );
+  });
+
+  it('sizes a baseline from its question alone while the skill is unwritten', () => {
+    const unwritten = {
+      skillFile: 'skills/maplibre-not-written-yet/SKILL.md',
+      prompt: vars.prompt,
+      injectSkill: 'false'
+    };
+    withEnv({ EVAL_TOKENS_PER_MINUTE: '8000' }, () => {
+      const { prompt, config } = render({ vars: unwritten });
+      const used = promptTokens(JSON.parse(prompt), limitsFrom());
+      assert.equal(
+        config.max_completion_tokens,
+        8000 - UNRESERVED_TOKENS - used
+      );
+    });
+    assert.throws(
+      () => render({ vars: { ...unwritten, injectSkill: 'true' } }),
+      /ENOENT/
+    );
   });
 });

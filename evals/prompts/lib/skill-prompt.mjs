@@ -7,13 +7,13 @@
  *
  * It also sets each request's answer cap. Groq counts a request as its prompt
  * plus that cap and refuses one over its per-minute limit before the model
- * reads it, so the cap is the answer budget in providers.yaml or whatever the
- * limit leaves after this prompt, whichever is smaller. A skill can grow without
- * any request being refused; its answers get less room instead, which
+ * reads it, so the cap is whatever the limit leaves after the test's prompt
+ * with the skill loaded (see answerCap in request-size.mjs). A skill can grow
+ * without any request being refused; its answers get less room instead, which
  * `npm run lint:prompt-budget` reports.
  */
 
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -27,18 +27,25 @@ import {
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 export default function ({ vars }) {
-  const messages = [];
   // Compares case-insensitively: `--var injectSkill=False` on the CLI is a
   // one-character typo away from silently injecting the skill anyway.
-  if (String(vars.injectSkill).toLowerCase() !== 'false') {
-    const skillContent = readFileSync(join(repoRoot, vars.skillFile), 'utf8');
-    messages.push({ role: 'system', content: skillContent });
-  }
-  messages.push({ role: 'user', content: vars.prompt });
+  const inject = String(vars.injectSkill).toLowerCase() !== 'false';
+  const skillPath = join(repoRoot, vars.skillFile);
+  const question = { role: 'user', content: vars.prompt };
+  // A baseline reads the skill too, to size its cap, unless the skill is not
+  // written yet (a new skill's rubric round).
+  const skill =
+    inject || existsSync(skillPath)
+      ? { role: 'system', content: readFileSync(skillPath, 'utf8') }
+      : null;
+  const withSkill = skill ? [skill, question] : [question];
+  const messages = inject ? withSkill : [question];
   const prompt = JSON.stringify(messages);
 
+  // Both runs of a test get the cap the skill's run gets, so the skill is the
+  // only thing a baseline comparison changes.
   const limits = limitsFrom();
-  const cap = answerCap(promptTokens(messages, limits), {
+  const cap = answerCap(promptTokens(withSkill, limits), {
     answerTokens: answerBudget(),
     ...limits
   });

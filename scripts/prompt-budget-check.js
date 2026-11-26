@@ -6,31 +6,26 @@
  * config takes, and fails only for a config no single day could grade.
  *
  * No request can exceed the generator's per-minute limit: the prompt function
- * gives each one an answer cap of whatever the limit leaves after its prompt,
- * up to the answer budget in providers.yaml. A longer prompt therefore costs
- * answer room. Below the budget this warns; below MIN_ANSWER_SHARE of it, most
- * answers would be truncated, so it fails. In the 98 answers of the October
- * runs the median used 2,822 tokens and 92% used more than 1,536, half the
- * 3,072-token budget.
+ * gives each one an answer cap of whatever the limit leaves after its prompt.
+ * A longer prompt therefore costs answer room. Below ANSWER_ROOM this warns:
+ * 8 of the 25 answers that ended on their own in the 2026-11-26 runs used more.
+ * Below MIN_ANSWER_ROOM most answers would be cut off, so it fails: 92% of the
+ * 98 answers in the October runs used more than 1,536 tokens.
  */
 import { readFileSync } from 'node:fs';
 import { listEvalConfigs, skillOf } from './lib/eval-verdicts.js';
 import { passCost, sizeConfig, workflowSetting } from './lib/prompt-budget.js';
 import { dayCost } from './run-evals.js';
-import {
-  answerBudget,
-  limitsFrom
-} from '../evals/prompts/lib/request-size.mjs';
+import { limitsFrom } from '../evals/prompts/lib/request-size.mjs';
 
-const MIN_ANSWER_SHARE = 0.5;
+const ANSWER_ROOM = 3072;
+const MIN_ANSWER_ROOM = 1536;
 
 function thousands(value) {
   return value.toLocaleString('en-US');
 }
 
 const limits = limitsFrom();
-const answerTokens = answerBudget();
-const floor = Math.ceil(answerTokens * MIN_ANSWER_SHARE);
 console.log(
   `Sizing with ${thousands(limits.tokensPerMinute)} tokens a minute and a ${limits.templateTokens}-token chat template; each eval run measures both again.\n`
 );
@@ -42,10 +37,7 @@ for (const configPath of listEvalConfigs()) {
   let sizes;
   let missingSkills;
   try {
-    ({ sizes, missingSkills } = sizeConfig(configPath, {
-      limits,
-      answerTokens
-    }));
+    ({ sizes, missingSkills } = sizeConfig(configPath, { limits }));
   } catch (error) {
     console.error(`❌ ${skill}: cannot size its requests (${error.message})`);
     failed = true;
@@ -67,23 +59,23 @@ for (const configPath of listEvalConfigs()) {
     continue;
   }
 
-  for (const size of sizes.filter((s) => s.answer < answerTokens)) {
-    const line = `${skill} test ${size.test} (${size.description}): its ${thousands(size.prompt)}-token prompt leaves ${thousands(size.answer)} of the ${thousands(answerTokens)}-token answer budget`;
-    if (size.answer < floor) {
+  for (const size of sizes.filter((s) => s.answer < ANSWER_ROOM)) {
+    const line = `${skill} test ${size.test} (${size.description}): its ${thousands(size.prompt)}-token prompt leaves its answer ${thousands(size.answer)} tokens`;
+    if (size.answer < MIN_ANSWER_ROOM) {
       console.error(
-        `❌ ${line}, under half, so most answers would be cut off. Shorten the SKILL.md or the test prompt.`
+        `❌ ${line}, under ${thousands(MIN_ANSWER_ROOM)}, so most answers would be cut off. Shorten the SKILL.md or the test prompt.`
       );
       failed = true;
     } else {
-      console.log(`⚠️  ${line}.`);
+      console.log(
+        `⚠️  ${line}, under ${thousands(ANSWER_ROOM)}, so longer answers are cut off.`
+      );
     }
   }
-  if (sizes.every((s) => s.answer === answerTokens)) {
-    const growth = Math.min(
-      ...sizes.map((s) => limits.tokensPerMinute - answerTokens - s.prompt)
-    );
+  const least = Math.min(...sizes.map((s) => s.answer));
+  if (least >= ANSWER_ROOM) {
     console.log(
-      `✅ ${skill}: every answer gets the full budget${withheld}, and its longest prompt can grow ${thousands(growth)} tokens before that changes`
+      `✅ ${skill}: every answer gets at least ${thousands(least)} tokens${withheld}, and its longest prompt can grow ${thousands(least - ANSWER_ROOM)} tokens before one gets under ${thousands(ANSWER_ROOM)}`
     );
   }
 }
@@ -118,5 +110,5 @@ if (tokensPerDay === null) {
 
 if (failed) process.exit(1);
 console.log(
-  '\n✅ Every eval request keeps at least half its answer budget, and every config fits in a day'
+  `\n✅ Every eval request leaves its answer at least ${thousands(MIN_ANSWER_ROOM)} tokens, and every config fits in a day`
 );
