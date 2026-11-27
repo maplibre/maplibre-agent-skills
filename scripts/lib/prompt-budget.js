@@ -26,12 +26,14 @@ export const PINNED_PROVIDER = 'file://lib/providers.yaml';
 /**
  * Every test of one parsed eval config: its prompt, its answer cap, and the
  * request the two make. Vars merge the way promptfoo merges them, a test's
- * own over `defaultTest`'s. Throws for a config that does not use the shared
- * prompt and the pinned provider.
+ * own over `defaultTest`'s. `render` gives the prompt sent, and `capRender`
+ * the prompt the cap is sized from, which for a baseline run is the one with
+ * the skill loaded. Throws for a config that does not use the shared prompt
+ * and the pinned provider.
  */
 export function sizeTests(
   config,
-  { render, limits, answerTokens, count = countTokens }
+  { render, capRender = render, limits, answerTokens, count = countTokens }
 ) {
   const prompts = JSON.stringify(config?.prompts);
   const providers = JSON.stringify(config?.providers);
@@ -43,19 +45,19 @@ export function sizeTests(
       `expected providers: [${PINNED_PROVIDER}], found ${providers}`
     );
   }
+  const tokensOf = (rendered) =>
+    promptTokens(
+      JSON.parse(typeof rendered === 'string' ? rendered : rendered.prompt),
+      { templateTokens: limits.templateTokens, count }
+    );
   return (config.tests ?? []).map((test, index) => {
     const vars = { ...config.defaultTest?.vars, ...test.vars };
-    const rendered = render({ vars });
-    const messages = JSON.parse(
-      typeof rendered === 'string' ? rendered : rendered.prompt
-    );
-    const prompt = promptTokens(messages, {
-      templateTokens: limits.templateTokens,
-      count
-    });
+    const prompt = tokensOf(render({ vars }));
+    const sizedFrom =
+      capRender === render ? prompt : tokensOf(capRender({ vars }));
     const answer = Math.max(
       0,
-      answerCap(prompt, {
+      answerCap(sizedFrom, {
         answerTokens,
         tokensPerMinute: limits.tokensPerMinute
       })
@@ -98,17 +100,25 @@ export function workflowSetting(workflowText, name) {
  * Every test of one eval config file, rendered as the eval renders it, and
  * sized, with the skill files the config names that are not written yet. Such
  * a config is a rubric round, run at baseline until its skill exists, so its
- * requests are sized with the skill withheld, as that run sends them.
+ * requests are sized with the skill withheld, as that run sends them, and so
+ * are all of a config's requests with `withheld` set, for a baseline run.
  */
 export function sizeConfig(
   path,
-  { limits = limitsFrom(), answerTokens = answerBudget(), root = '.' } = {}
+  {
+    limits = limitsFrom(),
+    answerTokens = answerBudget(),
+    root = '.',
+    withheld = false
+  } = {}
 ) {
   const missingSkills = missingSkillFiles(path, { root });
-  const withheld = ({ vars }) =>
+  const unwritten = missingSkills.length > 0;
+  const renderWithheld = ({ vars }) =>
     render({ vars: { ...vars, injectSkill: 'false' } });
   const sizes = sizeTests(load(readFileSync(join(root, path), 'utf8')), {
-    render: missingSkills.length > 0 ? withheld : render,
+    render: withheld || unwritten ? renderWithheld : render,
+    capRender: unwritten ? renderWithheld : render,
     limits,
     answerTokens
   });

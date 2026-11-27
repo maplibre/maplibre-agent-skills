@@ -66,6 +66,29 @@ describe('sizeTests', () => {
     assert.equal(size.answer, 0);
   });
 
+  it('sizes a baseline request from its question, with the cap the skill leaves', () => {
+    const withheld = ({ vars }) => ({
+      prompt: JSON.stringify([{ role: 'user', content: vars.prompt }]),
+      config: {}
+    });
+    const [size] = sizeTests(config([{ vars: { prompt: 'p'.repeat(30) } }]), {
+      render: withheld,
+      capRender: render,
+      limits,
+      answerTokens: 50,
+      count: byLength
+    });
+    // 10 + 40 + 30 with the skill leaves 20, one of which stays unreserved;
+    // the baseline sends 10 + 30 with that same cap.
+    assert.deepEqual(size, {
+      test: 1,
+      description: 'test 1',
+      prompt: 40,
+      answer: 19,
+      request: 59
+    });
+  });
+
   it('refuses a config whose prompt it does not know how to render', () => {
     assert.throws(
       () =>

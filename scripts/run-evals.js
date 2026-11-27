@@ -11,6 +11,14 @@
  * withholds the skill from every config, keeps configs whose SKILL.md is not
  * written yet, and never re-runs a test.
  *
+ * With EVAL_BASELINES=true, a run that plans its own configs then spends what
+ * its day has left on the baseline round a generator pin change starts: each
+ * config whose baseline evidence came from another generator runs with the
+ * skill withheld, under the `baseline-<date>` name and in `<work dir>/baseline`,
+ * and the tests it passes are written there as cut candidates
+ * (scripts/lib/baselines.js). Those verdicts never reach the status sync, and
+ * never fail the run.
+ *
  * evals/README.md ("CI") says how a run plans its day, paces requests, re-runs
  * failures, bounds each child and ends on a provider's daily limit.
  *
@@ -29,7 +37,8 @@
  *   --config-dir <d>     where the eval configs live (default evals/prompts)
  *
  * Env: EVAL_BUDGET_MINUTES, EVAL_WORK_DIR, EVAL_TOKENS_PER_DAY,
- * EVAL_REGRADE_DAYS, EVAL_SHARD, INPUT_CONFIGS, INPUT_BASELINE, GROQ_API_KEY.
+ * EVAL_REGRADE_DAYS, EVAL_BASELINES, EVAL_SHARD, INPUT_CONFIGS, INPUT_BASELINE,
+ * GROQ_API_KEY.
  * The workflow sets the budget and the plan's settings in YAML so they are
  * visible and tunable there; the defaults here match, except that a run with
  * no EVAL_REGRADE_DAYS grades only what changed.
@@ -65,6 +74,12 @@ import {
   missingSkillFiles,
   recordedInputs
 } from './lib/eval-inputs.js';
+import {
+  baselineRecords,
+  cutCandidates,
+  firstRecordedGenerator,
+  planBaselines
+} from './lib/baselines.js';
 import { passCost, sizeConfig } from './lib/prompt-budget.js';
 import { lastGraded } from './lib/results-history.js';
 
@@ -515,12 +530,15 @@ export function dayCost(cost) {
   return cost.firstPass + MAX_RETRIED_TESTS * RETRY_REPEATS * cost.largest;
 }
 
-/** Each config's `passCost`; a config that cannot be sized throws here. */
-export function costsOf(configs, { limits }) {
+/**
+ * Each config's `passCost`, with the skill withheld for a baseline run; a
+ * config that cannot be sized throws here.
+ */
+export function costsOf(configs, { limits, withheld = false }) {
   return new Map(
     configs.map((config) => [
       config,
-      passCost(sizeConfig(config, { limits }).sizes)
+      passCost(sizeConfig(config, { limits, withheld }).sizes)
     ])
   );
 }
@@ -899,7 +917,8 @@ export async function runEvals({
     const skill = skillOf(config);
     // A config the day cannot hold waits, and is first in line tomorrow.
     const cost = costs?.get(config) ?? null;
-    const need = cost ? dayCost(cost) : 0;
+    // A baseline run never re-runs a test, so its first pass is its worst case.
+    const need = cost ? (baseline ? cost.firstPass : dayCost(cost)) : 0;
     if (summary.day.spentByGroq || summary.day.judgeSpent) {
       log(`${skill}: waits for another day, which a provider says is spent.`);
       summary.day.waiting.push(skill);
@@ -1140,6 +1159,47 @@ export async function runEvals({
 }
 
 /**
+ * The baseline round after a run's own configs: each of `configs` runs with
+ * its skill withheld under the `baseline-<date>` name, on what the day and the
+ * run's budget have left, and `<work dir>/candidates.json` records, for each
+ * one graded, the tests it passed: its cut candidates.
+ */
+export async function runBaselineRound({
+  configs,
+  date,
+  workDir,
+  generator,
+  ...rest
+}) {
+  const name = runName(date, true);
+  const { summary } = await runEvals({
+    ...rest,
+    configs,
+    name,
+    baseline: true,
+    workDir,
+    generator
+  });
+  const round = {
+    generator,
+    date,
+    configs: summary.configs
+      .filter(({ verdict }) => verdict === 'pass' || verdict === 'fail')
+      .map(({ skill }) => ({
+        skill,
+        candidates:
+          cutCandidates(readSidecar(join(workDir, `${name}-${skill}.json`))) ??
+          []
+      }))
+  };
+  writeFileSync(
+    join(workDir, 'candidates.json'),
+    JSON.stringify(round, null, 2) + '\n'
+  );
+  return { summary, round };
+}
+
+/**
  * Moves the CSVs of a config the day cut off from the results the publish job
  * commits to `<work>/day-spent`, so their graded rows do not count as a
  * verdict and the config keeps its place at the front of the line.
@@ -1308,7 +1368,29 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     : explicit === null
       ? longestWaiting({ configs, graded })
       : configs;
-  if (order.length === 0) {
+
+  // A scheduled run also grades the baselines a generator pin change left
+  // from another generator, with what its day has left.
+  const pin = /^id:\s*(\S+)/m.exec(
+    readFileSync('evals/prompts/lib/providers.yaml', 'utf8')
+  )?.[1];
+  const readResult = (fileName) =>
+    readFileSync(join(resultsDir, fileName), 'utf8');
+  const baselinePlan =
+    plan && !baseline && process.env.EVAL_BASELINES === 'true'
+      ? planBaselines({
+          configs,
+          records: baselineRecords(resultFiles, readResult),
+          fallback: firstRecordedGenerator(resultFiles, readResult),
+          generator: pin ?? null
+        })
+      : null;
+  for (const { config, why } of baselinePlan?.due ?? []) {
+    console.log(`${skillOf(config)}: baseline due (${why}).`);
+  }
+  const roundOrder = baselinePlan?.due.map(({ config }) => config) ?? [];
+
+  if (order.length === 0 && roundOrder.length === 0) {
     console.log(
       'Nothing is due: every config was graded on its current inputs.'
     );
@@ -1316,9 +1398,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(0);
   }
 
-  const pin = /^id:\s*(\S+)/m.exec(
-    readFileSync('evals/prompts/lib/providers.yaml', 'utf8')
-  )?.[1];
   const measured = args.dryRun
     ? null
     : await measureLimits({ pin, apiKey: process.env.GROQ_API_KEY });
@@ -1334,6 +1413,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.env.EVAL_TOKENS_PER_DAY || TOKENS_PER_DAY_DEFAULT
   );
   const costs = costsOf(order, { limits });
+  const roundCosts = costsOf(roundOrder, { limits, withheld: true });
+  const roundName = runName(today, true);
+  const roundDir = join(workDir, 'baseline');
 
   if (args.dryRun) {
     for (const config of order) {
@@ -1353,6 +1435,26 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         tokensPerMinute: limits.tokensPerMinute
       }).join('\n')
     );
+    if (roundOrder.length > 0) {
+      console.log('\nThen the baseline round, on what the day has left:');
+      for (const config of roundOrder) {
+        console.log(
+          `${skillOf(config)}: may need ${roundCosts.get(config).firstPass} generator tokens.`
+        );
+      }
+      console.log(
+        dryRunLines({
+          configs: roundOrder,
+          name: roundName,
+          baseline: true,
+          resultsDir,
+          workDir: roundDir,
+          budgetMinutes,
+          costs: roundCosts,
+          tokensPerMinute: limits.tokensPerMinute
+        }).join('\n')
+      );
+    }
     process.exit(0);
   }
 
@@ -1374,6 +1476,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (shardSpec !== '') console.log(`Shard ${shardSpec} of the config list.`);
   console.log(`In order: ${order.join(' ')}`);
 
+  // Runs even with no config due, so the publish job finds the run's record
+  // and an empty verdicts file beside the baseline round's.
+  const runStarted = Date.now();
+  const judge = judgePin(JSON.parse(readFileSync('package.json', 'utf8')));
   const { summary, failed } = await runEvals({
     configs: order,
     name,
@@ -1389,12 +1495,49 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // and these logs hold every request and response in full.
     logsDir: `${workDir}-logs`,
     generator: pin ?? null,
-    judge: judgePin(JSON.parse(readFileSync('package.json', 'utf8'))),
+    judge,
     inputs,
     commit: headCommit()
   });
+
+  let roundPlanned = 0;
+  if (roundOrder.length > 0) {
+    if (summary.day.spentByGroq || summary.day.judgeSpent) {
+      console.log(
+        'The baseline round waits for another day, which a provider says is spent.'
+      );
+    } else {
+      console.log(`Baseline round under ${pin}: ${roundOrder.join(' ')}`);
+      const { summary: roundSummary, round } = await runBaselineRound({
+        configs: roundOrder,
+        date: today,
+        workDir: roundDir,
+        generator: pin ?? null,
+        resultsDir,
+        budgetMinutes: Math.max(
+          0,
+          budgetMinutes - (Date.now() - runStarted) / 60000
+        ),
+        limits: { ...limits, measured: measured !== null },
+        costs: roundCosts,
+        tokensPerDay: Math.max(0, tokensPerDay - summary.day.spent),
+        logsDir: `${workDir}-logs`,
+        judge,
+        inputs,
+        commit: headCommit()
+      });
+      roundPlanned = roundSummary.planned.length;
+      for (const { skill, candidates } of round.configs) {
+        console.log(
+          candidates.length > 0
+            ? `${skill}: passes without the skill: ${candidates.join('; ')}`
+            : `${skill}: fails every test but its negative ones without the skill.`
+        );
+      }
+    }
+  }
   // A run that planned no config has nothing for the publish job.
-  setOutputs({ ran: String(summary.planned.length > 0) });
+  setOutputs({ ran: String(summary.planned.length > 0 || roundPlanned > 0) });
   // Unreachable while `npm run lint:prompt-budget` passes, which checks that
   // every config fits in a day on its own.
   const stuck = summary.planned.length === 0 && order.length > 0;
