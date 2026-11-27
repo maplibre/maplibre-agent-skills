@@ -1,0 +1,510 @@
+Description,skillFile,prompt,[groq-gpt-oss] evals/prompts/lib/skill-prompt.mjs,Status,Score,Named Scores,Grader Reason,Comment
+implicit — point symbols camouflaged against aerial imagery,skills/maplibre-cartography/SKILL.md,I have custom point icons on a MapLibre GL JS map over satellite/aerial imagery. Green icons vanish over vegetation and brown ones disappear over bare ground — they camouflage against whatever is behind them. How do I make the icons reliably stand out across all the different backgrounds in the imagery?,"Below is a **step-by-step recipe** that turns “green disappears in the forest / brown disappears on the field” into **icons that stay readable on any satellite or aerial image**.  
+All of the tricks come from the *MapLibre-Cartography* skill – halo/outline, SDF sprites, contact-shadows, colour-choice, and layer ordering.
+
+---
+
+## 1. Why the camouflage happens
+
+| What you see | Why it fails on imagery |
+|--------------|------------------------|
+| **Flat-colour PNG** (green, brown, etc.) | The icon’s hue is the same hue that the photo already contains. The eye can’t separate the two because there is **no contrast in chroma**. |
+| **No halo / outline** | A halo is the only “built-in” contrast you can add to a *dynamic* label/icon. Without it the icon is judged only by its own colour. |
+| **No shadow** | A 2-D flat symbol looks like a sticker that can “float” or “sink” into the photo, making it harder to spot. |
+
+The fix is to **add a contrasting edge (halo) and a subtle grounding cue (shadow)**, and to **use a saturated colour that is not common in the imagery**. All of this can be done with a single SDF sprite – no need for a separate PNG for every colour.
+
+---
+
+## 2. Build an SDF sprite (the only way to get a halo)
+
+### 2.1. What is SDF?
+
+*Signed Distance Field* (SDF) sprites are monochrome (usually white) images that MapLibre treats as “shape only”. The engine then colours the shape (`icon-color`) and draws a halo (`icon-halo-color`) around it. Because the halo is generated on the GPU, you can change its colour, width and blur at run-time.
+
+### 2.2. Create the source SVG
+
+1. **Draw the icon in a vector editor** (Illustrator, Inkscape, Figma).  
+   * Keep the shape **filled 100 % white** (`#ffffff`).  
+   * **Do not add any stroke** – the halo will be generated later.  
+   * Add a **transparent padding** around the shape (≈ 10 % of the icon size) so the halo isn’t clipped.  
+   * Export as **SVG** (keep the viewBox tight around the shape + padding).
+
+2. **Optional – add a built-in contact shadow**  
+   If you want a permanent “ground-shadow” baked into the sprite (useful for raster icons that can’t be SDF), add a blurred ellipse under the shape, coloured `rgba(0,0,0,0.4)`. Keep it inside the padding area.
+
+### 2.3. Load the SVG as an SDF image
+
+```js
+// Helper to fetch an SVG, turn it into an Image, then add it as an SDF sprite
+async function addSdfIcon(map, id, url) {
+  const resp = await fetch(url);
+  const svgText = await resp.text();
+
+  // Turn the SVG text into a data-URL image
+  const img = new Image();
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText);
+  await img.decode();
+
+  // Register with MapLibre – note the {sdf:true}
+  map.addImage(id, img, { sdf: true, pixelRatio: 2 }); // pixelRatio matches your sprite resolution
+}
+
+// Example usage
+addSdfIcon(map, 'poi-park', '/sprites/park.svg');
+addSdfIcon(map, 'poi-farm', '/sprites/farm.svg');
+```
+
+> **Tip:** If you have many icons, bundle them into a *single* sprite sheet (PNG + JSON) and set `sdf:true` on each entry in the JSON. The same principle applies.
+
+---
+
+## 3. Choose a colour palette that “sticks out”
+
+| Background type (imagery) | Recommended icon colour (base) | Why it works |
+|---------------------------|--------------------------------|--------------|
+| Green vegetation, fields | **Saturated amber / terracotta** (`#e66a2c`) | Amber is bright, high chroma, and rarely dominant in raw satellite imagery (which is desaturated). |
+| Dark soil, rock, shadows | **Bright cyan / teal** (`#00c8ff`) | Cyan contrasts strongly against dark earth tones. |
+| Water / urban roofs (bright) | **Deep magenta / pink** (`#d6007a`) | Dark-ish magenta still has high chroma but is dark enough to be legible on bright roofs. |
+| General fallback (any) | **White (`#ffffff`) with dark halo** – works everywhere but loses semantic colour. Use only for “generic” POI. |
+
+**Implementation:** Use the `icon-color` paint property. You can keep a single SDF sprite and colour it per-feature with a data-driven expression.
+
+```json
+{
+  ""id"": ""poi-icons"",
+  ""type"": ""symbol"",
+  ""source"": ""my-poi"",
+  ""layout"": {
+    ""icon-image"": [""get"", ""icon-id""],   // e.g. ""park"", ""farm""
+    ""icon-size"": [""interpolate"", [""linear""], [""zoom""], 10, 0.6, 14, 1.0],
+    ""icon-allow-overlap"": true,
+    ""icon-ignore-placement"": false
+  },
+  ""paint"": {
+    // Data-driven colour based on a property `category`
+    ""icon-color"": [
+      ""match"",
+      [""get"", ""category""],
+      ""park"", ""#e66a2c"",
+      ""farm"", ""#00c8ff"",
+      ""water"", ""#d6007a"",
+      /* default */ ""#ffffff""
+    ],
+
+    // Dark semi-transparent halo – works on *any* background
+    ""icon-halo-color"": ""rgba(0,0,0,0.75)"",
+    ""icon-halo-width"": 1.5,
+    ""icon-halo-blur"": 0.5
+  }
+}
+```
+
+### Why a **dark semi-transparent halo**?
+
+* The halo is the *only* element that can guarantee contrast against **both bright and dark** parts of the photo.  
+* `rgba(0,0,0,0.75)` is dark enough to separate the icon from bright soil or rooftops, yet transparent enough that the halo does not create a “white-box” effect that would break the spatial connection between icon and feature.
+
+If you prefer a *lighter* halo for a very bright icon (e.g. white icon), flip it:
+
+```json
+""icon-halo-color"": ""rgba(255,255,255,0.8)"",
+""icon-halo-width"": 1.2
+```
+
+But **never use a fully opaque halo** (`rgba(...,1)`) – it looks like a sticker and hides the underlying feature.
+
+---
+
+## 4. Add a grounding cue (contact shadow)
+
+A halo alone makes the icon pop, but a tiny **contact shadow** tells the eye that the symbol sits on the ground rather than floating.
+
+### 4.1. GPU-based shadow (preferred)
+
+MapLibre does **not** have a built-in `icon-shadow` property, but you can fake it with a second, slightly larger SDF sprite that is just a blurred ellipse.
+
+```js
+// Load a tiny “shadow” sprite (white shape, will be coloured black)
+await addSdfIcon(map, 'shadow-ellipse', '/sprites/shadow.svg');
+
+// Add a layer *under* the icon layer
+map.addLayer({
+  id: 'poi-shadow',
+  type: 'symbol',
+  source: 'my-poi',
+  layout: {
+    'icon-image': 'shadow-ellipse',
+    'icon-size': [""interpolate"", [""linear""], [""zoom""], 10, 0.7, 14, 1.2],
+    'icon-allow-overlap': true,
+    'icon-ignore-placement': true,
+    // Slight offset to make it look like a contact shadow
+    'icon-offset': [0, 4]   // x, y in ems (positive y = down)
+  },
+  paint: {
+    'icon-color': 'rgba(0,0,0,0.35)',   // dark, semi-transparent
+    'icon-halo-width': 0               // no halo on the shadow
+  }
+}, 'poi-icons');   // insert *before* the real icons
+```
+
+### 4.2. Baked-in shadow (if you can’t use a second layer)
+
+Add a blurred ellipse **inside the same SVG** (under the white shape) and colour it with `rgba(0,0,0,0.35)`. Because the whole sprite is SDF, the halo will still be drawn around the *white* shape only; the ellipse will stay dark.
+
+---
+
+## 5. Keep the icons on top of the basemap but **under** any basemap labels
+
+If you inject your POI layer into a third-party style (e.g. MapLibre’s “streets” style), you must insert it **before the first symbol layer** so that the basemap’s place-names stay readable.
+
+```js
+// Find the first symbol layer in the existing style
+const firstSymbolId = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
+// Add your shadow layer first, then the icon layer
+map.addLayer(shadowLayer, firstSymbolId);   // shadow under icons
+map.addLayer(iconLayer, firstSymbolId);    // icons under basemap labels
+```
+
+If you *do* want your POI labels to appear **above** the basemap labels, add a *second* symbol layer **after** the basemap’s last symbol layer.
+
+---
+
+## 6. Fine-tuning tips
+
+| Issue | Fix |
+|-------|-----|
+| **Halo looks too thick** | Reduce `icon-halo-width` to `1.0` or `0.8`. Keep it thin for small icons; a thicker halo is okay for large “emergency” markers. |
+| **Icon still blends on very bright snow** | Add a **second, lighter halo** by stacking two layers: one dark halo (as above) and a second white halo with lower opacity (`rgba(255,255,255,0.4)`) placed *above* the dark halo but *below* the icon. |
+| **Icons disappear at low zoom** | Increase `icon-size` at low zoom or set a `minzoom` of 8-9 for the layer. |
+| **Too many overlapping icons** | Set `""icon-allow-overlap"": false` (default) and use `""icon-ignore-placement"": true` only for the most important class (e.g. emergency shelters). |
+| **Performance hit with many SDF icons** | Keep the sprite resolution modest (e.g. 256 px per icon) and use `pixelRatio: 2` only on high-DPI screens. |
+| **Accessibility – colour-blind users** | Pair colour with **shape** (different SVG outlines) or add a **pattern** (e.g. diagonal hatch) inside the icon. The halo already provides a contrast cue. |
+
+---
+
+## 7. Full example – ready to copy-paste
+
+```js
+// 1️⃣ Load sprites (SDF)
+await Promise.all([
+  addSdfIcon(map, 'poi-park', '/sprites/park.svg'),   // white shape
+  addSdfIcon(map, 'poi-farm', '/sprites/farm.svg'),
+  addSdfIcon(map, 'shadow-ellipse', '/sprites/shadow.svg')
+]);
+
+// 2️⃣ Insert a shadow layer (under icons, under basemap labels)
+map.addLayer({
+  id: 'poi-shadow',
+  type: 'symbol',
+  source: 'my-poi',
+  layout: {
+    'icon-image': 'shadow-ellipse',
+    'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.7, 14, 1.2],
+    'icon-allow-overlap': true,
+    'icon-ignore-placement': true,
+    'icon-offset': [0, 4]   // push down a few pixels
+  },
+  paint: {
+    'icon-color': 'rgba(0,0,0,0.35)',
+    'icon-halo-width': 0
+  }
+}, map.getStyle().layers.find(l => l.type === 'symbol').id); // before first symbol
+
+// 3️⃣ Add the actual POI icons
+map.addLayer({
+  id: 'poi-icons',
+  type: 'symbol',
+  source: 'my-poi',
+  layout: {
+    'icon-image': ['get', 'icon-id'],   // ""poi-park"" or ""poi-farm""
+    'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.6, 14, 1.0],
+    'icon-allow-overlap': true,
+    'icon-ignore-placement': false
+  },
+  paint: {
+    'icon-color': [
+      'match',
+      ['get', 'category'],
+      'park', '#e66a2c',
+      'farm', '#00c8ff',
+      'water', '#d6007a',
+      '#ffffff'   // fallback
+    ],
+    'icon-halo-color': 'rgba(0,0,0,0.75)',
+    'icon-halo-width': 1.5,
+    'icon-halo-blur': 0.5
+  }
+}, map.getStyle().layers.find(l => l.type === 'symbol').id); // same insertion point
+```
+
+Result:
+
+* **Saturated colour** gives semantic meaning.  
+* **Dark semi-transparent halo** guarantees contrast on any bright or dark patch of the imagery.  
+* **Contact shadow** anchors the symbol to the ground, improving figure-ground perception.  
+* **Layer order** keeps basemap labels on top, preserving readability.
+
+---
+
+## 8. Quick checklist (copy-paste into your docs)
+
+```
+[ ] Icons are SDF (white shape, added with {sdf:true})
+[ ] Use a saturated hue that is rare in raw imagery (amber, cyan, magenta)
+[ ] Apply a dark semi-transparent halo:
+    ""icon-halo-color"": ""rgba(0,0,0,0.75)""
+    ""icon-halo-width"": 1.0-1.5
+    ""icon-halo-blur"": 0.3-0.6
+[ ] Add a subtle contact shadow (separate layer or baked-in ellipse)
+[ ] Insert icon layers before the first basemap symbol layer
+[ ] Test at low, medium, and high zoom; adjust icon-size and halo-width
+[ ] Verify WCAG contrast (text+halo ≥ 4.5:1) with a contrast checker
+[ ] Provide an alternative description for screen-reader users
+```
+
+Follow these steps and your green/brown icons will **no longer disappear** – they’ll be clearly visible over forests, fields, water, rooftops, and snow alike. Happy mapping!",PASS,1.00,,All assertions passed,
+implicit — point symbols camouflaged against aerial imagery,skills/maplibre-cartography/SKILL.md,I have custom point icons on a MapLibre GL JS map over satellite/aerial imagery. Green icons vanish over vegetation and brown ones disappear over bare ground — they camouflage against whatever is behind them. How do I make the icons reliably stand out across all the different backgrounds in the imagery?,"Below is a **step-by-step recipe** that turns “green-over-trees / brown-over-soil” camouflage into icons that stay readable on any satellite or aerial image.  
+The core ideas come straight from the *MapLibre-Cartography* skill:
+
+| What you need | Why it works on imagery |
+|---------------|------------------------|
+| **Saturated, earth-tone fill** (amber, terracotta, teal, etc.) | Most aerial photos are low-saturation, so a vivid hue creates chroma contrast even when the background is green, brown, or gray. |
+| **A dark, semi-transparent halo (or “icon-halo”)** | The halo is the only element that can guarantee contrast against *any* background because it sits *outside* the icon’s fill. |
+| **A thin contact-shadow / grounding ellipse** | Gives the symbol a “footprint” that anchors it to the ground and prevents it from looking like a floating sticker. |
+| **SDF (Signed-Distance-Field) sprites** | Only SDF images can be tinted and halo-styled at render time; raster PNGs would need the halo baked in. |
+| **Proper layer ordering** (imagery → your icons → labels) | Guarantees the icons are drawn on top of the photo but never over the basemap’s own text. |
+| **Accessibility-ready contrast** (≥ 4.5:1 for normal text, ≥ 3:1 for large) | A dark halo (`rgba(0,0,0,0.75)`) plus a bright fill meets WCAG AA on virtually every pixel of a satellite image. |
+
+---
+
+## 1️⃣ Create an SDF sprite (or convert your existing SVG)
+
+1. **Export each icon as an SVG** with a *single* solid shape (no fills, just the outline).  
+2. **Add a 2-pixel transparent padding** around the viewBox – the halo will be drawn in that space.  
+3. **Convert to an SDF PNG** (or keep the SVG and let MapLibre rasterise it at runtime).  
+   *If you use a build tool, `mapbox-gl-sprite` or `@maplibre/maplibre-gl-style-spec` can do the conversion for you.*  
+
+```js
+// Example: load an SVG, turn it into an SDF image, then add it to the map
+fetch('icons/marker-amber.svg')
+  .then(r => r.text())
+  .then(svg => {
+    const img = new Image();
+    const svgBlob = new Blob([svg], {type: 'image/svg+xml'});
+    img.src = URL.createObjectURL(svgBlob);
+    img.onload = () => {
+      map.addImage('marker-amber', img, { sdf: true }); // <-- crucial
+    };
+  });
+```
+
+> **Tip:** If you already have PNG sprites, you can still add a halo by *pre-baking* a thin outline into the PNG, but you lose the ability to change the fill colour with `icon-color`.
+
+---
+
+## 2️⃣ Style the point layer
+
+```json
+{
+  ""id"": ""custom-points"",
+  ""type"": ""symbol"",
+  ""source"": ""my-points"",               // a GeoJSON or vector source
+  ""source-layer"": ""points"",            // omit for GeoJSON
+  ""layout"": {
+    ""icon-image"": ""marker-amber"",      // name you used in addImage()
+    ""icon-size"": [""interpolate"", [""linear""], [""zoom""], 5, 0.6, 12, 1.2],
+    ""icon-allow-overlap"": true,
+    ""icon-ignore-placement"": true,
+    ""icon-optional"": true,
+    ""text-field"": [""get"", ""name""],
+    ""text-font"": [""Noto Sans Regular""],
+    ""text-size"": [""interpolate"", [""linear""], [""zoom""], 8, 10, 14, 14],
+    ""text-offset"": [0, 1.2],
+    ""text-anchor"": ""top""
+  },
+  ""paint"": {
+    // ---- ICON FILL -------------------------------------------------
+    ""icon-color"": ""#ff9500"",                     // bright amber (or any saturated hue)
+    // ---- HALO ------------------------------------------------------
+    ""icon-halo-color"": ""rgba(0,0,0,0.75)"",       // dark, 75 % opacity
+    ""icon-halo-width"": 2,                        // 2 px halo (adjust to size)
+    ""icon-halo-blur"": 0.5,                       // soft edge, not a hard ring
+    // ---- OPTIONAL CONTACT SHADOW (via a separate circle layer) --
+    // (see step 3)
+    // ---- LABEL CONTRAST (if you also label the point) ----------
+    ""text-color"": ""#ffffff"",
+    ""text-halo-color"": ""rgba(0,0,0,0.75)"",
+    ""text-halo-width"": 1.2
+  }
+}
+```
+
+### Why these values?
+
+| Property | Effect on imagery |
+|----------|-------------------|
+| `icon-color` (bright amber) | Provides **chroma contrast** – the photo is mostly desaturated, so a saturated hue pops. |
+| `icon-halo-color` = `rgba(0,0,0,0.75)` | Guarantees **luminance contrast** regardless of whether the pixel behind the icon is bright soil, dark forest, or blue water. |
+| `icon-halo-width` 2 px | Thick enough to be seen at small sizes but not so thick it looks like a sticker. |
+| `icon-halo-blur` 0.5 | Softens the edge, preventing a harsh “ring” that can distract from the underlying terrain. |
+| `icon-allow-overlap` / `icon-ignore-placement` | Prevents the engine from hiding icons when they collide – useful for dense POI layers on imagery. |
+| `text-halo` (same dark semi-transparent) | Keeps the label readable even when the icon sits on a bright patch of the photo. |
+
+---
+
+## 3️⃣ Add a “grounding” ellipse (contact shadow)
+
+A halo alone still makes the icon look like a floating sticker. Adding a subtle dark ellipse underneath gives the impression that the symbol sits on the ground.
+
+```json
+{
+  ""id"": ""custom-points-shadow"",
+  ""type"": ""circle"",
+  ""source"": ""my-points"",
+  ""layout"": {
+    ""circle-radius"": [""interpolate"", [""linear""], [""zoom""], 5, 6, 12, 12],
+    ""circle-pitch-alignment"": ""map"",   // keep it flat on the terrain
+    ""circle-translate"": [0, 4]         // shift down a few pixels so it sits under the icon
+  },
+  ""paint"": {
+    ""circle-color"": ""rgba(0,0,0,0.35)"",
+    ""circle-blur"": 0.8
+  }
+}
+```
+
+Place this **before** the `custom-points` layer in the `layers` array so the shadow is drawn first, then the icon on top.
+
+---
+
+## 4️⃣ Layer ordering checklist
+
+When you inject your data into an existing basemap style, **insert your layers right before the first symbol layer** (the basemap’s labels). Example:
+
+```js
+const style = map.getStyle();
+const firstSymbolId = style.layers.find(l => l.type === 'symbol').id;
+
+// 1️⃣ shadow (circle) – under the icon
+map.addLayer(shadowLayer, firstSymbolId);
+
+// 2️⃣ icon+label (symbol) – still under basemap labels
+map.addLayer(iconLayer, firstSymbolId);
+```
+
+If you add them *after* the basemap’s symbol layer, your icons will cover the basemap’s place-names, which is almost always undesirable.
+
+---
+
+## 5️⃣ Accessibility sanity-check
+
+1. **Contrast** – The combination of a bright fill (`#ff9500`) and a dark halo (`rgba(0,0,0,0.75)`) yields a **combined contrast ratio** of roughly 7:1 on a typical bright-soil pixel and > 12:1 on dark forest. Both exceed WCAG AA (4.5:1).  
+2. **Size** – Keep the smallest `icon-size` ≥ 0.6 × the original SVG (≈ 10 px on the screen) at the lowest zoom where the icon appears.  
+3. **Shape** – Even if a user can’t see colour, the amber fill plus the dark halo gives a distinct silhouette; you can also add a subtle **stroke** (`icon-stroke-color` / `icon-stroke-width`) for extra shape encoding.
+
+---
+
+## 6️⃣ Quick “what-if” FAQ
+
+| Problem | Fix |
+|---------|-----|
+| **Icons still disappear on very bright snow or sand** | Increase `icon-halo-width` to 3 px *or* add a second, lighter halo (`icon-halo-color`: `rgba(255,255,255,0.4)`) behind the dark one using two stacked symbol layers (dark halo first, then the icon). |
+| **You need two colour variants (light & dark) for a special-purpose map** | Create two SDF sprites (`marker-amber-dark`, `marker-amber-light`) and switch them with a style filter based on a custom `theme` property in your source, or toggle them via `setLayoutProperty` at runtime. |
+| **Your icons are PNGs and you can’t use `icon-halo-*`** | Bake a thin outline (1-2 px) into the PNG *outside* the main shape, then set the PNG’s background to transparent. The outline will act as a permanent halo. |
+| **Performance worries – many thousands of points** | Use `icon-allow-overlap: true` and `icon-ignore-placement: true` to avoid costly collision detection, and keep the halo width ≤ 2 px (larger halos increase fragment shading). |
+| **Need a different halo colour for a dark-themed map** | Switch `icon-halo-color` to a light semi-transparent halo (`rgba(255,255,255,0.75)`) when the basemap is a dark vector style. You can do this with a style expression that reads a custom `basemap_type` property you set on the map. |
+
+---
+
+## 7️⃣ Full example (JSON style snippet)
+
+```json
+{
+  ""version"": 8,
+  ""sources"": {
+    ""satellite"": {
+      ""type"": ""raster"",
+      ""tiles"": [""https://my.tileserver.com/sat/{z}/{x}/{y}.jpg""],
+      ""tileSize"": 256
+    },
+    ""my-points"": {
+      ""type"": ""geojson"",
+      ""data"": ""data/points.geojson""
+    }
+  },
+  ""layers"": [
+    { ""id"": ""background"", ""type"": ""background"", ""paint"": { ""background-color"": ""#000000"" } },
+    { ""id"": ""satellite"",   ""type"": ""raster"",    ""source"": ""satellite"" },
+
+    /* 1️⃣ Shadow (grounding ellipse) */
+    {
+      ""id"": ""point-shadow"",
+      ""type"": ""circle"",
+      ""source"": ""my-points"",
+      ""layout"": {
+        ""circle-radius"": [""interpolate"", [""linear""], [""zoom""], 5, 6, 12, 12],
+        ""circle-translate"": [0, 4],
+        ""circle-pitch-alignment"": ""map""
+      },
+      ""paint"": {
+        ""circle-color"": ""rgba(0,0,0,0.35)"",
+        ""circle-blur"": 0.8
+      }
+    },
+
+    /* 2️⃣ Icon + label */
+    {
+      ""id"": ""point-icons"",
+      ""type"": ""symbol"",
+      ""source"": ""my-points"",
+      ""layout"": {
+        ""icon-image"": ""marker-amber"",
+        ""icon-size"": [""interpolate"", [""linear""], [""zoom""], 5, 0.6, 12, 1.2],
+        ""icon-allow-overlap"": true,
+        ""icon-ignore-placement"": true,
+        ""text-field"": [""get"", ""name""],
+        ""text-font"": [""Noto Sans Regular""],
+        ""text-size"": [""interpolate"", [""linear""], [""zoom""], 8, 10, 14, 14],
+        ""text-offset"": [0, 1.2],
+        ""text-anchor"": ""top""
+      },
+      ""paint"": {
+        ""icon-color"": ""#ff9500"",
+        ""icon-halo-color"": ""rgba(0,0,0,0.75)"",
+        ""icon-halo-width"": 2,
+        ""icon-halo-blur"": 0.5,
+        ""text-color"": ""#ffffff"",
+        ""text-halo-color"": ""rgba(0,0,0,0.75)"",
+        ""text-halo-width"": 1.2
+      }
+    },
+
+    /* Basemap labels (example) – they will sit on top */
+    {
+      ""id"": ""basemap-labels"",
+      ""type"": ""symbol"",
+      ""source"": ""satellite"",
+      ""source-layer"": ""labels"",
+      ""layout"": { /* … */ },
+      ""paint"": { /* … */ }
+    }
+  ]
+}
+```
+
+Copy the snippet into your style, replace the tile URLs and GeoJSON source, and you’ll see the amber icons **always** standing out on the satellite imagery, regardless of whether they sit over green forest, brown fields, blue water, or bright rooftops.
+
+---
+
+### TL;DR Checklist
+
+1. **Use SDF sprites** (`addImage(..., {sdf:true})`).  
+2. **Pick a saturated fill** (amber, terracotta, teal, etc.).  
+3. **Add a dark, 75 %-opaque halo** (`icon-halo-color: ""rgba(0,0,0,0.75)""`, `icon-halo-width: 2`).  
+4. **Optionally add a soft contact-shadow** via a circle layer.  
+5. **Insert your layers before the first basemap symbol layer**.  
+6. **Verify contrast** (≥ 4.5:1) with a tool that includes the halo.  
+
+Follow those steps and your custom point icons will be legible on any satellite or aerial background—no more disappearing greens or browns! 🚀",PASS,1.00,,All assertions passed,
